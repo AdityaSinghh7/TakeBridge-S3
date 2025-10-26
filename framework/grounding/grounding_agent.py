@@ -364,7 +364,7 @@ class OSWorldACI(ACI):
 
         payload = {
             "messages": messages,
-            "max_new_tokens": 100,
+            "max_new_tokens": 300,
             "temperature": 0.0,
             "top_p": 0.9,
         }

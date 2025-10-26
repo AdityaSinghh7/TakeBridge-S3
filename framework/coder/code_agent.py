@@ -153,7 +153,13 @@ class CodeAgent:
             logger.info(f"Step {step_count + 1}/{self.budget}")
 
             # Get assistant response (thoughts and code)
-            response = call_llm_safe(self.agent, temperature=1)
+            response = call_llm_safe(
+                self.agent,
+                temperature=1,
+                reasoning_effort="high",
+                reasoning_summary="auto",
+                max_output_tokens=12288,
+            )
 
             # Print to terminal for immediate visibility
             print(f"\n🤖 CODING AGENT RESPONSE - Step {step_count + 1}/{self.budget}")
@@ -334,7 +340,13 @@ Keep the summary under 150 words and use clear, factual language.
                 system_prompt=PROCEDURAL_MEMORY.CODE_SUMMARY_AGENT_PROMPT,
             )
             summary_agent.add_message(summary_prompt, role="user")
-            summary = call_llm_safe(summary_agent, temperature=1)
+            summary = call_llm_safe(
+                summary_agent,
+                temperature=1,
+                reasoning_effort="high",
+                reasoning_summary="auto",
+                max_output_tokens=12288,
+            )
 
             if not summary or summary.strip() == "":
                 summary = "Summary generation failed - no response from LLM"

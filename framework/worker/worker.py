@@ -207,6 +207,9 @@ class Worker(BaseModule):
                     self.reflection_agent,
                     temperature=self.temperature,
                     use_thinking=self.use_thinking,
+                    reasoning_effort="high",
+                    reasoning_summary="auto",
+                    max_output_tokens=12288,
                 )
                 reflection, reflection_thoughts = split_thinking_response(
                     full_reflection
@@ -395,6 +398,9 @@ class Worker(BaseModule):
             format_checkers,
             temperature=self.temperature,
             use_thinking=self.use_thinking,
+            reasoning_effort="medium",
+            reasoning_summary="auto",
+            max_output_tokens=12288,
         )
         self.worker_history.append(plan)
         self.generator_agent.add_message(plan, role="assistant")

@@ -9,31 +9,54 @@ mirror those structures.
 from __future__ import annotations
 
 import logging
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict
 from typing import Any, Dict
 
 from fastapi import Body, FastAPI, HTTPException
 
+from framework.orchestrator.data_types import OrchestrateRequest
+from framework.orchestrator.runner import runner
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="TakeBridge Orchestrator API", version="0.1.0")
 
 
-def _dataclass_to_dict(instance: Any) -> Dict[str, Any]:
-    if is_dataclass(instance):
-        return asdict(instance)
-    raise TypeError(f"Expected dataclass instance, got {type(instance)!r}")
-
-
 @app.post("/orchestrate")
 async def orchestrate(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     """
     Run a single orchestrator loop using the shared dataclass contracts.
+    Only the `task` field is required in the payload. Optional sections:
+      - worker: overrides worker configuration (engine params, reflection, etc.)
+      - grounding: overrides grounding/code agent configuration
+      - controller: overrides VM controller connection details
+      - platform / enable_code_execution: optional execution flags
     """
-    
+    try:
+        request = OrchestrateRequest.from_dict(payload)
+    except Exception as exc:  # pragma: no cover - validation guard
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return None
+    try:
+        result = runner(request)
+    except Exception as exc:  # pragma: no cover - runtime guard
+        logger.exception("Orchestration failed: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return asdict(result)
+
+
+@app.get("/config")
+async def config_defaults() -> Dict[str, Any]:
+    """
+    Return the default orchestrator configuration. Clients can merge overrides
+    onto this structure when calling `/orchestrate`.
+    """
+    return {
+        "controller": DEFAULT_CONTROLLER_CONFIG,
+        "worker": DEFAULT_WORKER_CONFIG,
+        "grounding": DEFAULT_GROUNDING_CONFIG,
+    }
 
 
 __all__ = ["app"]
