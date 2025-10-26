@@ -1,11 +1,23 @@
 import logging
+from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
-from gui_agents.s3.memory.procedural_memory import PROCEDURAL_MEMORY
-from gui_agents.s3.utils.common_utils import call_llm_safe, split_thinking_response
-from gui_agents.s3.core.mllm import LMMAgent
+from framework.memory.procedural_memory import PROCEDURAL_MEMORY
+from framework.utils.common_utils import call_llm_safe, split_thinking_response
+from framework.core.mllm import LMMAgent
 
 logger = logging.getLogger("desktopenv.agent")
+
+
+_PROMPT_PATH = Path(__file__).with_name("code_agent_prompt.txt")
+
+
+def _load_code_agent_prompt() -> str:
+    if not _PROMPT_PATH.exists():
+        raise FileNotFoundError(
+            f"Code agent prompt file not found at {_PROMPT_PATH}"
+        )
+    return _PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
 def extract_code_block(action: str) -> Tuple[Optional[str], Optional[str]]:
@@ -95,7 +107,9 @@ class CodeAgent:
         if not engine_params:
             raise ValueError("engine_params cannot be None or empty")
 
-        self.engine_params = engine_params
+        self.engine_params = dict(engine_params)
+        self.engine_params.setdefault("engine_type", "openai")
+        self.engine_params.setdefault("model", "o4-mini")
         self.budget = budget
         self.agent = None
 
@@ -107,7 +121,7 @@ class CodeAgent:
         logger.debug("Resetting CodeAgent state")
         self.agent = LMMAgent(
             engine_params=self.engine_params,
-            system_prompt=PROCEDURAL_MEMORY.CODE_AGENT_PROMPT,
+            system_prompt=_load_code_agent_prompt(),
         )
 
     def execute(self, task_instruction: str, screenshot: str, env_controller) -> Dict:

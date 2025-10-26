@@ -2,8 +2,8 @@ import logging
 import platform
 from typing import Dict, List, Tuple
 
-from gui_agents.s3.agents.grounding import ACI
-from gui_agents.s3.agents.worker import Worker
+from framework.grounding.grounding_agent import ACI
+from framework.worker.worker import Worker
 
 logger = logging.getLogger("desktopenv.agent")
 

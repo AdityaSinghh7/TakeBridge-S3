@@ -1,19 +1,51 @@
+import base64
 import re
+import time
 from collections import defaultdict
 from io import BytesIO
-from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
+import httpx
 import pytesseract
 from PIL import Image
 from pytesseract import Output
 
-from gui_agents.s3.memory.procedural_memory import PROCEDURAL_MEMORY
-from gui_agents.s3.core.mllm import LMMAgent
-from gui_agents.s3.utils.common_utils import call_llm_safe
-from gui_agents.s3.agents.code_agent import CodeAgent
+from framework.coder.code_agent import CodeAgent
+from framework.core.mllm import LMMAgent
+from framework.memory.procedural_memory import PROCEDURAL_MEMORY
+from framework.utils.common_utils import call_llm_safe, compress_image
 import logging
 
 logger = logging.getLogger("desktopenv.agent")
+
+_TEXT_SPAN_PROMPT_PATH = Path(__file__).with_name("text_span_prompt.txt")
+
+GROUNDING_CLICK_REGEXES = [
+    re.compile(r"click\s*\(\s*x\s*=\s*(\d+)\s*,\s*y\s*=\s*(\d+)\s*\)", re.IGNORECASE),
+    re.compile(r"click\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)", re.IGNORECASE),
+]
+
+
+def _parse_xy_from_text(text: str) -> Optional[Tuple[int, int]]:
+    if not text or "click" not in text.lower():
+        return None
+    for pattern in GROUNDING_CLICK_REGEXES:
+        match = pattern.search(text)
+        if match:
+            try:
+                return int(match.group(1)), int(match.group(2))
+            except Exception:
+                continue
+    return None
+
+
+def _load_text_span_prompt() -> str:
+    if not _TEXT_SPAN_PROMPT_PATH.exists():
+        raise FileNotFoundError(
+            f"Text span prompt file not found at {_TEXT_SPAN_PROMPT_PATH}"
+        )
+    return _TEXT_SPAN_PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
 class ACI:
@@ -187,6 +219,13 @@ class OSWorldACI(ACI):
         height: int = 1080,
         code_agent_budget: int = 20,
         code_agent_engine_params: Dict = None,
+        grounding_base_url: Optional[str] = None,
+        grounding_system_prompt: Optional[str] = None,
+        grounding_timeout: float = 10.0,
+        grounding_max_retries: int = 3,
+        grounding_inference_fn: Optional[
+            Callable[[bytes, str], Tuple[float, float]]
+        ] = None,
     ):
         super().__init__()
 
@@ -206,27 +245,64 @@ class OSWorldACI(ACI):
         self.obs = None
 
         # Configure the visual grounding model responsible for coordinate generation
+        engine_params_for_grounding = dict(engine_params_for_grounding)
+        engine_params_for_grounding.setdefault("engine_type", "openai")
+        engine_params_for_grounding.setdefault("model", "o4-mini")
         self.grounding_model = LMMAgent(engine_params_for_grounding)
         self.engine_params_for_grounding = engine_params_for_grounding
 
         # Configure text grounding agent
+        engine_params_for_generation = dict(engine_params_for_generation)
+        engine_params_for_generation.setdefault("engine_type", "openai")
+        engine_params_for_generation.setdefault("model", "o4-mini")
         self.text_span_agent = LMMAgent(
             engine_params=engine_params_for_generation,
-            system_prompt=PROCEDURAL_MEMORY.PHRASE_TO_WORD_COORDS_PROMPT,
+            system_prompt=_load_text_span_prompt(),
         )
 
         # Configure code agent
         code_agent_engine_params = (
             code_agent_engine_params or engine_params_for_generation
         )
+        code_agent_engine_params = dict(code_agent_engine_params)
+        code_agent_engine_params.setdefault("engine_type", "openai")
+        code_agent_engine_params.setdefault("model", "o4-mini")
         self.code_agent = CodeAgent(code_agent_engine_params, code_agent_budget)
 
         # Store task instruction for code agent
         self.current_task_instruction = None
         self.last_code_agent_result = None
+        self.grounding_base_url = grounding_base_url
+        self.grounding_system_prompt = grounding_system_prompt
+        self.grounding_timeout = grounding_timeout
+        self.grounding_max_retries = grounding_max_retries
+        self.grounding_inference_fn = grounding_inference_fn
 
     # Given the state and worker's referring expression, use the grounding model to generate (x,y)
     def generate_coords(self, ref_expr: str, obs: Dict) -> List[int]:
+        screenshot_data = obs.get("screenshot")
+        if screenshot_data is None:
+            raise ValueError("Observation missing 'screenshot' for grounding call")
+
+        if isinstance(screenshot_data, str):
+            image_bytes = base64.b64decode(screenshot_data)
+        elif isinstance(screenshot_data, bytes):
+            image_bytes = screenshot_data
+        else:
+            raise ValueError(
+                f"Unsupported screenshot type for grounding inference: {type(screenshot_data)}"
+            )
+
+        if self.grounding_inference_fn is not None:
+            x_norm, y_norm = self.grounding_inference_fn(image_bytes, ref_expr)
+            x = round(x_norm * self.width)
+            y = round(y_norm * self.height)
+            return [x, y]
+
+        if self.grounding_base_url:
+            coords = self._grounding_service_coords(image_bytes, ref_expr)
+            if coords:
+                return coords
 
         # Reset the grounding model state
         self.grounding_model.reset()
@@ -243,6 +319,92 @@ class OSWorldACI(ACI):
         numericals = re.findall(r"\d+", response)
         assert len(numericals) >= 2
         return [int(numericals[0]), int(numericals[1])]
+
+    def _grounding_service_coords(
+        self, image_bytes: bytes, prompt: str
+    ) -> Optional[List[int]]:
+        if not self.grounding_base_url:
+            return None
+
+        try:
+            with Image.open(BytesIO(image_bytes)) as img:
+                width, height = img.size
+        except Exception as exc:
+            logger.error("Failed to read screenshot for grounding service: %s", exc)
+            return None
+
+        return self._invoke_grounding_service(image_bytes, prompt, width, height)
+
+    def _invoke_grounding_service(
+        self, image_bytes: bytes, prompt: str, width: int, height: int
+    ) -> Optional[List[int]]:
+        compressed_image = compress_image(image_bytes=image_bytes)
+        image_base64 = base64.b64encode(compressed_image).decode("utf-8")
+
+        messages: List[Dict[str, Any]] = []
+        if self.grounding_system_prompt:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": [{"type": "text", "text": self.grounding_system_prompt}],
+                }
+            )
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "image": f"data:image/webp;base64,{image_base64}",
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        )
+
+        payload = {
+            "messages": messages,
+            "max_new_tokens": 100,
+            "temperature": 0.0,
+            "top_p": 0.9,
+        }
+
+        url = f"{self.grounding_base_url.rstrip('/')}/call_llm"
+
+        for attempt in range(self.grounding_max_retries):
+            try:
+                with httpx.Client(timeout=self.grounding_timeout) as client:
+                    response = client.post(url, json=payload)
+                response.raise_for_status()
+                data = response.json()
+                result_items = [data] if isinstance(data, dict) else data
+                if not result_items:
+                    raise ValueError("Empty grounding response")
+                text = (
+                    result_items[0].get("response")
+                    or result_items[0].get("text")
+                    or ""
+                )
+                coords = _parse_xy_from_text(text)
+                if not coords:
+                    raise ValueError(f"No coordinates found in response: {text}")
+                x_val, y_val = coords
+                if 0 <= x_val <= 1 and 0 <= y_val <= 1:
+                    raw_x = x_val * width
+                    raw_y = y_val * height
+                else:
+                    raw_x = x_val
+                    raw_y = y_val
+                return [
+                    round(raw_x * self.width / width),
+                    round(raw_y * self.height / height),
+                ]
+            except Exception as exc:
+                logger.warning(
+                    "Grounding service attempt %d failed: %s", attempt + 1, exc
+                )
+                time.sleep(1.0)
+        return None
 
     # Calls pytesseract to generate word level bounding boxes for text grounding
     def get_ocr_elements(self, b64_image_data: str) -> Tuple[str, List]:

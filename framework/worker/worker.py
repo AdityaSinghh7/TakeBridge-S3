@@ -1,19 +1,21 @@
+import inspect
 from functools import partial
 import logging
 import textwrap
+from pathlib import Path
 from typing import Dict, List, Tuple
 
-from gui_agents.s3.agents.grounding import ACI
-from gui_agents.s3.core.module import BaseModule
-from gui_agents.s3.memory.procedural_memory import PROCEDURAL_MEMORY
-from gui_agents.s3.utils.common_utils import (
+from framework.grounding.grounding_agent import ACI
+from framework.core.module import BaseModule
+from framework.memory.procedural_memory import PROCEDURAL_MEMORY
+from framework.utils.common_utils import (
     call_llm_safe,
     call_llm_formatted,
     parse_code_from_string,
     split_thinking_response,
     create_pyautogui_code,
 )
-from gui_agents.s3.utils.formatters import (
+from framework.utils.formatters import (
     SINGLE_ACTION_FORMATTER,
     CODE_VALID_FORMATTER,
 )
@@ -22,6 +24,44 @@ logger = logging.getLogger("desktopenv.agent")
 
 
 class Worker(BaseModule):
+    _SYSTEM_PROMPT_PATH = Path(__file__).with_name("system_prompt.txt")
+
+    @classmethod
+    def _load_system_prompt(cls, agent_class: type, skipped_actions: List[str]) -> str:
+        """Load the worker system prompt from the prompt file and inject dynamic actions."""
+        if not cls._SYSTEM_PROMPT_PATH.exists():
+            raise FileNotFoundError(
+                f"Worker system prompt file not found at {cls._SYSTEM_PROMPT_PATH}"
+            )
+
+        base_prompt = cls._SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
+        action_lines: List[str] = []
+        for attr_name in sorted(dir(agent_class)):
+            if attr_name in skipped_actions:
+                continue
+
+            attr = getattr(agent_class, attr_name)
+            if callable(attr) and hasattr(attr, "is_agent_action"):
+                signature = inspect.signature(attr)
+                docstring = inspect.getdoc(attr) or ""
+                if docstring:
+                    indented_doc = textwrap.indent(docstring, "        ")
+                    docstring_block = f'        """\n{indented_doc}\n        """\n'
+                else:
+                    docstring_block = "        pass\n"
+                action_lines.append(
+                    f"    def {attr_name}{signature}:\n{docstring_block}\n"
+                )
+
+        actions_block = "".join(action_lines).rstrip() or "    pass"
+        placeholder = "... agent actions inserted dynamically ..."
+        if placeholder in base_prompt:
+            prompt = base_prompt.replace(placeholder, f"\n{actions_block}\n")
+        else:
+            prompt = f"{base_prompt.rstrip()}\n{actions_block}"
+
+        return prompt.strip()
+
     def __init__(
         self,
         worker_engine_params: Dict,
@@ -46,8 +86,8 @@ class Worker(BaseModule):
         """
         super().__init__(worker_engine_params, platform)
 
-        self.temperature = worker_engine_params.get("temperature", 0.0)
-        self.use_thinking = worker_engine_params.get("model", "") in [
+        self.temperature = self.engine_params.get("temperature", 0.0)
+        self.use_thinking = self.engine_params.get("model", "") in [
             "claude-opus-4-20250514",
             "claude-sonnet-4-20250514",
             "claude-3-7-sonnet-20250219",
@@ -71,7 +111,7 @@ class Worker(BaseModule):
         ):
             skipped_actions.append("call_code_agent")
 
-        sys_prompt = PROCEDURAL_MEMORY.construct_simple_worker_procedural_memory(
+        sys_prompt = self._load_system_prompt(
             type(self.grounding_agent), skipped_actions=skipped_actions
         ).replace("CURRENT_OS", self.platform)
 
