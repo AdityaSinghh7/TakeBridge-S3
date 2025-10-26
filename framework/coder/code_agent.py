@@ -159,6 +159,7 @@ class CodeAgent:
                 reasoning_effort="high",
                 reasoning_summary="auto",
                 max_output_tokens=12288,
+                cost_source=f"code_agent.step_{step_count + 1}",
             )
 
             # Print to terminal for immediate visibility
@@ -346,6 +347,7 @@ Keep the summary under 150 words and use clear, factual language.
                 reasoning_effort="high",
                 reasoning_summary="auto",
                 max_output_tokens=12288,
+                cost_source="code_agent.summary",
             )
 
             if not summary or summary.strip() == "":

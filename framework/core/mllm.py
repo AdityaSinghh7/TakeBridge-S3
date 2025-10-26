@@ -123,6 +123,7 @@ class LMMAgent:
         messages: Optional[Iterable[Dict[str, Any]]] = None,
         temperature: float = 0.0,
         max_new_tokens: Optional[int] = None,
+        cost_source: Optional[str] = None,
         **kwargs: Any,
     ) -> str:
         if messages is None:
@@ -139,5 +140,6 @@ class LMMAgent:
             messages,
             temperature=temperature,
             max_new_tokens=max_new_tokens,
+            cost_source=cost_source,
             **kwargs,
         )

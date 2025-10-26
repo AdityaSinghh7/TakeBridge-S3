@@ -15,6 +15,7 @@ from framework.coder.code_agent import CodeAgent
 from framework.core.mllm import LMMAgent
 from framework.memory.procedural_memory import PROCEDURAL_MEMORY
 from framework.utils.common_utils import call_llm_safe, compress_image
+from framework.utils.latency_logger import LATENCY_LOGGER
 import logging
 
 logger = logging.getLogger("desktopenv.agent")
@@ -316,7 +317,10 @@ class OSWorldACI(ACI):
         )
 
         # Generate and parse coordinates
-        response = call_llm_safe(self.grounding_model)
+        response = call_llm_safe(
+            self.grounding_model,
+            cost_source="grounding.fallback_coords",
+        )
         print("RAW GROUNDING MODEL RESPONSE:", response)
         numericals = re.findall(r"\d+", response)
         assert len(numericals) >= 2
@@ -340,7 +344,8 @@ class OSWorldACI(ACI):
     def _invoke_grounding_service(
         self, image_bytes: bytes, prompt: str, width: int, height: int
     ) -> Optional[List[int]]:
-        compressed_image = compress_image(image_bytes=image_bytes)
+        with LATENCY_LOGGER.measure("grounding", "compress_image"):
+            compressed_image = compress_image(image_bytes=image_bytes)
         image_base64 = base64.b64encode(compressed_image).decode("utf-8")
 
         messages: List[Dict[str, Any]] = []
@@ -379,8 +384,11 @@ class OSWorldACI(ACI):
 
         for attempt in range(self.grounding_max_retries):
             try:
-                with httpx.Client(timeout=self.grounding_timeout) as client:
-                    response = client.post(url, json=payload, headers=headers)
+                with LATENCY_LOGGER.measure(
+                    "grounding", "runpod_call", extra={"attempt": attempt + 1}
+                ):
+                    with httpx.Client(timeout=self.grounding_timeout) as client:
+                        response = client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
                 data = response.json()
                 result_items = [data] if isinstance(data, dict) else data
@@ -472,7 +480,10 @@ class OSWorldACI(ACI):
         )
 
         # Obtain the target element
-        response = call_llm_safe(self.text_span_agent)
+        response = call_llm_safe(
+            self.text_span_agent,
+            cost_source="grounding.text_span",
+        )
         print("TEXT SPAN AGENT RESPONSE:", response)
         numericals = re.findall(r"\d+", response)
         if len(numericals) > 0:

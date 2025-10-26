@@ -18,6 +18,7 @@ from framework.orchestrator.data_types import (
 )
 from framework.utils.local_env import LocalEnv
 from framework.utils.behavior_narrator import BehaviorNarrator
+from framework.utils.latency_logger import LATENCY_LOGGER
 
 
 class ControllerEnv:
@@ -123,7 +124,8 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
     completion_reason = "MAX_STEPS_REACHED"
     status = "in_progress"
 
-    before_screenshot_bytes = controller.capture_screenshot()
+    with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "initial"}):
+        before_screenshot_bytes = controller.capture_screenshot()
     previous_behavior_result: Optional[Dict[str, Any]] = None
 
     for step_index in range(1, max_steps + 1):
@@ -132,9 +134,10 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
             "previous_behavior": previous_behavior_result,
         }
 
-        info, actions = agent.predict(
-            instruction=request.task, observation=observation
-        )
+        with LATENCY_LOGGER.measure("runner", "agent_predict", extra={"step": step_index}):
+            info, actions = agent.predict(
+                instruction=request.task, observation=observation
+            )
         action = actions[0] if actions else ""
         exec_code = info.get("exec_code", action)
 
@@ -146,25 +149,32 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
         if normalized == "DONE":
             status = "success"
             completion_reason = "DONE"
-            after_screenshot_bytes = controller.capture_screenshot()
+            with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
+                after_screenshot_bytes = controller.capture_screenshot()
         elif normalized == "FAIL":
             status = "failed"
             completion_reason = "FAIL"
-            after_screenshot_bytes = controller.capture_screenshot()
+            with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
+                after_screenshot_bytes = controller.capture_screenshot()
         elif normalized in {"WAIT", "WAIT;"} or action.strip().startswith("WAIT"):
             time.sleep(1.0)
-            after_screenshot_bytes = controller.capture_screenshot()
+            with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
+                after_screenshot_bytes = controller.capture_screenshot()
         elif action.strip():
-            execution_result = _execute_remote_pyautogui(controller, action)
-            after_screenshot_bytes = controller.capture_screenshot()
+            with LATENCY_LOGGER.measure("runner", "execute_action", extra={"step": step_index}):
+                execution_result = _execute_remote_pyautogui(controller, action)
+            with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
+                after_screenshot_bytes = controller.capture_screenshot()
         else:
-            after_screenshot_bytes = controller.capture_screenshot()
+            with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
+                after_screenshot_bytes = controller.capture_screenshot()
 
-        behavior = behavior_narrator.judge(
-            screenshot_num=step_index,
-            before_img_bytes=before_screenshot_bytes,
-            after_img_bytes=after_screenshot_bytes,
-            pyautogui_action=action,
+        with LATENCY_LOGGER.measure("runner", "behavior_narrator", extra={"step": step_index}):
+            behavior = behavior_narrator.judge(
+                screenshot_num=step_index,
+                before_img_bytes=before_screenshot_bytes,
+                after_img_bytes=after_screenshot_bytes,
+                pyautogui_action=action,
             )
 
         steps.append(

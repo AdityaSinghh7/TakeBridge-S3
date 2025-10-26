@@ -6,7 +6,7 @@ import logging
 import re
 import time
 from io import BytesIO
-from typing import Dict, Iterable, Tuple
+from typing import Dict, Iterable, Optional, Tuple
 
 from PIL import Image
 
@@ -24,7 +24,13 @@ def create_pyautogui_code(agent, code: str, obs: Dict) -> str:
     return eval(code, exec_env)
 
 
-def call_llm_safe(agent, temperature: float = 0.0, use_thinking: bool = False, **kwargs) -> str:
+def call_llm_safe(
+    agent,
+    temperature: float = 0.0,
+    use_thinking: bool = False,
+    cost_source: Optional[str] = None,
+    **kwargs,
+) -> str:
     """Invoke an LMMAgent with basic retry and logging."""
     max_retries = 3
     attempt = 0
@@ -33,7 +39,9 @@ def call_llm_safe(agent, temperature: float = 0.0, use_thinking: bool = False, *
         try:
             kwargs.pop("use_thinking", None)  # Ensure engines without support do not receive this flag
             response = agent.get_response(
-                temperature=temperature, **kwargs
+                temperature=temperature,
+                cost_source=cost_source,
+                **kwargs,
             )
             assert response is not None, "Response from agent should not be None"
             logger.debug("LLM response succeeded on attempt %d", attempt + 1)
@@ -47,7 +55,13 @@ def call_llm_safe(agent, temperature: float = 0.0, use_thinking: bool = False, *
     return response if response is not None else ""
 
 
-def call_llm_formatted(generator, format_checkers, **kwargs) -> str:
+def call_llm_formatted(
+    generator,
+    format_checkers,
+    *,
+    cost_source: Optional[str] = None,
+    **kwargs,
+) -> str:
     """
     Call an LMMAgent and enforce response formatting via formatter callbacks.
     """
@@ -57,7 +71,12 @@ def call_llm_formatted(generator, format_checkers, **kwargs) -> str:
     messages = kwargs.pop("messages", generator.messages.copy())
 
     while attempt < max_retries:
-        response = call_llm_safe(generator, messages=messages, **kwargs)
+        response = call_llm_safe(
+            generator,
+            messages=messages,
+            cost_source=cost_source,
+            **kwargs,
+        )
 
         feedback_msgs = []
         for format_checker in format_checkers:

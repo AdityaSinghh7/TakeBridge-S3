@@ -210,6 +210,7 @@ class Worker(BaseModule):
                     reasoning_effort="high",
                     reasoning_summary="auto",
                     max_output_tokens=12288,
+                    cost_source="worker.reflection",
                 )
                 reflection, reflection_thoughts = split_thinking_response(
                     full_reflection
@@ -407,6 +408,7 @@ class Worker(BaseModule):
             reasoning_effort="medium",
             reasoning_summary="auto",
             max_output_tokens=12288,
+            cost_source="worker.generator",
         )
         self.worker_history.append(plan)
         self.generator_agent.add_message(plan, role="assistant")

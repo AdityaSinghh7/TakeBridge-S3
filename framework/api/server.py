@@ -16,6 +16,7 @@ from fastapi import Body, FastAPI, HTTPException
 
 from framework.orchestrator.data_types import OrchestrateRequest
 from framework.orchestrator.runner import runner
+from framework.utils.latency_logger import LATENCY_LOGGER
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,8 @@ async def orchestrate(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     try:
-        result = runner(request)
+        with LATENCY_LOGGER.measure("server", "orchestrate"):  # total request latency
+            result = runner(request)
     except Exception as exc:  # pragma: no cover - runtime guard
         logger.exception("Orchestration failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc

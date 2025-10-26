@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, Optional
 
 from framework.api.oai_client import OAIClient, extract_assistant_text
+from framework.utils.latency_logger import LATENCY_LOGGER
+from framework.utils.token_cost_tracker import TOKEN_TRACKER
 
 
 class LMMEngine:
@@ -73,6 +75,8 @@ class LMMEngineOpenAI(LMMEngine):
         max_new_tokens: Optional[int] = None,
         **kwargs: Any,
     ) -> str:
+        source_name = kwargs.pop("cost_source", "openai.generate")
+
         temperature_to_use = (
             self.temperature_override
             if self.temperature_override is not None
@@ -83,15 +87,21 @@ class LMMEngineOpenAI(LMMEngine):
         tools = kwargs.pop("tools", None) or self.default_tools
         max_output_tokens = max_new_tokens or self.max_output_tokens
 
-        response = self.client.create_response(
-            model=self.model,
-            messages=list(messages),
-            tools=tools,
-            max_output_tokens=max_output_tokens,
-            reasoning_effort=reasoning_effort,
-            reasoning_summary=reasoning_summary,
-            temperature=temperature_to_use,
-            **kwargs,
-        )
-        return extract_assistant_text(response) or ""
+        message_list = list(messages)
 
+        with LATENCY_LOGGER.measure(
+            "openai", f"{source_name}.request", extra={"model": self.model}
+        ):
+            response = self.client.create_response(
+                model=self.model,
+                messages=message_list,
+                tools=tools,
+                max_output_tokens=max_output_tokens,
+                reasoning_effort=reasoning_effort,
+                reasoning_summary=reasoning_summary,
+                temperature=temperature_to_use,
+                **kwargs,
+            )
+
+        TOKEN_TRACKER.record_response(self.model, source_name, response)
+        return extract_assistant_text(response) or ""

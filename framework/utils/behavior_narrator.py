@@ -263,6 +263,7 @@ class BehaviorNarrator:
             [THOUGHTS_ANSWER_TAG_FORMATTER],
             messages=fact_message,
             temperature=0.0,
+            cost_source="behavior_narrator",
         )
         fact_answer, fact_thoughts = split_thinking_response(fact_response)
 
