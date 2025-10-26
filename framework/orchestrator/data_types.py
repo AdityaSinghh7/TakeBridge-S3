@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -25,6 +26,13 @@ DEFAULT_WORKER_CONFIG: Dict[str, Any] = {
     "enable_reflection": True,
 }
 
+_RUNPOD_ID = os.getenv("RUNPOD_ID")
+_RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY")
+_DEFAULT_GROUNDING_BASE_URL = (
+    f"https://{_RUNPOD_ID}-3005.proxy.runpod.net" if _RUNPOD_ID else None
+)
+
+
 DEFAULT_GROUNDING_CONFIG: Dict[str, Any] = {
     "engine_params_for_generation": {
         "engine_type": "openai",
@@ -44,10 +52,11 @@ DEFAULT_GROUNDING_CONFIG: Dict[str, Any] = {
         "max_output_tokens": 12288,
     },
     "code_agent_budget": 20,
-    "grounding_base_url": None,
+    "grounding_base_url": _DEFAULT_GROUNDING_BASE_URL,
     "grounding_system_prompt": None,
     "grounding_timeout": 10.0,
     "grounding_max_retries": 3,
+    "grounding_api_key": _RUNPOD_API_KEY,
 }
 
 
@@ -112,6 +121,7 @@ class GroundingConfig:
     grounding_system_prompt: Optional[str] = None
     grounding_timeout: float = 10.0
     grounding_max_retries: int = 3
+    grounding_api_key: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "GroundingConfig":
@@ -132,6 +142,7 @@ class GroundingConfig:
             grounding_system_prompt=merged.get("grounding_system_prompt"),
             grounding_timeout=merged.get("grounding_timeout", 10.0),
             grounding_max_retries=merged.get("grounding_max_retries", 3),
+            grounding_api_key=merged.get("grounding_api_key"),
         )
 
 
@@ -171,6 +182,8 @@ class RunnerStep:
     reflection: Optional[str] = None
     reflection_thoughts: Optional[str] = None
     info: Dict[str, Any] = field(default_factory=dict)
+    behavior_fact_thoughts: Optional[str] = None
+    behavior_fact_answer: Optional[str] = None
 
 
 @dataclass

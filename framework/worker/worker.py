@@ -226,6 +226,7 @@ class Worker(BaseModule):
 
         self.grounding_agent.assign_screenshot(obs)
         self.grounding_agent.set_task_instruction(instruction)
+        previous_behavior = obs.get("previous_behavior")
 
         generator_message = (
             ""
@@ -244,6 +245,11 @@ class Worker(BaseModule):
         reflection, reflection_thoughts = self._generate_reflection(instruction, obs)
         if reflection:
             generator_message += f"REFLECTION: You may use this reflection on the previous action and overall trajectory:\n{reflection}\n"
+        if previous_behavior and previous_behavior.get("fact_answer"):
+            generator_message += (
+                "\nFACT CAPTION (Outcome of Previous Step):\n"
+                f"{previous_behavior['fact_answer']}\n"
+            )
 
         # Get the grounding agent's knowledge base buffer
         generator_message += (
@@ -431,6 +437,12 @@ class Worker(BaseModule):
                 and self.grounding_agent.last_code_agent_result is not None
                 else None
             ),
+            "previous_behavior_thoughts": previous_behavior.get("fact_thoughts")
+            if previous_behavior
+            else None,
+            "previous_behavior_answer": previous_behavior.get("fact_answer")
+            if previous_behavior
+            else None,
         }
         self.turn_count += 1
         self.screenshot_inputs.append(obs["screenshot"])

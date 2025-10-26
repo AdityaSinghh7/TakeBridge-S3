@@ -31,6 +31,13 @@ async def orchestrate(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
       - grounding: overrides grounding/code agent configuration
       - controller: overrides VM controller connection details
       - platform / enable_code_execution: optional execution flags
+
+    Grounding defaults:
+      - `RUNPOD_ID` (from environment) is used to derive
+        `https://<RUNPOD_ID>-3005.proxy.runpod.net` as the base URL.
+      - `RUNPOD_API_KEY` (from environment) is added as a Bearer token when present.
+      - The `/call_llm` path is automatically appended for coordinate inference.
+      - No system prompt is sent for coordinate grounding unless supplied.
     """
     try:
         request = OrchestrateRequest.from_dict(payload)

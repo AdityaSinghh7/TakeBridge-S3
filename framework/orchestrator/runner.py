@@ -17,6 +17,7 @@ from framework.orchestrator.data_types import (
     RunnerStep,
 )
 from framework.utils.local_env import LocalEnv
+from framework.utils.behavior_narrator import BehaviorNarrator
 
 
 class ControllerEnv:
@@ -104,6 +105,7 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
         grounding_system_prompt=grounding_cfg.grounding_system_prompt,
         grounding_timeout=grounding_cfg.grounding_timeout,
         grounding_max_retries=grounding_cfg.grounding_max_retries,
+        grounding_api_key=grounding_cfg.grounding_api_key,
     )
 
     agent = AgentS3(
@@ -114,14 +116,21 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
         enable_reflection=worker_cfg.enable_reflection,
     )
 
+    behavior_narrator = BehaviorNarrator(engine_params=worker_cfg.engine_params)
+
     max_steps = worker_cfg.max_steps
     steps: List[RunnerStep] = []
     completion_reason = "MAX_STEPS_REACHED"
     status = "in_progress"
 
+    before_screenshot_bytes = controller.capture_screenshot()
+    previous_behavior_result: Optional[Dict[str, Any]] = None
+
     for step_index in range(1, max_steps + 1):
-        screenshot_bytes = controller.capture_screenshot()
-        observation = {"screenshot": screenshot_bytes}
+        observation = {
+            "screenshot": before_screenshot_bytes,
+            "previous_behavior": previous_behavior_result,
+        }
 
         info, actions = agent.predict(
             instruction=request.task, observation=observation
@@ -132,42 +141,31 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
         execution_result: Dict[str, Any] = {}
         normalized = action.strip().upper()
 
+        after_screenshot_bytes = before_screenshot_bytes
+
         if normalized == "DONE":
             status = "success"
             completion_reason = "DONE"
-            steps.append(
-                RunnerStep(
-                    step_index=step_index,
-                    plan=info.get("plan", ""),
-                    action=action,
-                    exec_code=exec_code,
-                    execution_result={},
-                    reflection=info.get("reflection"),
-                    reflection_thoughts=info.get("reflection_thoughts"),
-                    info=info,
-                )
-            )
-            break
+            after_screenshot_bytes = controller.capture_screenshot()
         elif normalized == "FAIL":
             status = "failed"
             completion_reason = "FAIL"
-            steps.append(
-                RunnerStep(
-                    step_index=step_index,
-                    plan=info.get("plan", ""),
-                    action=action,
-                    exec_code=exec_code,
-                    execution_result={},
-                    reflection=info.get("reflection"),
-                    reflection_thoughts=info.get("reflection_thoughts"),
-                    info=info,
-                )
-            )
-            break
+            after_screenshot_bytes = controller.capture_screenshot()
         elif normalized in {"WAIT", "WAIT;"} or action.strip().startswith("WAIT"):
             time.sleep(1.0)
+            after_screenshot_bytes = controller.capture_screenshot()
         elif action.strip():
             execution_result = _execute_remote_pyautogui(controller, action)
+            after_screenshot_bytes = controller.capture_screenshot()
+        else:
+            after_screenshot_bytes = controller.capture_screenshot()
+
+        behavior = behavior_narrator.judge(
+            screenshot_num=step_index,
+            before_img_bytes=before_screenshot_bytes,
+            after_img_bytes=after_screenshot_bytes,
+            pyautogui_action=action,
+            )
 
         steps.append(
             RunnerStep(
@@ -179,8 +177,17 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
                 reflection=info.get("reflection"),
                 reflection_thoughts=info.get("reflection_thoughts"),
                 info=info,
+                behavior_fact_thoughts=behavior.get("fact_thoughts"),
+                behavior_fact_answer=behavior.get("fact_answer"),
             )
         )
+
+        previous_behavior_result = behavior
+
+        if normalized in {"DONE", "FAIL"}:
+            break
+
+        before_screenshot_bytes = after_screenshot_bytes
         time.sleep(0.5)
 
     else:

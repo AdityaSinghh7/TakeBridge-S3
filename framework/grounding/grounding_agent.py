@@ -223,6 +223,7 @@ class OSWorldACI(ACI):
         grounding_system_prompt: Optional[str] = None,
         grounding_timeout: float = 10.0,
         grounding_max_retries: int = 3,
+        grounding_api_key: Optional[str] = None,
         grounding_inference_fn: Optional[
             Callable[[bytes, str], Tuple[float, float]]
         ] = None,
@@ -276,6 +277,7 @@ class OSWorldACI(ACI):
         self.grounding_system_prompt = grounding_system_prompt
         self.grounding_timeout = grounding_timeout
         self.grounding_max_retries = grounding_max_retries
+        self.grounding_api_key = grounding_api_key
         self.grounding_inference_fn = grounding_inference_fn
 
     # Given the state and worker's referring expression, use the grounding model to generate (x,y)
@@ -371,10 +373,14 @@ class OSWorldACI(ACI):
 
         url = f"{self.grounding_base_url.rstrip('/')}/call_llm"
 
+        headers = {}
+        if self.grounding_api_key:
+            headers["Authorization"] = f"Bearer {self.grounding_api_key}"
+
         for attempt in range(self.grounding_max_retries):
             try:
                 with httpx.Client(timeout=self.grounding_timeout) as client:
-                    response = client.post(url, json=payload)
+                    response = client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
                 data = response.json()
                 result_items = [data] if isinstance(data, dict) else data
