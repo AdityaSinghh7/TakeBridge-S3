@@ -51,7 +51,7 @@ class LMMAgent:
     def reset(self) -> None:
         self.messages = [
             {
-                "role": "system",
+                "role": "developer",
                 "content": [{"type": "text", "text": self.system_prompt}],
             }
         ]
@@ -60,13 +60,13 @@ class LMMAgent:
         self.system_prompt = system_prompt
         if self.messages:
             self.messages[0] = {
-                "role": "system",
+                "role": "developer",
                 "content": [{"type": "text", "text": self.system_prompt}],
             }
         else:
             self.messages.append(
                 {
-                    "role": "system",
+                    "role": "developer",
                     "content": [{"type": "text", "text": self.system_prompt}],
                 }
             )
@@ -77,7 +77,7 @@ class LMMAgent:
         if not self.messages:
             return "user"
         last_role = self.messages[-1]["role"]
-        if last_role == "system":
+        if last_role == "developer":
             return "user"
         if last_role == "user":
             return "assistant"

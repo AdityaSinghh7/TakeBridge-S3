@@ -47,6 +47,9 @@ class LMMEngineOpenAI(LMMEngine):
         self.reasoning_summary = reasoning_summary
         self.max_output_tokens = max_output_tokens
         self.default_tools = default_tools
+        self._supports_temperature = not (
+            isinstance(model, str) and model.lower().startswith("o4-")
+        )
 
         client_kwargs: Dict[str, Any] = {
             "api_key": api_key,
@@ -76,6 +79,10 @@ class LMMEngineOpenAI(LMMEngine):
         **kwargs: Any,
     ) -> str:
         source_name = kwargs.pop("cost_source", "openai.generate")
+        kwargs.pop("temperature", None)
+
+        # Avoid forwarding duplicate token caps to the underlying client.
+        explicit_max_tokens = kwargs.pop("max_output_tokens", None)
 
         temperature_to_use = (
             self.temperature_override
@@ -85,23 +92,33 @@ class LMMEngineOpenAI(LMMEngine):
         reasoning_effort = kwargs.pop("reasoning_effort", self.reasoning_effort)
         reasoning_summary = kwargs.pop("reasoning_summary", self.reasoning_summary)
         tools = kwargs.pop("tools", None) or self.default_tools
-        max_output_tokens = max_new_tokens or self.max_output_tokens
+        max_output_tokens = (
+            max_new_tokens
+            or explicit_max_tokens
+            or self.max_output_tokens
+        )
 
         message_list = list(messages)
+
+        temperature_param = (
+            temperature_to_use if self._supports_temperature else None
+        )
 
         with LATENCY_LOGGER.measure(
             "openai", f"{source_name}.request", extra={"model": self.model}
         ):
-            response = self.client.create_response(
-                model=self.model,
-                messages=message_list,
-                tools=tools,
-                max_output_tokens=max_output_tokens,
-                reasoning_effort=reasoning_effort,
-                reasoning_summary=reasoning_summary,
-                temperature=temperature_to_use,
-                **kwargs,
-            )
+            request_kwargs: Dict[str, Any] = {
+                "model": self.model,
+                "messages": message_list,
+                "tools": tools,
+                "max_output_tokens": max_output_tokens,
+                "reasoning_effort": reasoning_effort,
+                "reasoning_summary": reasoning_summary,
+            }
+            request_kwargs.update(kwargs)
+            if temperature_param is not None:
+                request_kwargs["temperature"] = temperature_param
+            response = self.client.create_response(**request_kwargs)
 
         TOKEN_TRACKER.record_response(self.model, source_name, response)
         return extract_assistant_text(response) or ""

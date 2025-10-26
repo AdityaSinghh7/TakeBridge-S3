@@ -11,6 +11,7 @@ from typing import Dict, Iterable, Optional, Tuple
 from PIL import Image
 
 from framework.memory.procedural_memory import PROCEDURAL_MEMORY
+from framework.utils import agent_signal
 
 logger = logging.getLogger("desktopenv.agent")
 
@@ -37,6 +38,9 @@ def call_llm_safe(
     response = ""
     while attempt < max_retries:
         try:
+            agent_signal.raise_if_exit_requested()
+            if agent_signal.is_paused():
+                agent_signal.wait_for_resume()
             kwargs.pop("use_thinking", None)  # Ensure engines without support do not receive this flag
             response = agent.get_response(
                 temperature=temperature,
@@ -51,7 +55,7 @@ def call_llm_safe(
             logger.warning("LLM call attempt %d failed: %s", attempt, exc)
             if attempt == max_retries:
                 logger.error("Max retries reached while calling LLM.")
-        time.sleep(1.0)
+        agent_signal.sleep_with_interrupt(1.0)
     return response if response is not None else ""
 
 

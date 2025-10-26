@@ -145,6 +145,7 @@ class Worker(BaseModule):
                 # keep latest k images
                 img_count = 0
                 for i in range(len(agent.messages) - 1, -1, -1):
+                    logger.info("Agent messages: %s", agent.messages[i])
                     for j in range(len(agent.messages[i]["content"])):
                         if "image" in agent.messages[i]["content"][j].get("type", ""):
                             img_count += 1
@@ -154,10 +155,12 @@ class Worker(BaseModule):
         # Flush strategy for non-long-context models: drop full turns
         else:
             # generator msgs are alternating [user, assistant], so 2 per round
+            logger.info("Generator messages: %s", self.generator_agent.messages)
             if len(self.generator_agent.messages) > 2 * self.max_trajectory_length + 1:
                 self.generator_agent.messages.pop(1)
                 self.generator_agent.messages.pop(1)
             # reflector msgs are all [(user text, user image)], so 1 per round
+            logger.info("Reflection messages: %s", self.reflection_agent.messages)
             if len(self.reflection_agent.messages) > self.max_trajectory_length + 1:
                 self.reflection_agent.messages.pop(1)
 
@@ -181,6 +184,7 @@ class Worker(BaseModule):
         if self.enable_reflection:
             # Load the initial message
             if self.turn_count == 0:
+                image_bytes = obs.get("reflection_screenshot") or obs.get("screenshot")
                 text_content = textwrap.dedent(
                     f"""
                     Task Description: {instruction}
@@ -193,21 +197,24 @@ class Worker(BaseModule):
                 self.reflection_agent.add_system_prompt(updated_sys_prompt)
                 self.reflection_agent.add_message(
                     text_content="The initial screen is provided. No action has been taken yet.",
-                    image_content=obs["screenshot"],
+                    image_content=image_bytes,
                     role="user",
                 )
             # Load the latest action
             else:
+                image_bytes = (
+                    obs.get("reflection_screenshot") or obs.get("screenshot")
+                )
                 self.reflection_agent.add_message(
                     text_content=self.worker_history[-1],
-                    image_content=obs["screenshot"],
+                    image_content=image_bytes,
                     role="user",
                 )
                 full_reflection = call_llm_safe(
                     self.reflection_agent,
                     temperature=self.temperature,
                     use_thinking=self.use_thinking,
-                    reasoning_effort="high",
+                    reasoning_effort="low",
                     reasoning_summary="auto",
                     max_output_tokens=12288,
                     cost_source="worker.reflection",
@@ -447,6 +454,8 @@ class Worker(BaseModule):
             else None,
         }
         self.turn_count += 1
-        self.screenshot_inputs.append(obs["screenshot"])
+        self.screenshot_inputs.append(
+            obs.get("reflection_screenshot") or obs.get("screenshot")
+        )
         self.flush_messages()
         return executor_info, [exec_code]

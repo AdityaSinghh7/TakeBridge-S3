@@ -8,8 +8,8 @@ from typing import Any, Dict, List, Optional
 
 DEFAULT_CONTROLLER_CONFIG: Dict[str, Any] = {
     "base_url": None,
-    "host": "127.0.0.1",
-    "port": 5000,
+    "host": None,
+    "port": None,
     "timeout": 30.0,
 }
 
@@ -22,15 +22,22 @@ DEFAULT_WORKER_CONFIG: Dict[str, Any] = {
         "max_output_tokens": 12288,
     },
     "max_steps": 15,
-    "max_trajectory_length": 8,
+    "max_trajectory_length": 3,
     "enable_reflection": True,
 }
 
-_RUNPOD_ID = os.getenv("RUNPOD_ID")
-_RUNPOD_API_KEY = os.getenv("RUNPOD_API_KEY")
-_DEFAULT_GROUNDING_BASE_URL = (
-    f"https://{_RUNPOD_ID}-3005.proxy.runpod.net" if _RUNPOD_ID else None
-)
+def _resolve_grounding_base_url() -> Optional[str]:
+    explicit = os.getenv("GROUNDING_BASE_URL")
+    if explicit:
+        return explicit
+    runpod_id = os.getenv("RUNPOD_ID")
+    if runpod_id:
+        return f"https://{runpod_id}-3005.proxy.runpod.net"
+    return None
+
+
+def _resolve_grounding_api_key() -> Optional[str]:
+    return os.getenv("GROUNDING_API_KEY") or os.getenv("RUNPOD_API_KEY")
 
 
 DEFAULT_GROUNDING_CONFIG: Dict[str, Any] = {
@@ -52,11 +59,11 @@ DEFAULT_GROUNDING_CONFIG: Dict[str, Any] = {
         "max_output_tokens": 12288,
     },
     "code_agent_budget": 20,
-    "grounding_base_url": _DEFAULT_GROUNDING_BASE_URL,
+    "grounding_base_url": None,
     "grounding_system_prompt": None,
     "grounding_timeout": 10.0,
     "grounding_max_retries": 3,
-    "grounding_api_key": _RUNPOD_API_KEY,
+    "grounding_api_key": None,
 }
 
 
@@ -97,7 +104,7 @@ class ControllerConfig:
 class WorkerConfig:
     engine_params: Dict[str, Any]
     max_steps: int = 15
-    max_trajectory_length: int = 8
+    max_trajectory_length: int = 3
     enable_reflection: bool = True
 
     @classmethod
@@ -106,7 +113,7 @@ class WorkerConfig:
         return cls(
             engine_params=_coerce_dict(merged.get("engine_params")),
             max_steps=merged.get("max_steps", 15),
-            max_trajectory_length=merged.get("max_trajectory_length", 8),
+            max_trajectory_length=merged.get("max_trajectory_length", 3),
             enable_reflection=merged.get("enable_reflection", True),
         )
 
@@ -126,6 +133,8 @@ class GroundingConfig:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "GroundingConfig":
         merged = _merge_with_defaults(DEFAULT_GROUNDING_CONFIG, data)
+        base_url = merged.get("grounding_base_url") or _resolve_grounding_base_url()
+        api_key = merged.get("grounding_api_key") or _resolve_grounding_api_key()
         return cls(
             engine_params_for_generation=_coerce_dict(
                 merged.get("engine_params_for_generation")
@@ -138,11 +147,11 @@ class GroundingConfig:
             )
             or None,
             code_agent_budget=merged.get("code_agent_budget", 20),
-            grounding_base_url=merged.get("grounding_base_url"),
+            grounding_base_url=base_url,
             grounding_system_prompt=merged.get("grounding_system_prompt"),
             grounding_timeout=merged.get("grounding_timeout", 10.0),
             grounding_max_retries=merged.get("grounding_max_retries", 3),
-            grounding_api_key=merged.get("grounding_api_key"),
+            grounding_api_key=api_key,
         )
 
 

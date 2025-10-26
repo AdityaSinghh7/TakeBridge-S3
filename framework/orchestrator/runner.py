@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-import time
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -19,6 +19,11 @@ from framework.orchestrator.data_types import (
 from framework.utils.local_env import LocalEnv
 from framework.utils.behavior_narrator import BehaviorNarrator
 from framework.utils.latency_logger import LATENCY_LOGGER
+from framework.utils import agent_signal
+
+logger = logging.getLogger(__name__)
+
+agent_signal.register_signal_handlers()
 
 
 class ControllerEnv:
@@ -67,11 +72,19 @@ def _build_grounding_prompts(
 
 
 def runner(request: OrchestrateRequest) -> RunnerResult:
+    agent_signal.clear_signal_state()
     controller = VMControllerClient(
         base_url=request.controller.base_url,
         host=request.controller.host,
         port=request.controller.port,
         timeout=request.controller.timeout,
+    )
+    logger.info(
+        "Resolved controller connection: base_url=%s host=%s port=%s timeout=%s",
+        controller.base_url,
+        request.controller.host,
+        request.controller.port,
+        request.controller.timeout,
     )
 
     try:
@@ -127,12 +140,22 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
     with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "initial"}):
         before_screenshot_bytes = controller.capture_screenshot()
     previous_behavior_result: Optional[Dict[str, Any]] = None
+    agent_signal.raise_if_exit_requested()
+    agent_signal.wait_for_resume()
+    reflection_screenshot_bytes = before_screenshot_bytes
 
     for step_index in range(1, max_steps + 1):
+        agent_signal.raise_if_exit_requested()
+        agent_signal.wait_for_resume()
+
         observation = {
             "screenshot": before_screenshot_bytes,
             "previous_behavior": previous_behavior_result,
+            "reflection_screenshot": reflection_screenshot_bytes,
         }
+
+        agent_signal.raise_if_exit_requested()
+        agent_signal.wait_for_resume()
 
         with LATENCY_LOGGER.measure("runner", "agent_predict", extra={"step": step_index}):
             info, actions = agent.predict(
@@ -157,17 +180,22 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
             with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
                 after_screenshot_bytes = controller.capture_screenshot()
         elif normalized in {"WAIT", "WAIT;"} or action.strip().startswith("WAIT"):
-            time.sleep(1.0)
+            agent_signal.sleep_with_interrupt(1.5)
             with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
                 after_screenshot_bytes = controller.capture_screenshot()
         elif action.strip():
             with LATENCY_LOGGER.measure("runner", "execute_action", extra={"step": step_index}):
                 execution_result = _execute_remote_pyautogui(controller, action)
+            agent_signal.sleep_with_interrupt(0.5)
             with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
                 after_screenshot_bytes = controller.capture_screenshot()
         else:
+            agent_signal.sleep_with_interrupt(0.5)
             with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
                 after_screenshot_bytes = controller.capture_screenshot()
+
+        agent_signal.raise_if_exit_requested()
+        agent_signal.wait_for_resume()
 
         with LATENCY_LOGGER.measure("runner", "behavior_narrator", extra={"step": step_index}):
             behavior = behavior_narrator.judge(
@@ -197,8 +225,8 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
         if normalized in {"DONE", "FAIL"}:
             break
 
+        reflection_screenshot_bytes = after_screenshot_bytes
         before_screenshot_bytes = after_screenshot_bytes
-        time.sleep(0.5)
 
     else:
         status = "timeout"

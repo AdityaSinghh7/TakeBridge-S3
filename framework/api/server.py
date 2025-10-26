@@ -17,10 +17,21 @@ from fastapi import Body, FastAPI, HTTPException
 from framework.orchestrator.data_types import OrchestrateRequest
 from framework.orchestrator.runner import runner
 from framework.utils.latency_logger import LATENCY_LOGGER
+import logging
+try:
+    from dotenv import load_dotenv  # type: ignore
+except Exception:  # pragma: no cover
+    load_dotenv = None
 
+if load_dotenv:
+    load_dotenv()
+
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logger.info("Starting Orchestrator API")
 
 app = FastAPI(title="TakeBridge Orchestrator API", version="0.1.0")
+logger.info("API initialized")
 
 
 @app.post("/orchestrate")

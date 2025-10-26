@@ -105,10 +105,108 @@ def _normalize_messages(messages: Iterable[Message]) -> List[Message]:
         if not role:
             raise ValueError("Each message must include a 'role'.")
         content = message.get("content", "")
+        normalized_content: List[InputItem] = []
         if isinstance(content, str):
-            content = [{"type": "text", "text": content}]
-        normalized.append({"role": role, "content": content})
+            normalized_content.append(
+                _normalize_content_item({"type": "text", "text": content}, role)
+            )
+        elif isinstance(content, list):
+            for item in content:
+                if isinstance(item, str):
+                    normalized_content.append(
+                        _normalize_content_item(
+                            {"type": "text", "text": item},
+                            role,
+                        )
+                    )
+                    continue
+                if not isinstance(item, dict):
+                    raise ValueError("Message content items must be dicts or strings.")
+                normalized_content.append(_normalize_content_item(item, role))
+        elif isinstance(content, dict):
+            normalized_content.append(_normalize_content_item(content, role))
+        else:
+            raise ValueError("Message content must be a string, dict, or list of items.")
+        normalized.append({"role": role, "content": normalized_content})
     return normalized
+
+
+def _normalize_content_item(item: Dict[str, Any], role: str) -> InputItem:
+    """
+    Convert legacy chat content items into Responses API compatible payloads.
+    """
+    item_copy = dict(item)
+    item_type = item_copy.get("type")
+
+    if item_type in {"text", "input_text", "output_text"}:
+        text_value = item_copy.get("text", "")
+        if role == "assistant":
+            return {"type": "output_text", "text": text_value}
+        return {"type": "input_text", "text": text_value}
+
+    if item_type == "image_url":
+        image_url_field = item_copy.get("image_url")
+        detail = item_copy.get("detail")
+
+        if isinstance(image_url_field, dict):
+            detail = detail or image_url_field.get("detail")
+            image_url_field = image_url_field.get("url")
+
+        if not isinstance(image_url_field, str) or not image_url_field:
+            raise ValueError("image_url content must include a non-empty 'url' string.")
+
+        normalized: Dict[str, Any] = {"image_url": image_url_field}
+        if role == "assistant":
+            normalized["type"] = "output_image"
+        else:
+            normalized["type"] = "input_image"
+        if detail:
+            normalized["detail"] = detail
+        return normalized
+
+    if role == "assistant" and item_type == "refusal":
+        return {"type": "refusal", "refusal": item_copy.get("refusal", {})}
+
+    return item_copy
+
+
+def _coerce_output_item(item: Any, *, deep: bool = False) -> Dict[str, Any]:
+    """
+    Convert OpenAI response output entries (which may be dicts or SDK objects)
+    into plain dictionaries. Recursively coerces nested structures if requested.
+    """
+    if isinstance(item, dict):
+        result: Dict[str, Any] = dict(item)
+    else:
+        result = _model_dump(item)
+
+    if deep:
+        for key, value in list(result.items()):
+            if isinstance(value, list):
+                result[key] = [_coerce_output_item(v, deep=True) for v in value]
+            elif isinstance(value, dict) or hasattr(value, "__dict__"):
+                result[key] = _coerce_output_item(value, deep=True)
+    return result
+
+
+def _model_dump(obj: Any) -> Dict[str, Any]:
+    if obj is None:
+        return {}
+    if hasattr(obj, "model_dump") and callable(getattr(obj, "model_dump")):
+        try:
+            return obj.model_dump()
+        except Exception:
+            pass
+    if hasattr(obj, "__dict__"):
+        return {
+            key: value
+            for key, value in vars(obj).items()
+            if not key.startswith("_")
+        }
+    try:
+        return dict(obj)  # type: ignore[arg-type]
+    except Exception:
+        return {"value": obj}
 
 
 def _messages_to_input(messages: Iterable[Message]) -> List[InputItem]:
@@ -123,11 +221,14 @@ def extract_assistant_text(resp: Response) -> str:
     """
     text_chunks: List[str] = []
     for item in getattr(resp, "output", []) or []:
-        if item.get("type") == "message" and item.get("role") == "assistant":
-            for c in item.get("content", []):
-                if c.get("type") in ("output_text", "text"):
-                    if "text" in c:
-                        text_chunks.append(c["text"])
+        item_dict = _coerce_output_item(item)
+        if item_dict.get("type") == "message" and item_dict.get("role") == "assistant":
+            for c in item_dict.get("content", []):
+                content_item = _coerce_output_item(c)
+                if content_item.get("type") in ("output_text", "text", "input_text"):
+                    text_value = content_item.get("text")
+                    if isinstance(text_value, str):
+                        text_chunks.append(text_value)
     return "".join(text_chunks)
 
 
@@ -141,8 +242,10 @@ def extract_items_since_last_user(resp: Response) -> List[InputItem]:
       {"reasoning", "tool_call", "tool_result", "function_call", "function_call_output", "message"}
     """
     items = getattr(resp, "output", []) or []
-    # Shallow copy to avoid accidental mutation
-    return [dict(x) for x in items]
+    normalized: List[InputItem] = []
+    for item in items:
+        normalized.append(_coerce_output_item(item, deep=True))
+    return normalized
 
 
 @dataclass

@@ -280,6 +280,13 @@ class OSWorldACI(ACI):
         self.grounding_max_retries = grounding_max_retries
         self.grounding_api_key = grounding_api_key
         self.grounding_inference_fn = grounding_inference_fn
+        self._logged_grounding_absence = False
+        if self.grounding_base_url:
+            logger.info("Grounding service configured: %s", self.grounding_base_url)
+        else:
+            logger.warning(
+                "No grounding_base_url configured; falling back to LLM-based coordinates."
+            )
 
     # Given the state and worker's referring expression, use the grounding model to generate (x,y)
     def generate_coords(self, ref_expr: str, obs: Dict) -> List[int]:
@@ -306,6 +313,9 @@ class OSWorldACI(ACI):
             coords = self._grounding_service_coords(image_bytes, ref_expr)
             if coords:
                 return coords
+            logger.warning(
+                "Grounding service call failed; falling back to model inference for coordinates."
+            )
 
         # Reset the grounding model state
         self.grounding_model.reset()
@@ -330,6 +340,11 @@ class OSWorldACI(ACI):
         self, image_bytes: bytes, prompt: str
     ) -> Optional[List[int]]:
         if not self.grounding_base_url:
+            if not self._logged_grounding_absence:
+                logger.warning(
+                    "grounding_base_url not set; skipping external grounding service."
+                )
+                self._logged_grounding_absence = True
             return None
 
         try:
@@ -337,6 +352,7 @@ class OSWorldACI(ACI):
                 width, height = img.size
         except Exception as exc:
             logger.error("Failed to read screenshot for grounding service: %s", exc)
+            logger.warning("Falling back to LLM grounding due to image read failure.")
             return None
 
         return self._invoke_grounding_service(image_bytes, prompt, width, height)
@@ -418,6 +434,10 @@ class OSWorldACI(ACI):
                     "Grounding service attempt %d failed: %s", attempt + 1, exc
                 )
                 time.sleep(1.0)
+        logger.error(
+            "All grounding service attempts failed after %d retries; using fallback coordinates.",
+            self.grounding_max_retries,
+        )
         return None
 
     # Calls pytesseract to generate word level bounding boxes for text grounding
