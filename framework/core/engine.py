@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Optional
 
 from framework.api.oai_client import OAIClient, extract_assistant_text
 from framework.utils.latency_logger import LATENCY_LOGGER
@@ -80,6 +80,10 @@ class LMMEngineOpenAI(LMMEngine):
     ) -> str:
         source_name = kwargs.pop("cost_source", "openai.generate")
         kwargs.pop("temperature", None)
+        stream_handler: Optional[Callable[[Any], None]] = kwargs.pop("stream_handler", None)
+        stream_enabled = bool(kwargs.pop("stream", False) or stream_handler)
+        if stream_handler is not None and not callable(stream_handler):
+            raise TypeError("stream_handler must be callable.")
 
         # Avoid forwarding duplicate token caps to the underlying client.
         explicit_max_tokens = kwargs.pop("max_output_tokens", None)
@@ -118,7 +122,13 @@ class LMMEngineOpenAI(LMMEngine):
             request_kwargs.update(kwargs)
             if temperature_param is not None:
                 request_kwargs["temperature"] = temperature_param
-            response = self.client.create_response(**request_kwargs)
+            if stream_enabled:
+                response = self.client.stream_response(
+                    event_handler=stream_handler,
+                    **request_kwargs,
+                )
+            else:
+                response = self.client.create_response(**request_kwargs)
 
         TOKEN_TRACKER.record_response(self.model, source_name, response)
         return extract_assistant_text(response) or ""

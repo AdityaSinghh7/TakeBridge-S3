@@ -8,16 +8,23 @@ mirror those structures.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
 from dataclasses import asdict
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import Body, FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 
-from framework.orchestrator.data_types import OrchestrateRequest
+from framework.orchestrator.data_types import (
+    DEFAULT_CONTROLLER_CONFIG,
+    DEFAULT_GROUNDING_CONFIG,
+    DEFAULT_WORKER_CONFIG,
+    OrchestrateRequest,
+)
 from framework.orchestrator.runner import runner
 from framework.utils.latency_logger import LATENCY_LOGGER
-import logging
 try:
     from dotenv import load_dotenv  # type: ignore
 except Exception:  # pragma: no cover
@@ -32,6 +39,34 @@ logger.info("Starting Orchestrator API")
 
 app = FastAPI(title="TakeBridge Orchestrator API", version="0.1.0")
 logger.info("API initialized")
+
+
+def _parse_orchestrate_request(payload: Dict[str, Any]) -> OrchestrateRequest:
+    try:
+        return OrchestrateRequest.from_dict(payload)
+    except Exception as exc:  # pragma: no cover - validation guard
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _execute_runner(request: OrchestrateRequest):
+    try:
+        with LATENCY_LOGGER.measure("server", "orchestrate"):  # total request latency
+            return runner(request)
+    except Exception as exc:  # pragma: no cover - runtime guard
+        logger.exception("Orchestration failed: %s", exc)
+        raise
+
+
+def _format_sse_event(event: str, data: Optional[Any] = None) -> bytes:
+    parts = [f"event: {event}"]
+    if data is not None:
+        try:
+            serialized = json.dumps(data, separators=(",", ":"))
+        except (TypeError, ValueError):
+            serialized = json.dumps({"fallback": str(data)}, separators=(",", ":"))
+        parts.append(f"data: {serialized}")
+    parts.append("")
+    return ("\n".join(parts)).encode("utf-8")
 
 
 @app.post("/orchestrate")
@@ -51,19 +86,69 @@ async def orchestrate(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
       - The `/call_llm` path is automatically appended for coordinate inference.
       - No system prompt is sent for coordinate grounding unless supplied.
     """
+    request = _parse_orchestrate_request(payload)
     try:
-        request = OrchestrateRequest.from_dict(payload)
-    except Exception as exc:  # pragma: no cover - validation guard
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    try:
-        with LATENCY_LOGGER.measure("server", "orchestrate"):  # total request latency
-            result = runner(request)
+        result = _execute_runner(request)
     except Exception as exc:  # pragma: no cover - runtime guard
-        logger.exception("Orchestration failed: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return asdict(result)
+
+
+@app.post("/orchestrate/stream")
+async def orchestrate_stream(payload: Dict[str, Any] = Body(...)) -> StreamingResponse:
+    """
+    Run the orchestrator loop and stream lifecycle updates back to the client via SSE.
+    """
+    request = _parse_orchestrate_request(payload)
+    queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    queue.put_nowait(_format_sse_event("response.created", {"status": "accepted"}))
+    queue.put_nowait(_format_sse_event("response.in_progress", {"status": "running"}))
+
+    async def _drain_queue():
+        try:
+            while True:
+                chunk = await queue.get()
+                if chunk is None:
+                    break
+                yield chunk
+        finally:
+            while not queue.empty():
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+
+    async def _run_and_stream() -> None:
+        try:
+            result = await loop.run_in_executor(None, _execute_runner, request)
+        except Exception as exc:  # pragma: no cover - runtime guard
+            error_payload = {"error": str(exc)}
+            await queue.put(_format_sse_event("response.failed", error_payload))
+            await queue.put(_format_sse_event("error", error_payload))
+        else:
+            result_dict = asdict(result)
+            await queue.put(_format_sse_event("response", result_dict))
+            await queue.put(
+                _format_sse_event(
+                    "response.completed",
+                    {
+                        "status": result_dict.get("status"),
+                        "completion_reason": result_dict.get("completion_reason"),
+                    },
+                )
+            )
+        finally:
+            await queue.put(None)
+
+    asyncio.create_task(_run_and_stream())
+    return StreamingResponse(
+        _drain_queue(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/config")

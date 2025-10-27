@@ -17,9 +17,10 @@ import os
 import random
 import time
 from functools import lru_cache
+from contextlib import nullcontext
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Union
+from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Sequence, Union
 
 try:
     # Optional dependency; we won't hard-require it
@@ -331,9 +332,10 @@ class OAIClient:
         retry_backoff_base: Optional[float] = None,
         retry_backoff_cap: Optional[float] = None,
         retry_backoff_jitter: Optional[float] = None,
+        stream: bool = False,
         # Any other passthrough args (e.g., temperature, stop, metadata, store, ...)
         **kwargs: Any,
-    ) -> Response:
+    ) -> Union[Response, Any]:
         """
         Issue a Responses API request.
 
@@ -357,13 +359,15 @@ class OAIClient:
             retry_backoff_base: starting backoff delay in seconds (defaults to client config).
             retry_backoff_cap: maximum backoff delay in seconds (defaults to client config).
             retry_backoff_jitter: random jitter (0..value) in seconds added to backoff (defaults to client config).
+            stream: when True, returns the OpenAI streaming iterator instead of waiting for completion.
             **kwargs: forwarded to `client.responses.create(...)`.
 
         Returns:
-            openai.types.responses.Response
+            openai.types.responses.Response or the raw streaming iterator when stream=True.
         """
         if input is None and messages is None:
             raise ValueError("Either 'input' or 'messages' must be provided.")
+        stream = bool(stream or kwargs.pop("stream", False))
 
         payload: Dict[str, Any] = {
             "model": model or self._default_model,
@@ -447,6 +451,8 @@ class OAIClient:
         attempt = 0
         while True:
             try:
+                if stream:
+                    return self._client.responses.stream(**payload)
                 return self._client.responses.create(**payload)
             except Exception as exc:
                 if not _is_retryable_error(exc) or attempt >= resolved_max_retries:
@@ -459,6 +465,43 @@ class OAIClient:
                     backoff_seconds += random.uniform(0.0, resolved_backoff_jitter)
                 time.sleep(backoff_seconds)
                 attempt += 1
+
+    def stream_response(
+        self,
+        *,
+        event_handler: Optional[Callable[[Any], None]] = None,
+        **kwargs: Any,
+    ) -> Response:
+        """
+        Convenience wrapper to stream events via Responses API and return the final Response.
+
+        Args:
+            event_handler: Optional callback invoked with each streamed event object.
+            **kwargs: forwarded to `create_response` (same parameters as non-streaming).
+
+        Returns:
+            The final `openai.types.responses.Response` once streaming completes.
+        """
+        stream_obj = self.create_response(stream=True, **kwargs)
+        context_manager = (
+            stream_obj
+            if hasattr(stream_obj, "__enter__") and hasattr(stream_obj, "__exit__")
+            else nullcontext(stream_obj)
+        )
+        final_response: Optional[Response] = None
+        with context_manager as active_stream:
+            for event in active_stream:
+                if event_handler:
+                    event_handler(event)
+            if hasattr(active_stream, "get_final_response"):
+                final_response = active_stream.get_final_response()
+        if final_response is not None:
+            return final_response
+        if hasattr(stream_obj, "get_final_response"):
+            fallback = stream_obj.get_final_response()  # type: ignore[call-arg]
+            if isinstance(fallback, Response):
+                return fallback
+        raise RuntimeError("Streaming response did not yield a final Response object.")
 
     # ---------- High-level conveniences ----------
 
