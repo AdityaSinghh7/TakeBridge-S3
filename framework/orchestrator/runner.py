@@ -105,6 +105,7 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
 
     grounding_cfg = request.grounding
     worker_cfg = request.worker
+    worker_post_action_delay = max(worker_cfg.post_action_worker_delay, 0.0)
 
     grounding_agent = OSWorldACI(
         env=env,
@@ -166,6 +167,7 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
 
         execution_result: Dict[str, Any] = {}
         normalized = action.strip().upper()
+        did_click_action = False
 
         after_screenshot_bytes = before_screenshot_bytes
 
@@ -186,6 +188,8 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
         elif action.strip():
             with LATENCY_LOGGER.measure("runner", "execute_action", extra={"step": step_index}):
                 execution_result = _execute_remote_pyautogui(controller, action)
+            if "pyautogui.click" in action.lower():
+                did_click_action = True
             agent_signal.sleep_with_interrupt(0.5)
             with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
                 after_screenshot_bytes = controller.capture_screenshot()
@@ -225,8 +229,16 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
         if normalized in {"DONE", "FAIL"}:
             break
 
-        reflection_screenshot_bytes = after_screenshot_bytes
-        before_screenshot_bytes = after_screenshot_bytes
+        delayed_after_screenshot_bytes = after_screenshot_bytes
+        if did_click_action and worker_post_action_delay > 0:
+            agent_signal.raise_if_exit_requested()
+            agent_signal.wait_for_resume()
+            agent_signal.sleep_with_interrupt(worker_post_action_delay)
+            with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after_delayed", "step": step_index}):
+                delayed_after_screenshot_bytes = controller.capture_screenshot()
+
+        reflection_screenshot_bytes = delayed_after_screenshot_bytes
+        before_screenshot_bytes = delayed_after_screenshot_bytes
 
     else:
         status = "timeout"

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, Sequence, Union
 from urllib.parse import urlparse, urlunparse
@@ -31,6 +32,8 @@ _DEFAULT_ENV_FILENAME = ".env"
 _HOST_ENV_VAR = "VM_SERVER_HOST"
 _PORT_ENV_VAR = "VM_SERVER_PORT"
 _BASE_URL_ENV_VAR = "VM_SERVER_BASE_URL"
+
+logger = logging.getLogger(__name__)
 
 
 class VMControllerError(RuntimeError):
@@ -142,6 +145,15 @@ class VMControllerClient:
         timeout: Optional[float] = None,
     ) -> requests.Response:
         url = f"{self.base_url}{path}"
+        logger.debug(
+            "VMControllerClient request %s %s params=%s json=%s expected=%s timeout=%s",
+            method,
+            url,
+            params,
+            json,
+            expected_status,
+            timeout,
+        )
         response = self._session.request(
             method,
             url,
@@ -152,11 +164,28 @@ class VMControllerClient:
             timeout=timeout or self.timeout,
             stream=stream,
         )
+        logger.debug(
+            "VMControllerClient response %s %s status=%s",
+            method,
+            url,
+            response.status_code,
+        )
         if response.status_code not in expected_status:
+            try:
+                payload = _safe_json(response)
+            except Exception:
+                payload = "<unparseable>"
+            logger.warning(
+                "VMControllerClient unexpected status %s for %s %s payload=%s",
+                response.status_code,
+                method,
+                path,
+                payload,
+            )
             raise VMControllerError(
                 f"Controller request to {path} failed with HTTP {response.status_code}",
                 status_code=response.status_code,
-                payload=_safe_json(response),
+                payload=payload,
             )
         return response
 
@@ -404,16 +433,41 @@ class VMControllerClient:
         )
         return response.text
 
-    def run_python(self, code: str, *, timeout: Optional[float] = None) -> JsonDict:
+    def run_python(
+        self,
+        code: str,
+        *,
+        timeout_seconds: Optional[int] = None,
+        timeout: Optional[float] = None,
+    ) -> JsonDict:
         """
         Execute arbitrary Python code (`/run_python`).
         """
+        payload: JsonDict = {"code": code}
+        if timeout_seconds is not None:
+            payload["timeout"] = timeout_seconds
         return self._request(
             "POST",
             "/run_python",
-            json={"code": code},
+            json=payload,
             timeout=timeout,
         ).json()
+
+    def run_python_script(
+        self,
+        code: str,
+        *,
+        timeout_seconds: Optional[int] = None,
+        timeout: Optional[float] = None,
+    ) -> JsonDict:
+        """
+        Compatibility wrapper matching the local controller interface.
+        """
+        return self.run_python(
+            code,
+            timeout_seconds=timeout_seconds,
+            timeout=timeout,
+        )
 
     def run_bash_script(
         self,

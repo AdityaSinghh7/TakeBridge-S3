@@ -48,9 +48,26 @@ def execute_code(code_type: str, code: str, env_controller) -> Dict:
 
     try:
         if code_type == "bash":
-            result = env_controller.run_bash_script(code, timeout=30)
+            run_bash = getattr(env_controller, "run_bash_script", None)
+            if run_bash is None:
+                return {"status": "error", "error": "Controller does not support bash execution"}
+            try:
+                result = run_bash(code, timeout_seconds=30)
+            except TypeError:
+                # Fallback for controllers that use `timeout`
+                result = run_bash(code, timeout=30)
         elif code_type == "python":
-            result = env_controller.run_python_script(code)
+            if hasattr(env_controller, "run_python_script"):
+                run_python = env_controller.run_python_script
+            elif hasattr(env_controller, "run_python"):
+                run_python = env_controller.run_python
+            else:
+                return {"status": "error", "error": "Controller does not support python execution"}
+
+            try:
+                result = run_python(code, timeout_seconds=30)
+            except TypeError:
+                result = run_python(code)
         else:
             result = {"status": "error", "error": f"Unknown code type: {code_type}"}
 

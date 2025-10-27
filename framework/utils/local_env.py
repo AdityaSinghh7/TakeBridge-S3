@@ -1,12 +1,20 @@
 import subprocess
 import sys
-from typing import Dict
+from typing import Dict, Optional
 
 
 class LocalController:
     """Minimal controller to execute bash and python code locally."""
 
-    def run_bash_script(self, code: str, timeout: int = 30) -> Dict:
+    def run_bash_script(
+        self,
+        code: str,
+        timeout: int = 30,
+        *,
+        timeout_seconds: Optional[int] = None,
+    ) -> Dict:
+        if timeout_seconds is not None:
+            timeout = timeout_seconds
         try:
             proc = subprocess.run(
                 ["/bin/bash", "-lc", code],
@@ -41,12 +49,18 @@ class LocalController:
                 "error": str(exc),
             }
 
-    def run_python_script(self, code: str) -> Dict:
+    def run_python_script(
+        self,
+        code: str,
+        *,
+        timeout_seconds: Optional[int] = None,
+    ) -> Dict:
         try:
             proc = subprocess.run(
                 [sys.executable, "-c", code],
                 capture_output=True,
                 text=True,
+                timeout=timeout_seconds if timeout_seconds is not None else None,
             )
             print("PYTHON OUTPUT =======================================")
             print(proc.stdout or "")

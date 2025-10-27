@@ -21,9 +21,10 @@ DEFAULT_WORKER_CONFIG: Dict[str, Any] = {
         "reasoning_summary": "auto",
         "max_output_tokens": 12288,
     },
-    "max_steps": 15,
+    "max_steps": 30,
     "max_trajectory_length": 3,
     "enable_reflection": True,
+    "post_action_worker_delay": 1.5,
 }
 
 def _resolve_grounding_base_url() -> Optional[str]:
@@ -103,18 +104,20 @@ class ControllerConfig:
 @dataclass
 class WorkerConfig:
     engine_params: Dict[str, Any]
-    max_steps: int = 15
+    max_steps: int = 30
     max_trajectory_length: int = 3
     enable_reflection: bool = True
+    post_action_worker_delay: float = 1.5
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "WorkerConfig":
         merged = _merge_with_defaults(DEFAULT_WORKER_CONFIG, data)
         return cls(
             engine_params=_coerce_dict(merged.get("engine_params")),
-            max_steps=merged.get("max_steps", 15),
+            max_steps=merged.get("max_steps", 30),
             max_trajectory_length=merged.get("max_trajectory_length", 3),
             enable_reflection=merged.get("enable_reflection", True),
+            post_action_worker_delay=merged.get("post_action_worker_delay", 1.5),
         )
 
 

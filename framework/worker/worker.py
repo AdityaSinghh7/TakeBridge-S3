@@ -145,7 +145,6 @@ class Worker(BaseModule):
                 # keep latest k images
                 img_count = 0
                 for i in range(len(agent.messages) - 1, -1, -1):
-                    logger.info("Agent messages: %s", agent.messages[i])
                     for j in range(len(agent.messages[i]["content"])):
                         if "image" in agent.messages[i]["content"][j].get("type", ""):
                             img_count += 1
@@ -155,12 +154,10 @@ class Worker(BaseModule):
         # Flush strategy for non-long-context models: drop full turns
         else:
             # generator msgs are alternating [user, assistant], so 2 per round
-            logger.info("Generator messages: %s", self.generator_agent.messages)
             if len(self.generator_agent.messages) > 2 * self.max_trajectory_length + 1:
                 self.generator_agent.messages.pop(1)
                 self.generator_agent.messages.pop(1)
             # reflector msgs are all [(user text, user image)], so 1 per round
-            logger.info("Reflection messages: %s", self.reflection_agent.messages)
             if len(self.reflection_agent.messages) > self.max_trajectory_length + 1:
                 self.reflection_agent.messages.pop(1)
 
