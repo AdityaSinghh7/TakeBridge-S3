@@ -5,6 +5,7 @@ from typing import Dict, List, Tuple, Optional
 from framework.memory.procedural_memory import PROCEDURAL_MEMORY
 from framework.utils.common_utils import call_llm_safe, split_thinking_response
 from framework.core.mllm import LMMAgent
+from framework.utils.streaming import emit_event
 
 logger = logging.getLogger("desktopenv.agent")
 
@@ -165,6 +166,13 @@ class CodeAgent:
 
         step_count = 0
         execution_history = []
+        emit_event(
+            "code_agent.session.started",
+            {
+                "task": task_instruction,
+                "budget": self.budget,
+            },
+        )
 
         while step_count < self.budget:
             logger.info(f"Step {step_count + 1}/{self.budget}")
@@ -202,6 +210,14 @@ class CodeAgent:
             execution_history.append(
                 {"step": step_count + 1, "action": action, "thoughts": thoughts}
             )
+            emit_event(
+                "code_agent.step.response",
+                {
+                    "step": step_count + 1,
+                    "action": action,
+                    "thoughts": thoughts,
+                },
+            )
 
             # Check for completion signals
             action_upper = action.upper().strip()
@@ -232,6 +248,18 @@ class CodeAgent:
                 error = result.get("error", "")
                 message = result.get("message", "")
                 status = result.get("status", "")
+                emit_event(
+                    "code_agent.step.execution",
+                    {
+                        "step": step_count + 1,
+                        "code_type": code_type,
+                        "status": status,
+                        "output": output,
+                        "error": error,
+                        "message": message,
+                        "return_code": result.get("returncode", result.get("return_code")),
+                    },
+                )
 
                 # Print execution result to terminal for immediate visibility
                 print(f"\n⚡ CODE EXECUTION RESULT - Step {step_count + 1}")
@@ -274,6 +302,15 @@ class CodeAgent:
 
                 logger.warning(f"Step {step_count + 1}: No code block found in action")
                 result = {"status": "skipped", "message": "No code block found"}
+                emit_event(
+                    "code_agent.step.execution",
+                    {
+                        "step": step_count + 1,
+                        "code_type": code_type,
+                        "status": result["status"],
+                        "message": result["message"],
+                    },
+                )
                 logger.info(
                     f"CODING_AGENT_EXECUTION_RESULT - Step {step_count + 1}:\n"
                     f"Status: skipped\n"
@@ -285,6 +322,15 @@ class CodeAgent:
             # Process result and add formatted environment results as user message
             result_context = format_result(result, step_count)
             self.agent.add_message(result_context, role="user")
+
+            emit_event(
+                "code_agent.step.completed",
+                {
+                    "step": step_count + 1,
+                    "status": result.get("status"),
+                    "thoughts": thoughts,
+                },
+            )
 
             step_count += 1
 
@@ -311,6 +357,15 @@ class CodeAgent:
         }
 
         logger.info(f"Code execution completed: steps={step_count}")
+        emit_event(
+            "code_agent.session.completed",
+            {
+                "completion_reason": completion_reason,
+                "steps_executed": step_count,
+                "budget": self.budget,
+                "summary": summary,
+            },
+        )
         return result
 
     def _generate_summary(

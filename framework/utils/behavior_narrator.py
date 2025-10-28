@@ -8,6 +8,7 @@ from framework.utils.common_utils import (
 from framework.utils.formatters import (
     THOUGHTS_ANSWER_TAG_FORMATTER,
 )
+from framework.utils.streaming import emit_event
 from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
 from typing import Dict
@@ -272,4 +273,13 @@ class BehaviorNarrator:
             "fact_thoughts": fact_thoughts,
             "fact_answer": f"Fact Caption from Screenshot {screenshot_num}: {fact_answer}",
         }
+        emit_event(
+            "behavior_narrator.completed",
+            {
+                "step": screenshot_num,
+                "action": pyautogui_action,
+                "thoughts": fact_thoughts,
+                "caption": result["fact_answer"],
+            },
+        )
         return result

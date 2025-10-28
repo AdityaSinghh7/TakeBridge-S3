@@ -25,6 +25,11 @@ from framework.orchestrator.data_types import (
 )
 from framework.orchestrator.runner import runner
 from framework.utils.latency_logger import LATENCY_LOGGER
+from framework.utils.streaming import (
+    StreamEmitter,
+    reset_current_emitter,
+    set_current_emitter,
+)
 try:
     from dotenv import load_dotenv  # type: ignore
 except Exception:  # pragma: no cover
@@ -107,6 +112,12 @@ async def orchestrate_stream(payload: Dict[str, Any] = Body(...)) -> StreamingRe
     queue.put_nowait(_format_sse_event("response.created", {"status": "accepted"}))
     queue.put_nowait(_format_sse_event("response.in_progress", {"status": "running"}))
 
+    def _publish(event: str, data: Optional[Any] = None) -> None:
+        chunk = _format_sse_event(event, data)
+        loop.call_soon_threadsafe(queue.put_nowait, chunk)
+
+    emitter = StreamEmitter(_publish)
+
     async def _drain_queue():
         try:
             while True:
@@ -123,7 +134,11 @@ async def orchestrate_stream(payload: Dict[str, Any] = Body(...)) -> StreamingRe
 
     async def _run_and_stream() -> None:
         try:
-            result = await loop.run_in_executor(None, _execute_runner, request)
+            token = set_current_emitter(emitter)
+            try:
+                result = await loop.run_in_executor(None, _execute_runner, request)
+            finally:
+                reset_current_emitter(token)
         except Exception as exc:  # pragma: no cover - runtime guard
             error_payload = {"error": str(exc)}
             await queue.put(_format_sse_event("response.failed", error_payload))

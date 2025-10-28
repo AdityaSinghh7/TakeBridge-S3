@@ -19,6 +19,7 @@ from framework.orchestrator.data_types import (
 from framework.utils.local_env import LocalEnv
 from framework.utils.behavior_narrator import BehaviorNarrator
 from framework.utils.latency_logger import LATENCY_LOGGER
+from framework.utils.streaming import emit_event
 from framework.utils import agent_signal
 
 logger = logging.getLogger(__name__)
@@ -138,6 +139,15 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
     completion_reason = "MAX_STEPS_REACHED"
     status = "in_progress"
 
+    emit_event(
+        "runner.started",
+        {
+            "task": request.task,
+            "max_steps": max_steps,
+            "platform": platform,
+        },
+    )
+
     with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "initial"}):
         before_screenshot_bytes = controller.capture_screenshot()
     previous_behavior_result: Optional[Dict[str, Any]] = None
@@ -148,6 +158,13 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
     for step_index in range(1, max_steps + 1):
         agent_signal.raise_if_exit_requested()
         agent_signal.wait_for_resume()
+
+        emit_event(
+            "runner.step.started",
+            {
+                "step": step_index,
+            },
+        )
 
         observation = {
             "screenshot": before_screenshot_bytes,
@@ -226,6 +243,16 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
 
         previous_behavior_result = behavior
 
+        emit_event(
+            "runner.step.completed",
+            {
+                "step": step_index,
+                "status": status if normalized in {"DONE", "FAIL"} else "in_progress",
+                "action": action,
+                "completion_reason": completion_reason if normalized in {"DONE", "FAIL"} else None,
+            },
+        )
+
         if normalized in {"DONE", "FAIL"}:
             break
 
@@ -247,7 +274,7 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
         grounding_cfg.grounding_system_prompt
     )
 
-    return RunnerResult(
+    result = RunnerResult(
         task=request.task,
         status=status,
         completion_reason=completion_reason,
@@ -255,5 +282,15 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
         grounding_prompts=grounding_prompts,
     )
 
+    emit_event(
+        "runner.completed",
+        {
+            "status": status,
+            "completion_reason": completion_reason,
+            "steps": len(steps),
+        },
+    )
+
+    return result
 
 __all__ = ["runner"]

@@ -136,10 +136,17 @@ class LMMAgent:
                 {"role": "user", "content": [{"type": "text", "text": user_message}]}
             )
 
+        stream_requested = bool(kwargs.pop("stream", False))
+        stream_handler = kwargs.pop("stream_handler", None)
+        if stream_handler is not None:
+            stream_requested = True
+
         return self.engine.generate(
             messages,
             temperature=temperature,
             max_new_tokens=max_new_tokens,
             cost_source=cost_source,
+            stream=stream_requested,
+            stream_handler=stream_handler,
             **kwargs,
         )

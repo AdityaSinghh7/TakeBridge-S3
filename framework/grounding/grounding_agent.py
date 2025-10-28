@@ -16,6 +16,7 @@ from framework.core.mllm import LMMAgent
 from framework.memory.procedural_memory import PROCEDURAL_MEMORY
 from framework.utils.common_utils import call_llm_safe, compress_image
 from framework.utils.latency_logger import LATENCY_LOGGER
+from framework.utils.streaming import emit_event
 import logging
 
 logger = logging.getLogger("desktopenv.agent")
@@ -294,6 +295,13 @@ class OSWorldACI(ACI):
         if screenshot_data is None:
             raise ValueError("Observation missing 'screenshot' for grounding call")
 
+        emit_event(
+            "grounding.generate_coords.started",
+            {
+                "ref_expr": ref_expr,
+            },
+        )
+
         if isinstance(screenshot_data, str):
             image_bytes = base64.b64decode(screenshot_data)
         elif isinstance(screenshot_data, bytes):
@@ -303,38 +311,61 @@ class OSWorldACI(ACI):
                 f"Unsupported screenshot type for grounding inference: {type(screenshot_data)}"
             )
 
+        source = "fallback"
+        coords: Optional[List[int]] = None
+
         if self.grounding_inference_fn is not None:
             x_norm, y_norm = self.grounding_inference_fn(image_bytes, ref_expr)
             x = round(x_norm * self.width)
             y = round(y_norm * self.height)
-            return [x, y]
+            coords = [x, y]
+            source = "custom_inference"
+        else:
+            if self.grounding_base_url:
+                coords = self._grounding_service_coords(image_bytes, ref_expr)
+                if coords:
+                    source = "service"
+                else:
+                    logger.warning(
+                        "Grounding service call failed; falling back to model inference for coordinates."
+                    )
+                    emit_event(
+                        "grounding.generate_coords.service_fallback",
+                        {"ref_expr": ref_expr},
+                    )
+            if coords is None:
+                # Reset the grounding model state
+                self.grounding_model.reset()
 
-        if self.grounding_base_url:
-            coords = self._grounding_service_coords(image_bytes, ref_expr)
-            if coords:
-                return coords
-            logger.warning(
-                "Grounding service call failed; falling back to model inference for coordinates."
-            )
+                # Configure the context, UI-TARS demo does not use system prompt
+                prompt = f"Query:{ref_expr}\nOutput only the coordinate of one point in your response.\n"
+                self.grounding_model.add_message(
+                    text_content=prompt, image_content=obs["screenshot"], put_text_last=True
+                )
 
-        # Reset the grounding model state
-        self.grounding_model.reset()
+                # Generate and parse coordinates
+                response = call_llm_safe(
+                    self.grounding_model,
+                    cost_source="grounding.fallback_coords",
+                )
+                print("RAW GROUNDING MODEL RESPONSE:", response)
+                numericals = re.findall(r"\d+", response)
+                assert len(numericals) >= 2
+                coords = [int(numericals[0]), int(numericals[1])]
+                source = "llm"
 
-        # Configure the context, UI-TARS demo does not use system prompt
-        prompt = f"Query:{ref_expr}\nOutput only the coordinate of one point in your response.\n"
-        self.grounding_model.add_message(
-            text_content=prompt, image_content=obs["screenshot"], put_text_last=True
+        if coords is None:
+            raise RuntimeError("Failed to generate grounding coordinates")
+
+        emit_event(
+            "grounding.generate_coords.completed",
+            {
+                "ref_expr": ref_expr,
+                "coords": coords,
+                "source": source,
+            },
         )
-
-        # Generate and parse coordinates
-        response = call_llm_safe(
-            self.grounding_model,
-            cost_source="grounding.fallback_coords",
-        )
-        print("RAW GROUNDING MODEL RESPONSE:", response)
-        numericals = re.findall(r"\d+", response)
-        assert len(numericals) >= 2
-        return [int(numericals[0]), int(numericals[1])]
+        return coords
 
     def _grounding_service_coords(
         self, image_bytes: bytes, prompt: str
@@ -482,6 +513,14 @@ class OSWorldACI(ACI):
         self, phrase: str, obs: Dict, alignment: str = ""
     ) -> List[int]:
 
+        emit_event(
+            "grounding.generate_text_coords.started",
+            {
+                "phrase": phrase,
+                "alignment": alignment or "center",
+            },
+        )
+
         ocr_table, ocr_elements = self.get_ocr_elements(obs["screenshot"])
 
         alignment_prompt = ""
@@ -522,6 +561,14 @@ class OSWorldACI(ACI):
                 elem["left"] + (elem["width"] // 2),
                 elem["top"] + (elem["height"] // 2),
             ]
+        emit_event(
+            "grounding.generate_text_coords.completed",
+            {
+                "phrase": phrase,
+                "alignment": alignment or "center",
+                "coords": coords,
+            },
+        )
         return coords
 
     def assign_screenshot(self, obs: Dict):
@@ -778,6 +825,12 @@ class OSWorldACI(ACI):
             logger.info(f"Screenshot available: {'Yes' if screenshot else 'No'}")
 
             logger.info("Executing code agent...")
+            emit_event(
+                "grounding.code_agent.started",
+                {
+                    "task": task_to_execute,
+                },
+            )
             result = self.code_agent.execute(
                 task_to_execute, screenshot, self.env.controller
             )
@@ -795,9 +848,24 @@ class OSWorldACI(ACI):
             logger.info("=" * 50)
 
             # Return code to be executed in the environment
+            emit_event(
+                "grounding.code_agent.completed",
+                {
+                    "task": task_to_execute,
+                    "completion_reason": result["completion_reason"],
+                    "steps_executed": result["steps_executed"],
+                    "summary": result["summary"],
+                },
+            )
             return "import time; time.sleep(2.222)"
         else:
             logger.warning("No task instruction available for code agent call")
+            emit_event(
+                "grounding.code_agent.skipped",
+                {
+                    "reason": "missing_task_instruction",
+                },
+            )
             return "import time; time.sleep(1.111)"
 
     @agent_action

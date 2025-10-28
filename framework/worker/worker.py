@@ -19,6 +19,7 @@ from framework.utils.formatters import (
     SINGLE_ACTION_FORMATTER,
     CODE_VALID_FORMATTER,
 )
+from framework.utils.streaming import emit_event
 
 logger = logging.getLogger("desktopenv.agent")
 
@@ -178,6 +179,7 @@ class Worker(BaseModule):
         """
         reflection = None
         reflection_thoughts = None
+        current_step = self.turn_count + 1
         if self.enable_reflection:
             # Load the initial message
             if self.turn_count == 0:
@@ -222,12 +224,29 @@ class Worker(BaseModule):
                 self.reflections.append(reflection)
                 logger.info("REFLECTION THOUGHTS: %s", reflection_thoughts)
                 logger.info("REFLECTION: %s", reflection)
+        if reflection or reflection_thoughts:
+            emit_event(
+                "worker.reflection.completed",
+                {
+                    "step": current_step,
+                    "reflection": reflection,
+                    "thoughts": reflection_thoughts,
+                },
+            )
         return reflection, reflection_thoughts
 
     def generate_next_action(self, instruction: str, obs: Dict) -> Tuple[Dict, List]:
         """
         Predict the next action(s) based on the current observation.
         """
+
+        current_step = self.turn_count + 1
+        emit_event(
+            "worker.step.started",
+            {
+                "step": current_step,
+            },
+        )
 
         self.grounding_agent.assign_screenshot(obs)
         self.grounding_agent.set_task_instruction(instruction)
@@ -450,6 +469,19 @@ class Worker(BaseModule):
             if previous_behavior
             else None,
         }
+        emit_event(
+            "worker.step.ready",
+            {
+                "step": current_step,
+                "plan": plan,
+                "plan_code": plan_code,
+                "exec_code": exec_code,
+                "reflection": reflection,
+                "reflection_thoughts": reflection_thoughts,
+                "previous_behavior_thoughts": executor_info["previous_behavior_thoughts"],
+                "previous_behavior_answer": executor_info["previous_behavior_answer"],
+            },
+        )
         self.turn_count += 1
         self.screenshot_inputs.append(
             obs.get("reflection_screenshot") or obs.get("screenshot")
