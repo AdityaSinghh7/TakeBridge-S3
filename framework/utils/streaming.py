@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
+import threading
 from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -26,24 +27,46 @@ _CURRENT_EMITTER: contextvars.ContextVar[Optional[StreamEmitter]] = contextvars.
     "framework_stream_emitter",
     default=None,
 )
+_THREAD_EMITTER = threading.local()
+_GLOBAL_EMITTER: Optional[StreamEmitter] = None
+_EMITTER_WARNING_EMITTED: bool = False
 
 
 def set_current_emitter(emitter: Optional[StreamEmitter]) -> contextvars.Token:
     """Set the active emitter for the current context, returning a token to reset."""
-    return _CURRENT_EMITTER.set(emitter)
+    global _GLOBAL_EMITTER
+    token = _CURRENT_EMITTER.set(emitter)
+    _THREAD_EMITTER.emitter = emitter
+    _GLOBAL_EMITTER = emitter
+    return token
 
 
 def reset_current_emitter(token: contextvars.Token) -> None:
     """Reset the active emitter context using a token from set_current_emitter."""
+    global _GLOBAL_EMITTER
     try:
         _CURRENT_EMITTER.reset(token)
+        remaining = get_current_emitter()
+        if remaining is None:
+            if hasattr(_THREAD_EMITTER, "emitter"):
+                delattr(_THREAD_EMITTER, "emitter")
+            _GLOBAL_EMITTER = None
+        else:
+            _THREAD_EMITTER.emitter = remaining
+            _GLOBAL_EMITTER = remaining
     except Exception:  # pragma: no cover - defensive reset
         logger.exception("Failed to reset stream emitter context")
 
 
 def get_current_emitter() -> Optional[StreamEmitter]:
     """Return the emitter associated with the current execution context."""
-    return _CURRENT_EMITTER.get()
+    emitter = _CURRENT_EMITTER.get()
+    if emitter is not None:
+        return emitter
+    thread_emitter = getattr(_THREAD_EMITTER, "emitter", None)
+    if thread_emitter is not None:
+        return thread_emitter
+    return _GLOBAL_EMITTER
 
 
 def streaming_enabled() -> bool:
@@ -62,10 +85,17 @@ def sanitize_event_name(name: str) -> str:
 
 def emit_event(event: str, data: Any) -> None:
     """Emit an event if streaming is active."""
+    global _EMITTER_WARNING_EMITTED
     emitter = get_current_emitter()
     if emitter is None:
+        if not _EMITTER_WARNING_EMITTED:
+            logger.debug("Dropping stream event '%s' because no emitter is active.", event)
+            _EMITTER_WARNING_EMITTED = True
         return
-    emitter.emit(sanitize_event_name(event), data)
+    _EMITTER_WARNING_EMITTED = False
+    sanitized = sanitize_event_name(event)
+    logger.debug("Emitting stream event '%s' with payload keys %s", sanitized, list(data.keys()) if isinstance(data, dict) else type(data))
+    emitter.emit(sanitized, data)
 
 
 def _coerce_event_obj(item: Any) -> Dict[str, Any]:

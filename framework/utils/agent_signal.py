@@ -17,6 +17,12 @@ _pause_prompt_printed = threading.Event()
 _HAS_TTY = sys.stdin.isatty()
 
 
+def set_interactive_mode(enabled: bool) -> None:
+    """Force pause/resume controls into interactive or non-interactive mode."""
+    global _HAS_TTY
+    _HAS_TTY = bool(enabled) and sys.stdin.isatty()
+
+
 def register_signal_handlers() -> None:
     """Ensure our custom SIGINT handler is installed exactly once."""
     global _handler_registered
@@ -105,6 +111,10 @@ def sleep_with_interrupt(seconds: float, poll_interval: float = 0.1) -> None:
 
 
 def _signal_handler(signum: int, frame: Optional[object]) -> None:
+    if not _HAS_TTY:
+        _exit_event.set()
+        signal.default_int_handler(signum, frame)
+        return
     # SIGINT received in paused mode requests exit. Otherwise enter pause mode.
     if is_paused():
         _exit_event.set()

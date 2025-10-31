@@ -186,23 +186,80 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
         normalized = action.strip().upper()
         did_click_action = False
 
+        agent_payload = {
+            "plan": info.get("plan"),
+            "reflection": info.get("reflection"),
+            "reflection_thoughts": info.get("reflection_thoughts"),
+        }
+        if info.get("code_agent_output") is not None:
+            agent_payload["code_agent_output"] = info.get("code_agent_output")
+        emit_event(
+            "runner.step.agent_response",
+            {
+                "step": step_index,
+                "action": action,
+                "exec_code": exec_code,
+                "normalized_action": normalized,
+                "info": {k: v for k, v in agent_payload.items() if v is not None},
+            },
+        )
+
         after_screenshot_bytes = before_screenshot_bytes
+        execution_mode = "noop"
+        execution_details: Dict[str, Any] = {"step": step_index}
 
         if normalized == "DONE":
+            execution_mode = "final_screenshot"
+            emit_event(
+                "runner.step.execution.started",
+                {
+                    "step": step_index,
+                    "mode": execution_mode,
+                },
+            )
             status = "success"
             completion_reason = "DONE"
             with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
                 after_screenshot_bytes = controller.capture_screenshot()
+            execution_details["status"] = status
+            execution_details["completion_reason"] = completion_reason
         elif normalized == "FAIL":
+            execution_mode = "failure_screenshot"
+            emit_event(
+                "runner.step.execution.started",
+                {
+                    "step": step_index,
+                    "mode": execution_mode,
+                },
+            )
             status = "failed"
             completion_reason = "FAIL"
             with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
                 after_screenshot_bytes = controller.capture_screenshot()
+            execution_details["status"] = status
+            execution_details["completion_reason"] = completion_reason
         elif normalized in {"WAIT", "WAIT;"} or action.strip().startswith("WAIT"):
+            execution_mode = "wait"
+            emit_event(
+                "runner.step.execution.started",
+                {
+                    "step": step_index,
+                    "mode": execution_mode,
+                },
+            )
             agent_signal.sleep_with_interrupt(1.5)
             with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
                 after_screenshot_bytes = controller.capture_screenshot()
         elif action.strip():
+            execution_mode = "controller_execute"
+            emit_event(
+                "runner.step.execution.started",
+                {
+                    "step": step_index,
+                    "mode": execution_mode,
+                    "exec_code": exec_code,
+                },
+            )
             with LATENCY_LOGGER.measure("runner", "execute_action", extra={"step": step_index}):
                 execution_result = _execute_remote_pyautogui(controller, action)
             if "pyautogui.click" in action.lower():
@@ -210,10 +267,28 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
             agent_signal.sleep_with_interrupt(0.5)
             with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
                 after_screenshot_bytes = controller.capture_screenshot()
+            execution_details["result"] = execution_result
         else:
+            execution_mode = "noop"
+            emit_event(
+                "runner.step.execution.started",
+                {
+                    "step": step_index,
+                    "mode": execution_mode,
+                },
+            )
             agent_signal.sleep_with_interrupt(0.5)
             with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
                 after_screenshot_bytes = controller.capture_screenshot()
+
+        emit_event(
+            "runner.step.execution.completed",
+            {
+                **execution_details,
+                "mode": execution_mode,
+                "did_click": did_click_action if execution_mode == "controller_execute" else False,
+            },
+        )
 
         agent_signal.raise_if_exit_requested()
         agent_signal.wait_for_resume()
@@ -250,6 +325,14 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
                 "status": status if normalized in {"DONE", "FAIL"} else "in_progress",
                 "action": action,
                 "completion_reason": completion_reason if normalized in {"DONE", "FAIL"} else None,
+            },
+        )
+        emit_event(
+            "runner.step.behavior",
+            {
+                "step": step_index,
+                "fact_answer": behavior.get("fact_answer") if behavior else None,
+                "fact_thoughts": behavior.get("fact_thoughts") if behavior else None,
             },
         )
 

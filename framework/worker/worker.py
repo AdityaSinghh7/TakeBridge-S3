@@ -180,6 +180,15 @@ class Worker(BaseModule):
         reflection = None
         reflection_thoughts = None
         current_step = self.turn_count + 1
+        if not self.enable_reflection:
+            emit_event(
+                "worker.reflection.skipped",
+                {
+                    "step": current_step,
+                    "reason": "disabled",
+                },
+            )
+            return reflection, reflection_thoughts
         if self.enable_reflection:
             # Load the initial message
             if self.turn_count == 0:
@@ -199,10 +208,23 @@ class Worker(BaseModule):
                     image_content=image_bytes,
                     role="user",
                 )
+                emit_event(
+                    "worker.reflection.skipped",
+                    {
+                        "step": current_step,
+                        "reason": "initial_step",
+                    },
+                )
             # Load the latest action
             else:
                 image_bytes = (
                     obs.get("reflection_screenshot") or obs.get("screenshot")
+                )
+                emit_event(
+                    "worker.reflection.started",
+                    {
+                        "step": current_step,
+                    },
                 )
                 self.reflection_agent.add_message(
                     text_content=self.worker_history[-1],
@@ -416,6 +438,17 @@ class Worker(BaseModule):
         # Finalize the generator message
         self.generator_agent.add_message(
             generator_message, image_content=obs["screenshot"], role="user"
+        )
+        emit_event(
+            "worker.generator.prompt_ready",
+            {
+                "step": current_step,
+                "notes_count": len(getattr(self.grounding_agent, "notes", []) or []),
+                "has_code_agent_context": bool(
+                    hasattr(self.grounding_agent, "last_code_agent_result")
+                    and self.grounding_agent.last_code_agent_result
+                ),
+            },
         )
 
         # Generate the plan and next action

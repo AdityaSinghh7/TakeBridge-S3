@@ -495,11 +495,31 @@ class OAIClient:
                     event_handler(event)
             if hasattr(active_stream, "get_final_response"):
                 final_response = active_stream.get_final_response()
+        if final_response is not None and event_handler:
+            try:
+                event_handler(
+                    {
+                        "type": "response.completed",
+                        "response": final_response,
+                    }
+                )
+            except Exception:  # pragma: no cover - defensive callback
+                pass
         if final_response is not None:
             return final_response
         if hasattr(stream_obj, "get_final_response"):
             fallback = stream_obj.get_final_response()  # type: ignore[call-arg]
             if isinstance(fallback, Response):
+                if event_handler:
+                    try:
+                        event_handler(
+                            {
+                                "type": "response.completed",
+                                "response": fallback,
+                            }
+                        )
+                    except Exception:  # pragma: no cover - defensive callback
+                        pass
                 return fallback
         raise RuntimeError("Streaming response did not yield a final Response object.")
 

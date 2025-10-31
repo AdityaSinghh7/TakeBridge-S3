@@ -431,6 +431,13 @@ class OSWorldACI(ACI):
 
         for attempt in range(self.grounding_max_retries):
             try:
+                emit_event(
+                    "grounding.generate_coords.service_attempt",
+                    {
+                        "attempt": attempt + 1,
+                        "prompt": prompt,
+                    },
+                )
                 with LATENCY_LOGGER.measure(
                     "grounding", "runpod_call", extra={"attempt": attempt + 1}
                 ):
@@ -456,18 +463,40 @@ class OSWorldACI(ACI):
                 else:
                     raw_x = x_val
                     raw_y = y_val
-                return [
+                coords_payload = [
                     round(raw_x * self.width / width),
                     round(raw_y * self.height / height),
                 ]
+                emit_event(
+                    "grounding.generate_coords.service_success",
+                    {
+                        "attempt": attempt + 1,
+                        "coords": coords_payload,
+                    },
+                )
+                return coords_payload
             except Exception as exc:
                 logger.warning(
                     "Grounding service attempt %d failed: %s", attempt + 1, exc
+                )
+                emit_event(
+                    "grounding.generate_coords.service_retry",
+                    {
+                        "attempt": attempt + 1,
+                        "error": str(exc),
+                    },
                 )
                 time.sleep(1.0)
         logger.error(
             "All grounding service attempts failed after %d retries; using fallback coordinates.",
             self.grounding_max_retries,
+        )
+        emit_event(
+            "grounding.generate_coords.service_failed",
+            {
+                "attempts": self.grounding_max_retries,
+                "prompt": prompt,
+            },
         )
         return None
 
@@ -640,7 +669,7 @@ class OSWorldACI(ACI):
             app_or_filename:str, the name of the application or filename to open
         """
         if self.platform == "linux":
-            return f"import pyautogui; pyautogui.hotkey('win'); time.sleep(0.5); pyautogui.write({repr(app_or_filename)}); time.sleep(1.0); pyautogui.hotkey('enter'); time.sleep(0.5)"
+            return f"import pyautogui; import time; pyautogui.hotkey('win'); time.sleep(0.5); pyautogui.write({repr(app_or_filename)}); time.sleep(0.5); pyautogui.hotkey('enter'); time.sleep(1.0)"
         elif self.platform == "darwin":
             return f"import pyautogui; import time; pyautogui.hotkey('command', 'space', interval=0.5); pyautogui.typewrite({repr(app_or_filename)}); pyautogui.press('enter'); time.sleep(1.0)"
         elif self.platform == "windows":

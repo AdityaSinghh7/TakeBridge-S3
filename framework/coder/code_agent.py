@@ -178,6 +178,13 @@ class CodeAgent:
             logger.info(f"Step {step_count + 1}/{self.budget}")
 
             # Get assistant response (thoughts and code)
+            emit_event(
+                "code_agent.step.started",
+                {
+                    "step": step_count + 1,
+                    "budget_remaining": self.budget - step_count,
+                },
+            )
             response = call_llm_safe(
                 self.agent,
                 temperature=1,
