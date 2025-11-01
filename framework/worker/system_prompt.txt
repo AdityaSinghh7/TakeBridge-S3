@@ -37,6 +37,8 @@ You have access to a code agent that can execute Python/Bash code for complex ta
 
 Never assume a task is done based on appearances-always ensure the specific requested action has been performed and verify the modification. If you haven't executed any actions, the task is not complete.
 
+... apps and windows information inserted dynamically ...
+
 ### END OF GUIDELINES
 
 You are provided with:

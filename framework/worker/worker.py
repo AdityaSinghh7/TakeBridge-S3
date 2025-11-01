@@ -1,9 +1,13 @@
 import inspect
 from functools import partial
 import logging
+import os
+import re
 import textwrap
 from pathlib import Path
 from typing import Dict, List, Tuple
+
+import requests
 
 from framework.grounding.grounding_agent import ACI
 from framework.core.module import BaseModule
@@ -257,6 +261,71 @@ class Worker(BaseModule):
             )
         return reflection, reflection_thoughts
 
+    def _fetch_apps_and_windows_info(self) -> str:
+        """Fetch current apps and windows information from the server API."""
+        try:
+            # Get server URL from environment variable
+            server_base_url = os.getenv("VM_SERVER_BASE_URL")
+            if not server_base_url:
+                logger.warning("VM_SERVER_BASE_URL not set, skipping apps/windows info")
+                return ""
+            
+            # Ensure URL has scheme
+            if not server_base_url.startswith(("http://", "https://")):
+                server_base_url = f"http://{server_base_url}"
+            
+            apps_info = ""
+            windows_info = ""
+            
+            # Fetch available apps
+            try:
+                apps_response = requests.get(
+                    f"{server_base_url}/apps",
+                    params={"exclude_system": "true"},
+                    timeout=5,
+                )
+                if apps_response.status_code == 200:
+                    apps_data = apps_response.json()
+                    if apps_data.get("status") == "success":
+                        app_names = apps_data.get("apps", [])
+                        if app_names:
+                            apps_info = f"\n4. Currently available apps ({len(app_names)} total): {', '.join(app_names)}"
+                    else:
+                        logger.warning(f"Apps API returned non-success status: {apps_data.get('status')}")
+                else:
+                    logger.warning(f"Apps API returned status code: {apps_response.status_code}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch apps: {e}", exc_info=True)
+            
+            # Fetch active windows
+            try:
+                windows_response = requests.get(
+                    f"{server_base_url}/active_windows",
+                    params={"exclude_system": "true"},
+                    timeout=5,
+                )
+                if windows_response.status_code == 200:
+                    windows_data = windows_response.json()
+                    if windows_data.get("status") == "success":
+                        windows = windows_data.get("windows", [])
+                        if windows:
+                            windows_info = f"\n5. Currently active windows you can switch to if needed ({len(windows)} total):"
+                            for window in windows:
+                                app_name = window.get("app_name") or window.get("title", "Unknown")
+                                windows_info += f"\n   - {app_name}"
+                    else:
+                        logger.warning(f"Windows API returned non-success status: {windows_data.get('status')}")
+                else:
+                    logger.warning(f"Windows API returned status code: {windows_response.status_code}, response: {windows_response.text[:200]}")
+            except Exception as e:
+                logger.warning(f"Failed to fetch windows: {e}", exc_info=True)
+            
+            return apps_info + windows_info
+            
+        except Exception as e:
+            logger.warning(f"Error fetching apps/windows info: {e}")
+            return ""
+
     def generate_next_action(self, instruction: str, obs: Dict) -> Tuple[Dict, List]:
         """
         Predict the next action(s) based on the current observation.
@@ -434,6 +503,56 @@ class Worker(BaseModule):
 
             # Reset the code agent result after adding it to context
             self.grounding_agent.last_code_agent_result = None
+
+        # Update system prompt with current apps and windows information
+        apps_windows_info = self._fetch_apps_and_windows_info()
+        if apps_windows_info:
+            # Get current system prompt
+            current_sys_prompt = self.generator_agent.system_prompt
+            placeholder = "... apps and windows information inserted dynamically ..."
+            
+            # Check if placeholder exists (first turn) or if apps/windows section already exists (subsequent turns)
+            if placeholder in current_sys_prompt:
+                # First turn: replace placeholder
+                updated_sys_prompt = current_sys_prompt.replace(placeholder, apps_windows_info)
+                self.generator_agent.add_system_prompt(updated_sys_prompt)
+            elif "Currently available apps" in current_sys_prompt:
+                # Subsequent turns: replace existing apps/windows section
+                # Pattern to match the apps/windows section (from "4. Currently available apps" to just before "### END OF GUIDELINES")
+                pattern = r'\n4\. Currently available apps.*?(?=\n### END OF GUIDELINES|$)'
+                match = re.search(pattern, current_sys_prompt, re.DOTALL)
+                if match:
+                    # Replace the existing section
+                    updated_sys_prompt = (
+                        current_sys_prompt[:match.start()] + 
+                        apps_windows_info + 
+                        current_sys_prompt[match.end():]
+                    )
+                    self.generator_agent.add_system_prompt(updated_sys_prompt)
+                else:
+                    # Fallback: insert before "### END OF GUIDELINES"
+                    end_guidelines_start = current_sys_prompt.find("### END OF GUIDELINES")
+                    if end_guidelines_start != -1:
+                        updated_sys_prompt = (
+                            current_sys_prompt[:end_guidelines_start] + 
+                            apps_windows_info + "\n\n" +
+                            current_sys_prompt[end_guidelines_start:]
+                        )
+                        self.generator_agent.add_system_prompt(updated_sys_prompt)
+                    else:
+                        logger.warning("Could not find insertion point for apps/windows info in system prompt")
+            else:
+                # If neither placeholder nor existing section found, insert before "### END OF GUIDELINES"
+                end_guidelines_start = current_sys_prompt.find("### END OF GUIDELINES")
+                if end_guidelines_start != -1:
+                    updated_sys_prompt = (
+                        current_sys_prompt[:end_guidelines_start] + 
+                        apps_windows_info + "\n\n" +
+                        current_sys_prompt[end_guidelines_start:]
+                    )
+                    self.generator_agent.add_system_prompt(updated_sys_prompt)
+                else:
+                    logger.warning("Could not find insertion point for apps/windows info in system prompt")
 
         # Finalize the generator message
         self.generator_agent.add_message(
