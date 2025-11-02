@@ -166,14 +166,15 @@ class Worker(BaseModule):
             if len(self.reflection_agent.messages) > self.max_trajectory_length + 1:
                 self.reflection_agent.messages.pop(1)
 
-        # Prune prior "Current Text Buffer" lines from generator history, keeping only the latest occurrence
+        # Prune prior "Current Text Buffer" lines from generator history, keeping only the latest user-message occurrence
         try:
             messages = getattr(self.generator_agent, "messages", []) or []
-            seen_latest = False
+            kept_latest_user = False
             # Walk newest -> oldest so first match is the one we keep
             for idx in range(len(messages) - 1, -1, -1):
                 msg = messages[idx]
                 content = msg.get("content", [])
+                role = msg.get("role", "")
                 for part in content:
                     if part.get("type") == "text":
                         text = part.get("text", "")
@@ -183,11 +184,12 @@ class Worker(BaseModule):
                             removed_any = False
                             for line in lines:
                                 if line.strip().startswith("Current Text Buffer ="):
-                                    if not seen_latest:
-                                        seen_latest = True
+                                    if role == "user" and not kept_latest_user:
+                                        # Keep only the newest user message's buffer line
+                                        kept_latest_user = True
                                         new_lines.append(line)
                                     else:
-                                        # Drop older buffer line occurrences
+                                        # Drop buffer line from assistant messages or older user messages
                                         removed_any = True
                                 else:
                                     new_lines.append(line)
