@@ -668,6 +668,18 @@ class OSWorldACI(ACI):
         Args:
             app_or_filename:str, the name of the application or filename to open
         """
+        # Normalize the target so that:
+        # - If a full file path is provided, reduce to just the filename
+        # - If a directory path is provided (ends with slash and has multiple separators), keep as-is
+        # - If an application name is provided (no path separators), keep as-is
+        normalized_target, category = self._normalize_open_target(app_or_filename)
+        if category == "file" and normalized_target != app_or_filename:
+            logger.info(
+                "Normalized open target from full file path to filename: %r -> %r",
+                app_or_filename,
+                normalized_target,
+            )
+        app_or_filename = normalized_target
         if self.platform == "linux":
             return f"import pyautogui; import time; pyautogui.hotkey('win'); time.sleep(0.5); pyautogui.write({repr(app_or_filename)}); time.sleep(0.5); pyautogui.hotkey('enter'); time.sleep(1.0)"
         elif self.platform == "darwin":
@@ -683,6 +695,38 @@ class OSWorldACI(ACI):
             assert (
                 False
             ), f"Unsupported platform: {self.platform}. Supported platforms are: darwin, linux, windows."
+
+    def _normalize_open_target(self, raw: str) -> Tuple[str, str]:
+        """Normalize an open() target across app names, file paths, and directories.
+
+        Returns a tuple of (normalized_value, category) where category is one of:
+        - "file": a filename only (path stripped if full path was given)
+        - "directory": a directory path (kept as-is)
+        - "app": an application name (no path separators, kept as-is)
+
+        Heuristic (aligned with spec):
+        - If the string ends with a path separator ('/' or '\\') AND contains more than one
+          path separator overall, treat as directory -> keep full path.
+        - Else, if it contains any path separator, treat as file path -> reduce to basename.
+        - Else, treat as application name -> keep as-is.
+        """
+        if raw is None:
+            return "", "app"
+        s = str(raw).strip()
+        if not s:
+            return s, "app"
+
+        sep_count = s.count("/") + s.count("\\")
+        is_dir = (s.endswith("/") or s.endswith("\\")) and sep_count > 1
+        if is_dir:
+            return s, "directory"
+
+        if sep_count >= 1:
+            # Reduce to filename for file paths; handle both separators
+            filename = s.replace("\\", "/").split("/")[-1]
+            return filename, "file"
+
+        return s, "app"
 
     @agent_action
     def type(
