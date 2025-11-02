@@ -166,6 +166,37 @@ class Worker(BaseModule):
             if len(self.reflection_agent.messages) > self.max_trajectory_length + 1:
                 self.reflection_agent.messages.pop(1)
 
+        # Prune prior "Current Text Buffer" lines from generator history, keeping only the latest occurrence
+        try:
+            messages = getattr(self.generator_agent, "messages", []) or []
+            seen_latest = False
+            # Walk newest -> oldest so first match is the one we keep
+            for idx in range(len(messages) - 1, -1, -1):
+                msg = messages[idx]
+                content = msg.get("content", [])
+                for part in content:
+                    if part.get("type") == "text":
+                        text = part.get("text", "")
+                        if "Current Text Buffer =" in text:
+                            lines = text.splitlines()
+                            new_lines = []
+                            removed_any = False
+                            for line in lines:
+                                if line.strip().startswith("Current Text Buffer ="):
+                                    if not seen_latest:
+                                        seen_latest = True
+                                        new_lines.append(line)
+                                    else:
+                                        # Drop older buffer line occurrences
+                                        removed_any = True
+                                else:
+                                    new_lines.append(line)
+                            if removed_any:
+                                part["text"] = "\n".join(new_lines)
+        except Exception:
+            # Be conservative if anything goes wrong; don't block flushing
+            pass
+
     def _generate_reflection(self, instruction: str, obs: Dict) -> Tuple[str, str]:
         """
         Generate a reflection based on the current observation and instruction.

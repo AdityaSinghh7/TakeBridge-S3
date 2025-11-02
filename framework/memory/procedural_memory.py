@@ -13,7 +13,7 @@ class PROCEDURAL_MEMORY:
     @staticmethod
     def construct_simple_worker_procedural_memory(agent_class, skipped_actions):
         procedural_memory = textwrap.dedent(
-            f"""\
+            f"""Formatting re-enabled\n\n
         You are an expert in graphical user interfaces and Python code. You are responsible for executing the task: `TASK_DESCRIPTION`.
         You are working in CURRENT_OS.
 
