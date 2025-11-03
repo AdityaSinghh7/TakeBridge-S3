@@ -265,6 +265,8 @@ class BehaviorNarrator:
             messages=fact_message,
             temperature=0.0,
             reasoning_effort="low",
+            reasoning_summary="auto",
+            max_output_tokens=4000,
             cost_source="behavior_narrator",
         )
         fact_answer, fact_thoughts = split_thinking_response(fact_response)

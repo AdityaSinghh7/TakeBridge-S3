@@ -636,10 +636,13 @@ class OSWorldACI(ACI):
         x, y = self.resize_coordinates(coords1)
         command = "import pyautogui; "
 
-        # TODO: specified duration?
+        # Move cursor to target before clicking for stability
+        command += f"pyautogui.moveTo({x}, {y}, duration=0.15); "
+
+        # Hold modifier keys (if any), then click, then release
         for k in hold_keys:
             command += f"pyautogui.keyDown({repr(k)}); "
-        command += f"""import pyautogui; pyautogui.click({x}, {y}, clicks={num_clicks}, button={repr(button_type)}); """
+        command += f"pyautogui.click({x}, {y}, clicks={num_clicks}, button={repr(button_type)}); "
         for k in hold_keys:
             command += f"pyautogui.keyUp({repr(k)}); "
         # Return pyautoguicode to click on the element

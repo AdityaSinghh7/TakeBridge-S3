@@ -19,10 +19,10 @@ DEFAULT_WORKER_CONFIG: Dict[str, Any] = {
         "model": "o4-mini",
         "reasoning_effort": "medium",
         "reasoning_summary": "auto",
-        "max_output_tokens": 12288,
+        "max_output_tokens": 6500,
     },
     "max_steps": 30,
-    "max_trajectory_length": 3,
+    "max_trajectory_length": 1,
     "enable_reflection": True,
     "post_action_worker_delay": 1.5,
 }
@@ -105,7 +105,7 @@ class ControllerConfig:
 class WorkerConfig:
     engine_params: Dict[str, Any]
     max_steps: int = 30
-    max_trajectory_length: int = 3
+    max_trajectory_length: int = 1
     enable_reflection: bool = True
     post_action_worker_delay: float = 1.5
 
@@ -115,7 +115,7 @@ class WorkerConfig:
         return cls(
             engine_params=_coerce_dict(merged.get("engine_params")),
             max_steps=merged.get("max_steps", 30),
-            max_trajectory_length=merged.get("max_trajectory_length", 3),
+            max_trajectory_length=merged.get("max_trajectory_length", 1),
             enable_reflection=merged.get("enable_reflection", True),
             post_action_worker_delay=merged.get("post_action_worker_delay", 1.5),
         )

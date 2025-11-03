@@ -274,7 +274,7 @@ class Worker(BaseModule):
                     use_thinking=self.use_thinking,
                     reasoning_effort="low",
                     reasoning_summary="auto",
-                    max_output_tokens=12288,
+                    max_output_tokens=6500,
                     cost_source="worker.reflection",
                 )
                 reflection, reflection_thoughts = split_thinking_response(
@@ -346,6 +346,10 @@ class Worker(BaseModule):
                             for window in windows:
                                 app_name = window.get("app_name") or window.get("title", "Unknown")
                                 windows_info += f"\n   - {app_name}"
+                        else:
+                            # Explicitly note when there are no open apps/windows
+                            logger.info("Active windows API returned zero windows.")
+                            windows_info = "\n5. Currently, no applications/windows are open."
                     else:
                         logger.warning(f"Windows API returned non-success status: {windows_data.get('status')}")
                 else:
@@ -395,7 +399,10 @@ class Worker(BaseModule):
             generator_message += f"REFLECTION: You may use this reflection on the previous action and overall trajectory:\n{reflection}\n"
         if previous_behavior and previous_behavior.get("fact_answer"):
             generator_message += (
-                "\nFACT CAPTION (Outcome of Previous Step):\n"
+                "\nBehavior Narrator — Previous Step Outcome\n"
+                "Use this as an objective summary of visual changes from the last action. "
+                "Treat it as high-signal evidence to verify success/failure and guide your next step; "
+                "if anything conflicts, trust the current screenshot.\n"
                 f"{previous_behavior['fact_answer']}\n"
             )
 
@@ -615,7 +622,7 @@ class Worker(BaseModule):
             use_thinking=self.use_thinking,
             reasoning_effort="medium",
             reasoning_summary="auto",
-            max_output_tokens=12288,
+            max_output_tokens=6500,
             cost_source="worker.generator",
         )
         self.worker_history.append(plan)
