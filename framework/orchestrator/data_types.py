@@ -22,7 +22,7 @@ DEFAULT_WORKER_CONFIG: Dict[str, Any] = {
         "max_output_tokens": 6500,
     },
     "max_steps": 50,
-    "max_trajectory_length": 3,
+    "max_trajectory_length": 1,
     "enable_reflection": True,
     "post_action_worker_delay": 1.5,
 }
