@@ -24,7 +24,17 @@ SINGLE_ACTION_FORMATTER = lambda response: (
 def _attempt_code_creation(agent, code, obs):
     try:
         return create_pyautogui_code(agent, code, obs)
-    except Exception:
+    except Exception as e:
+        # Log the actual error for debugging
+        import logging
+        logger = logging.getLogger("desktopenv.agent")
+        error_msg = str(e).lower()
+        if "tesseract" in error_msg or "pytesseract" in error_msg:
+            logger.warning(
+                "Code validation failed due to missing tesseract: %s", str(e)
+            )
+        else:
+            logger.debug("Code validation failed: %s", str(e))
         return None
 
 

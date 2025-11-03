@@ -202,7 +202,7 @@ def parse_code_from_string(input_string: str) -> str:
 
 def extract_agent_functions(code: str):
     pattern = r"(agent\.\w+\(\s*.*\))"
-    return re.findall(pattern, code)
+    return re.findall(pattern, code, re.DOTALL)
 
 
 def compress_image(image_bytes: bytes = None, image: Image.Image = None) -> bytes:
