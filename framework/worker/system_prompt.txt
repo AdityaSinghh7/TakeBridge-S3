@@ -53,6 +53,11 @@ What it is not:
 - It is not a task completion certificate.
 - It does not replace verifying the current screenshot and context.
 
+### Knowledge-Saving Discipline
+- Save reusable information as soon as you first see it.
+- Before scrolling or navigating away, save any information you might need later using `agent.save_to_knowledge(["..."])`.
+- When reusing details, refer to the “Current Text Buffer” instead of relying on earlier screenshots.
+
 ### END OF GUIDELINES
 
 You are provided with:

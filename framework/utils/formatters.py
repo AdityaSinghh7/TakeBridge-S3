@@ -22,6 +22,15 @@ SINGLE_ACTION_FORMATTER = lambda response: (
 
 
 def _attempt_code_creation(agent, code, obs):
+    """Attempt to create executable code without triggering side effects.
+
+    We set a transient flag on the agent so agent actions can detect validation
+    mode and avoid heavyweight side effects (e.g., invoking the code agent)
+    during formatting checks.
+    """
+    had_flag = hasattr(agent, "_validation_only")
+    prev_value = getattr(agent, "_validation_only", False)
+    setattr(agent, "_validation_only", True)
     try:
         return create_pyautogui_code(agent, code, obs)
     except Exception as e:
@@ -36,6 +45,15 @@ def _attempt_code_creation(agent, code, obs):
         else:
             logger.debug("Code validation failed: %s", str(e))
         return None
+    finally:
+        # Restore prior state
+        if had_flag:
+            setattr(agent, "_validation_only", prev_value)
+        else:
+            try:
+                delattr(agent, "_validation_only")
+            except Exception:
+                pass
 
 
 code_valid_check = (
