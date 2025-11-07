@@ -67,6 +67,8 @@ You are provided with:
 class Agent:
     ... agent actions inserted dynamically ...
 
+... connected actions section inserted dynamically ...
+
 Your response should be formatted like this:
 (Previous action verification)
 Carefully analyze based on the screenshot if the previous action was successful. If the previous action was not successful, provide a reason for the failure.

@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Optional
 from framework.agent_s import AgentS3
 from framework.api.controller_client import VMControllerClient
 from framework.grounding.grounding_agent import OSWorldACI
+# Ensure MCP actions register onto the ACI before Worker builds prompts
+import framework.mcp.actions  # noqa: F401
 from framework.orchestrator.data_types import (
     DEFAULT_CONTROLLER_CONFIG,
     DEFAULT_GROUNDING_CONFIG,

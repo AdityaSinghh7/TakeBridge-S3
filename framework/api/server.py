@@ -50,11 +50,66 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 logger.info("Starting Orchestrator API")
 
-app = FastAPI(title="TakeBridge Orchestrator API", version="0.1.0")
+
+@contextlib.asynccontextmanager
+async def app_lifespan(app: FastAPI):  # pragma: no cover - startup/shutdown utility
+    # Startup: warm MCP so OAuth state is rehydrated after restarts
+    try:
+        from framework.mcp.oauth import OAuthManager  # type: ignore
+        from framework.mcp.registry import refresh_registry_from_oauth  # type: ignore
+        user_id = "singleton"
+        for prov in ("gmail", "slack"):
+            try:
+                OAuthManager.sync(prov, user_id, force=False)
+            except Exception:
+                pass
+        try:
+            refresh_registry_from_oauth(user_id)
+        except Exception:
+            pass
+    except Exception:
+        # Never block startup due to warmup issues
+        pass
+
+    yield
+
+
+app = FastAPI(title="TakeBridge Orchestrator API", version="0.1.0", lifespan=app_lifespan)
+try:
+    # Trust X-Forwarded-* headers when deployed behind a reverse proxy.
+    from starlette.middleware.proxy_headers import ProxyHeadersMiddleware  # type: ignore
+    app.add_middleware(ProxyHeadersMiddleware)
+except Exception:
+    # Optional dependency; safe to ignore in local dev
+    pass
 logger.info("API initialized")
 
 # Treat the API server as non-interactive so Ctrl+C exits immediately.
 agent_signal.set_interactive_mode(False)
+
+# Mount MCP OAuth routes
+try:
+    from framework.api.routes_mcp_auth import router as mcp_oauth_router  # type: ignore
+    app.include_router(mcp_oauth_router)
+    logger.info("Mounted MCP OAuth routes")
+except Exception as _e:  # pragma: no cover
+    logger.warning("Failed to mount MCP OAuth routes: %s", _e)
+
+# Mount white-label passthrough redirect route
+try:
+    from framework.api.route_composio_redirect import router as composio_redirect_router  # type: ignore
+    app.include_router(composio_redirect_router)
+    logger.info("Mounted Composio redirect passthrough route")
+except Exception as _e:  # pragma: no cover
+    logger.warning("Failed to mount Composio redirect route: %s", _e)
+
+# Mount TEST-ONLY MCP tools routes
+try:
+    from framework.api.routes_mcp_tools import router as mcp_tools_router  # type: ignore
+    app.include_router(mcp_tools_router)
+    logger.info("Mounted MCP tools (TEST-ONLY) routes")
+except Exception as _e:  # pragma: no cover
+    logger.warning("Failed to mount MCP tools routes: %s", _e)
 
 
 def _parse_orchestrate_request(payload: Dict[str, Any]) -> OrchestrateRequest:

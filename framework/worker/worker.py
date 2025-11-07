@@ -33,20 +33,25 @@ class Worker(BaseModule):
 
     @classmethod
     def _load_system_prompt(cls, agent_class: type, skipped_actions: List[str]) -> str:
-        """Load the worker system prompt from the prompt file and inject dynamic actions."""
+        """Load the worker system prompt and inject dynamic GUI + connected actions.
+
+        - GUI actions: methods marked with `is_agent_action` on the grounding agent class.
+        - Connected actions: methods marked with `is_mcp_action` (registered per OAuth provider).
+        """
         if not cls._SYSTEM_PROMPT_PATH.exists():
             raise FileNotFoundError(
                 f"Worker system prompt file not found at {cls._SYSTEM_PROMPT_PATH}"
             )
 
         base_prompt = cls._SYSTEM_PROMPT_PATH.read_text(encoding="utf-8")
+        # Build GUI action stubs
         action_lines: List[str] = []
         for attr_name in sorted(dir(agent_class)):
             if attr_name in skipped_actions:
                 continue
 
             attr = getattr(agent_class, attr_name)
-            if callable(attr) and hasattr(attr, "is_agent_action"):
+            if callable(attr) and getattr(attr, "is_agent_action", False):
                 signature = inspect.signature(attr)
                 docstring = inspect.getdoc(attr) or ""
                 if docstring:
@@ -64,6 +69,43 @@ class Worker(BaseModule):
             prompt = base_prompt.replace(placeholder, f"\n{actions_block}\n")
         else:
             prompt = f"{base_prompt.rstrip()}\n{actions_block}"
+
+        # Build connected (MCP) action stubs if available on the class
+        connected_lines: List[str] = []
+        for attr_name in sorted(dir(agent_class)):
+            attr = getattr(agent_class, attr_name)
+            if callable(attr) and getattr(attr, "is_mcp_action", False):
+                signature = inspect.signature(attr)
+                # Sanitize docstrings to avoid protocol jargon
+                raw_doc = inspect.getdoc(attr) or ""
+                safe_doc = raw_doc
+                for banned in ["MCP", "mcp", "API", "api", "server", "Server"]:
+                    safe_doc = safe_doc.replace(banned, "connection")
+                if safe_doc:
+                    indented_doc = textwrap.indent(safe_doc, "    ")
+                    connected_lines.append(
+                        f"    def {attr_name}{signature}:\n    \"\"\"\n{indented_doc}\n    \"\"\"\n\n"
+                    )
+                else:
+                    connected_lines.append(f"    def {attr_name}{signature}:\n        pass\n\n")
+
+        connected_block = "".join(connected_lines).rstrip()
+        connected_placeholder = "... connected actions section inserted dynamically ..."
+        if connected_placeholder in prompt:
+            if connected_block:
+                section_header = (
+                    "Additional Connected Actions\n"
+                    "You also have access to the following actions for communication and information retrieval. "
+                    "Use them when needed to exchange short messages or locate information relevant to the task. "
+                    "These actions are safe to interleave with GUI steps and return quickly.\n\n"
+                )
+                prompt = prompt.replace(
+                    connected_placeholder,
+                    f"\n{section_header}{connected_block}\n",
+                )
+            else:
+                # Remove the section entirely when no connected actions exist
+                prompt = prompt.replace(connected_placeholder, "")
 
         return prompt.strip()
 

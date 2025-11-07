@@ -58,6 +58,15 @@ env/
 logs/
 *.log
 
+# Databases (local/dev)
+takebridge.db
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.sqlite-wal
+*.sqlite-shm
+
 # Screenshots / recordings
 screenshots/
 recordings/
@@ -75,3 +84,11 @@ profiler/
 # Temporary files
 *.tmp
 *.temp
+
+# Python/pyenv local version file
+.python-version
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+uv.lock
