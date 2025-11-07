@@ -1,8 +1,9 @@
 import json
 from typing import Any, Iterable
 
-from .registry import MCP, init_registry, is_registered
+from .registry import init_registry, is_registered
 from .oauth import OAuthManager
+from .mcp_agent import MCPAgent
 from framework.utils.streaming import emit_event
 from framework.grounding.grounding_agent import ACI
 init_registry()
@@ -89,10 +90,6 @@ def slack_post_message(
     if not OAuthManager.is_authorized("slack"):
         emit_event("mcp.call.skipped", {"server": "slack", "reason": "unauthorized"})
         return _sleep_snippet(0.2)
-    client = MCP.get("slack")
-    if not client or not is_registered("slack"):
-        emit_event("mcp.call.skipped", {"server": "slack", "reason": "unconfigured"})
-        return _sleep_snippet(0.2)
 
     content_provided = any([text, markdown_text, blocks, attachments])
     if not content_provided:
@@ -133,9 +130,10 @@ def slack_post_message(
     if unfurl_media is not None:
         payload["unfurl_media"] = bool(unfurl_media)
 
-    res = client.call("SLACK_SEND_MESSAGE", payload)
-    emit_event("mcp.call.completed", {"server": "slack", "tool": "SLACK_SEND_MESSAGE", "response": res})
-    self.notes.append(f"SLACK_SEND_RESULT={res}")
+    try:
+        MCPAgent.current().call_tool("slack", "SLACK_SEND_MESSAGE", payload)
+    except RuntimeError:
+        return _sleep_snippet(0.2)
     return _sleep_snippet(0.2)
 
 @mcp_action
@@ -167,10 +165,6 @@ def slack_search_messages(
     if not OAuthManager.is_authorized("slack"):
         emit_event("mcp.call.skipped", {"server": "slack", "reason": "unauthorized"})
         return _sleep_snippet(0.2)
-    client = MCP.get("slack")
-    if not client or not is_registered("slack"):
-        emit_event("mcp.call.skipped", {"server": "slack", "reason": "unconfigured"})
-        return _sleep_snippet(0.2)
 
     payload: dict[str, Any] = {"query": query}
     if count is not None:
@@ -186,9 +180,10 @@ def slack_search_messages(
     if auto_paginate is not None:
         payload["auto_paginate"] = bool(auto_paginate)
 
-    res = client.call("SLACK_SEARCH_MESSAGES", payload)
-    self.notes.append(f"SLACK_SEARCH={res}")
-    emit_event("mcp.call.completed", {"server": "slack", "tool": "SLACK_SEARCH_MESSAGES", "response": res})
+    try:
+        MCPAgent.current().call_tool("slack", "SLACK_SEARCH_MESSAGES", payload)
+    except RuntimeError:
+        return _sleep_snippet(0.2)
     return _sleep_snippet(0.2)
 
 def _norm_recipients(x):
@@ -234,10 +229,6 @@ def gmail_send_email(
     if not OAuthManager.is_authorized("gmail"):
         emit_event("mcp.call.skipped", {"server":"gmail","reason":"unauthorized"})
         return _sleep_snippet(0.2)
-    client = MCP.get("gmail")
-    if not client or not is_registered("gmail"):
-        emit_event("mcp.call.skipped", {"server":"gmail","reason":"unconfigured"})
-        return _sleep_snippet(0.2)
     primary, extra_tos = _primary_plus_rest(to)
     cc_list = _norm_recipients(cc) + extra_tos
     bcc_list = _norm_recipients(bcc)
@@ -254,9 +245,10 @@ def gmail_send_email(
     if thread_id:
         args["thread_id"] = thread_id
     # Composio tool name is provider-prefixed
-    res = client.call("GMAIL_SEND_EMAIL", args)
-    self.notes.append(f"GMAIL_SEND_RESULT={res}")
-    emit_event("mcp.call.completed", {"server":"gmail","tool":"send_email","response":res})
+    try:
+        MCPAgent.current().call_tool("gmail", "GMAIL_SEND_EMAIL", args)
+    except RuntimeError:
+        return _sleep_snippet(0.2)
     return _sleep_snippet(0.2)
 
 @mcp_action
@@ -292,10 +284,6 @@ def gmail_search(
     if not OAuthManager.is_authorized("gmail"):
         emit_event("mcp.call.skipped", {"server": "gmail", "reason": "unauthorized"})
         return _sleep_snippet(0.2)
-    client = MCP.get("gmail")
-    if not client or not is_registered("gmail"):
-        emit_event("mcp.call.skipped", {"server": "gmail", "reason": "unconfigured"})
-        return _sleep_snippet(0.2)
 
     payload: dict[str, Any] = {
         "query": query,
@@ -316,9 +304,10 @@ def gmail_search(
     if verbose is not None:
         payload["verbose"] = bool(verbose)
 
-    res = client.call("GMAIL_FETCH_EMAILS", payload)
-    self.notes.append(f"GMAIL_FETCH_EMAILS={res}")
-    emit_event("mcp.call.completed", {"server": "gmail", "tool": "GMAIL_FETCH_EMAILS", "response": res})
+    try:
+        MCPAgent.current().call_tool("gmail", "GMAIL_FETCH_EMAILS", payload)
+    except RuntimeError:
+        return _sleep_snippet(0.2)
     return _sleep_snippet(0.2)
 
 # Register these MCP actions onto the base ACI so Worker can discover

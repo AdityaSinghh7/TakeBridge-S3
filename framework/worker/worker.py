@@ -1,15 +1,17 @@
 import inspect
+import json
 from functools import partial
 import logging
 import os
 import re
 import textwrap
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import requests
 
 from framework.grounding.grounding_agent import ACI
+from framework.mcp.mcp_agent import MCPAgent
 from framework.core.module import BaseModule
 from framework.memory.procedural_memory import PROCEDURAL_MEMORY
 from framework.utils.common_utils import (
@@ -141,6 +143,7 @@ class Worker(BaseModule):
             "claude-sonnet-4-5-20250929",
         ]
         self.grounding_agent = grounding_agent
+        self.mcp_agent = MCPAgent.current()
         self.max_trajectory_length = max_trajectory_length
         self.enable_reflection = enable_reflection
 
@@ -172,6 +175,122 @@ class Worker(BaseModule):
         self.reflections = []
         self.cost_this_turn = 0
         self.screenshot_inputs = []
+        self.latest_gui_screenshot = None
+
+    def _extract_response_field(self, payload: Any, key: str) -> Any:
+        if isinstance(payload, dict):
+            if key in payload:
+                return payload[key]
+            for value in payload.values():
+                result = self._extract_response_field(value, key)
+                if result is not None:
+                    return result
+        elif isinstance(payload, list):
+            for item in payload:
+                result = self._extract_response_field(item, key)
+                if result is not None:
+                    return result
+        return None
+
+    def _build_last_mcp_summary(self) -> str:
+        if not self.mcp_agent or self.mcp_agent.last_action_type != "mcp":
+            return ""
+        entry = self.mcp_agent.last_response or {}
+        response_payload = entry.get("response")
+        if not isinstance(response_payload, dict):
+            return ""
+
+        success_flag = self._extract_response_field(response_payload, "successful")
+        data_payload = self._extract_response_field(response_payload, "data")
+        error_payload = self._extract_response_field(response_payload, "error")
+        if success_flag is None:
+            return ""
+
+        provider = entry.get("provider", "unknown")
+        tool = entry.get("tool", "unknown")
+        step = entry.get("step")
+        lines = [
+            "\nLast Connected Action Outcome",
+            f"- Tool: `{provider}.{tool}` at step {step if step is not None else '?'}",
+        ]
+
+        if bool(success_flag):
+            lines.append("- Status: ✅ Successful")
+            if data_payload is not None:
+                try:
+                    formatted_data = json.dumps(data_payload, indent=2, ensure_ascii=False)
+                except TypeError:
+                    formatted_data = str(data_payload)
+                lines.append("  Response data:")
+                lines.append(textwrap.indent(formatted_data, "    "))
+        else:
+            lines.append("- Status: ❌ Unsuccessful")
+            err_text = error_payload or "Unknown error returned by tool."
+            lines.append(f"  Error: {err_text}")
+
+        return "\n".join(lines) + "\n"
+
+    def _agent_has_image(self, agent) -> bool:
+        if not agent or not getattr(agent, "messages", None):
+            return False
+        for msg in agent.messages:
+            for part in msg.get("content", []):
+                if part.get("type") == "image":
+                    return True
+        return False
+
+    def _clear_fallback_image(self, agent) -> None:
+        if not agent or not getattr(agent, "messages", None):
+            return
+        messages = agent.messages
+        idx = 0
+        while idx < len(messages):
+            msg = messages[idx]
+            content = msg.get("content", [])
+            new_content = [
+                part for part in content if not part.get("fallback_image")
+            ]
+            if len(new_content) != len(content):
+                if new_content:
+                    msg["content"] = new_content
+                    idx += 1
+                else:
+                    messages.pop(idx)
+            else:
+                idx += 1
+    def update_latest_screenshot(self, screenshot: bytes | None) -> None:
+        if not screenshot:
+            return
+        self.latest_gui_screenshot = screenshot
+        self._clear_fallback_image(self.generator_agent)
+        self._clear_fallback_image(self.reflection_agent)
+
+    def _ensure_image_context(self) -> None:
+        if not self.latest_gui_screenshot:
+            return
+        for agent in (self.generator_agent, self.reflection_agent):
+            if not agent:
+                continue
+            if self._agent_has_image(agent):
+                continue
+            self._clear_fallback_image(agent)
+            agent.messages.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Reference screenshot for continuity (no new GUI action).",
+                            "fallback_image": True,
+                        },
+                        {
+                            "type": "image",
+                            "image": self.latest_gui_screenshot,
+                            "fallback_image": True,
+                        },
+                    ],
+                }
+            )
 
     def flush_messages(self):
         """Flush messages based on the model's context limits.
@@ -197,6 +316,7 @@ class Worker(BaseModule):
                             img_count += 1
                             if img_count > max_images:
                                 del agent.messages[i]["content"][j]
+                                break
 
         # Flush strategy for non-long-context models: drop full turns
         else:
@@ -240,6 +360,7 @@ class Worker(BaseModule):
         except Exception:
             # Be conservative if anything goes wrong; don't block flushing
             pass
+        self._ensure_image_context()
 
     def _generate_reflection(self, instruction: str, obs: Dict) -> Tuple[str, str]:
         """
@@ -282,6 +403,8 @@ class Worker(BaseModule):
                     self.reflection_agent.system_prompt + "\n" + text_content
                 )
                 self.reflection_agent.add_system_prompt(updated_sys_prompt)
+                if image_bytes:
+                    self.update_latest_screenshot(image_bytes)
                 self.reflection_agent.add_message(
                     text_content="The initial screen is provided. No action has been taken yet.",
                     image_content=image_bytes,
@@ -296,7 +419,10 @@ class Worker(BaseModule):
                 )
             # Load the latest action
             else:
-                image_bytes = (
+                is_mcp_step = bool(
+                    self.mcp_agent and self.mcp_agent.last_action_type == "mcp"
+                )
+                image_bytes = None if is_mcp_step else (
                     obs.get("reflection_screenshot") or obs.get("screenshot")
                 )
                 emit_event(
@@ -305,8 +431,17 @@ class Worker(BaseModule):
                         "step": current_step,
                     },
                 )
+                reflection_text = self.worker_history[-1]
+                if is_mcp_step:
+                    mcp_summary = self._build_last_mcp_summary()
+                    if mcp_summary:
+                        reflection_text = (
+                            f"{mcp_summary}\nMost recent action plan:\n{reflection_text}"
+                        )
+                if image_bytes:
+                    self.update_latest_screenshot(image_bytes)
                 self.reflection_agent.add_message(
-                    text_content=self.worker_history[-1],
+                    text_content=reflection_text,
                     image_content=image_bytes,
                     role="user",
                 )
@@ -450,8 +585,12 @@ class Worker(BaseModule):
 
         # Get the grounding agent's knowledge base buffer
         generator_message += (
-            f"\nCurrent Text Buffer = [{','.join(self.grounding_agent.notes)}]\n"
+            f"\nCurrent Text Buffer = [{','.join(self.grounding_agent.knowledge)}]\n"
         )
+
+        last_mcp_summary = self._build_last_mcp_summary()
+        if last_mcp_summary:
+            generator_message += last_mcp_summary
 
         # Add code agent result from previous step if available (from full task or subtask execution)
         if (
@@ -637,14 +776,22 @@ class Worker(BaseModule):
                     logger.warning("Could not find insertion point for apps/windows info in system prompt")
 
         # Finalize the generator message
+        screenshot_bytes = obs.get("screenshot")
+        if screenshot_bytes:
+            self.update_latest_screenshot(screenshot_bytes)
         self.generator_agent.add_message(
-            generator_message, image_content=obs["screenshot"], role="user"
+            generator_message, image_content=screenshot_bytes, role="user"
         )
         emit_event(
             "worker.generator.prompt_ready",
             {
                 "step": current_step,
-                "notes_count": len(getattr(self.grounding_agent, "notes", []) or []),
+                "notes_count": len(getattr(self.grounding_agent, "knowledge", []) or []),
+                "mcp_history_count": sum(
+                    len(entries) for entries in (self.mcp_agent.history or {}).values()
+                )
+                if self.mcp_agent
+                else 0,
                 "has_code_agent_context": bool(
                     hasattr(self.grounding_agent, "last_code_agent_result")
                     and self.grounding_agent.last_code_agent_result
@@ -673,9 +820,18 @@ class Worker(BaseModule):
 
         # Extract the next action from the plan
         plan_code = parse_code_from_string(plan)
+        action_kind = "gui"
         try:
             assert plan_code, "Plan code should not be empty"
             exec_code = create_pyautogui_code(self.grounding_agent, plan_code, obs)
+            if plan_code:
+                method_name = plan_code.split("(")[0].split(".")[-1].strip()
+                fn = getattr(self.grounding_agent, method_name, None)
+                if fn is not None:
+                    if getattr(fn, "is_mcp_action", False):
+                        action_kind = "mcp"
+                    elif getattr(fn, "is_agent_action", False):
+                        action_kind = "gui"
         except Exception as e:
             logger.error(
                 f"Could not evaluate the following plan code:\n{plan_code}\nError: {e}"
@@ -688,6 +844,7 @@ class Worker(BaseModule):
             "plan": plan,
             "plan_code": plan_code,
             "exec_code": exec_code,
+            "action_kind": action_kind,
             "reflection": reflection,
             "reflection_thoughts": reflection_thoughts,
             "code_agent_output": (

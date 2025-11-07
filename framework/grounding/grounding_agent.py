@@ -52,7 +52,7 @@ def _load_text_span_prompt() -> str:
 
 class ACI:
     def __init__(self):
-        self.notes: List[str] = []
+        self.knowledge: List[str] = []
 
 
 # Agent action decorator
@@ -242,7 +242,7 @@ class OSWorldACI(ACI):
         self.height = height
 
         # Maintain state for save_to_knowledge
-        self.notes = []
+        self.knowledge = []
 
         # Screenshot used during ACI execution
         self.obs = None
@@ -789,7 +789,7 @@ class OSWorldACI(ACI):
         Args:
             text:List[str] the text to save to the knowledge
         """
-        self.notes.extend(text)
+        self.knowledge.extend(text)
         return """WAIT"""
 
     @agent_action

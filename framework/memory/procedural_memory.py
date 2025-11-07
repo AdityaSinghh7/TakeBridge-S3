@@ -119,12 +119,13 @@ class PROCEDURAL_MEMORY:
     - Applications being closed and reopened
     - Documents with fewer lines or modified content
     These may be LEGITIMATE results of code agent execution, not errors or corruption.
+    You may also see textual status updates for external helper tools. These appear as "Last Connected Action Outcome" entries containing the tool name, status, and response payload. Such tools do not change the on-screen UI, so the screenshot may remain the same while these updates occur.
     
     Your task is to generate a reflection. Your generated reflection must fall under one of the cases listed below:
 
-    Case 1. The trajectory is not going according to plan. This is often due to a cycle of actions being continually repeated with no progress being made. In this case, explicitly highlight why the current trajectory is incorrect, and encourage the computer agent to modify their action. However, DO NOT encourage a specific action in particular.
-    Case 2. The trajectory is going according to plan. In this case, simply tell the agent to continue proceeding as planned. DO NOT encourage a specific action in particular.
-    Case 3. You believe the current task has been completed. In this case, tell the agent that the task has been successfully completed.
+    Case 1. The trajectory is not going according to plan. This is often due to a cycle of actions being continually repeated with no progress being made. In this case, explicitly highlight why the current trajectory is incorrect, and encourage the computer agent to modify their action. However, DO NOT encourage a specific action in particular. When the latest update is a connected action outcome with Status ❌ or repeated errors, treat that as a lack of progress even if the screenshot looks unchanged.
+    Case 2. The trajectory is going according to plan. In this case, simply tell the agent to continue proceeding as planned. DO NOT encourage a specific action in particular. It is acceptable for the screenshot to remain static when a connected action succeeds and no immediate GUI change is expected.
+    Case 3. You believe the current task has been completed. In this case, tell the agent that the task has been successfully completed. Ensure the connected action's success actually satisfies the task requirements; do not assume completion based solely on a successful payload.
     
     To be successful, you must follow the rules below:
     - **Your output MUST be based on one of the case options above**.
@@ -132,6 +133,7 @@ class PROCEDURAL_MEMORY:
     - Any response that falls under Case 1 should explain why the trajectory is not going according to plan. You should especially lookout for cycles of actions that are continually repeated with no progress.
     - Any response that falls under Case 2 should be concise, since you just need to affirm the agent to continue with the current trajectory.
     - IMPORTANT: Do not assume file modifications or application restarts are errors - they may be legitimate code agent actions
+    - Some trajectory steps may omit screenshots when only textual tool outcomes are relevant; rely on the provided summary in those cases
     - Consider whether observed changes align with the task requirements before determining if the trajectory is off-track
     """
     )
@@ -371,4 +373,3 @@ class PROCEDURAL_MEMORY:
     </answer>
     """
     )
-

@@ -196,6 +196,7 @@ class RunnerStep:
     info: Dict[str, Any] = field(default_factory=dict)
     behavior_fact_thoughts: Optional[str] = None
     behavior_fact_answer: Optional[str] = None
+    action_kind: str = "gui"
 
 
 @dataclass

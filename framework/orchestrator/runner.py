@@ -10,6 +10,7 @@ from framework.api.controller_client import VMControllerClient
 from framework.grounding.grounding_agent import OSWorldACI
 # Ensure MCP actions register onto the ACI before Worker builds prompts
 import framework.mcp.actions  # noqa: F401
+from framework.mcp.mcp_agent import MCPAgent
 from framework.orchestrator.data_types import (
     DEFAULT_CONTROLLER_CONFIG,
     DEFAULT_GROUNDING_CONFIG,
@@ -110,6 +111,9 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
     worker_cfg = request.worker
     worker_post_action_delay = max(worker_cfg.post_action_worker_delay, 0.0)
 
+    mcp_agent = MCPAgent()
+    MCPAgent.set_current(mcp_agent)
+
     grounding_agent = OSWorldACI(
         env=env,
         platform=platform.lower() if platform else "unknown",
@@ -161,6 +165,8 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
         agent_signal.raise_if_exit_requested()
         agent_signal.wait_for_resume()
 
+        mcp_agent.set_step(step_index)
+
         emit_event(
             "runner.step.started",
             {
@@ -168,10 +174,13 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
             },
         )
 
+        action_kind = info.get("action_kind", "gui")
+
         observation = {
             "screenshot": before_screenshot_bytes,
             "previous_behavior": previous_behavior_result,
             "reflection_screenshot": reflection_screenshot_bytes,
+            "last_action_kind": action_kind,
         }
 
         agent_signal.raise_if_exit_requested()
@@ -269,6 +278,10 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
             agent_signal.sleep_with_interrupt(0.5)
             with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
                 after_screenshot_bytes = controller.capture_screenshot()
+            try:
+                agent.executor.update_latest_screenshot(after_screenshot_bytes)
+            except Exception:
+                pass
             execution_details["result"] = execution_result
         else:
             execution_mode = "noop"
@@ -295,12 +308,19 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
         agent_signal.raise_if_exit_requested()
         agent_signal.wait_for_resume()
 
-        with LATENCY_LOGGER.measure("runner", "behavior_narrator", extra={"step": step_index}):
-            behavior = behavior_narrator.judge(
-                screenshot_num=step_index,
-                before_img_bytes=before_screenshot_bytes,
-                after_img_bytes=after_screenshot_bytes,
-                pyautogui_action=action,
+        behavior = None
+        if action_kind != "mcp":
+            with LATENCY_LOGGER.measure("runner", "behavior_narrator", extra={"step": step_index}):
+                behavior = behavior_narrator.judge(
+                    screenshot_num=step_index,
+                    before_img_bytes=before_screenshot_bytes,
+                    after_img_bytes=after_screenshot_bytes,
+                    pyautogui_action=action,
+                )
+        else:
+            emit_event(
+                "runner.behavior.skipped",
+                {"step": step_index, "reason": "mcp_action"},
             )
 
         steps.append(
@@ -315,10 +335,13 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
                 info=info,
                 behavior_fact_thoughts=behavior.get("fact_thoughts"),
                 behavior_fact_answer=behavior.get("fact_answer"),
+                action_kind=action_kind,
             )
         )
 
-        previous_behavior_result = behavior
+        previous_behavior_result = behavior if action_kind != "mcp" else None
+
+        mcp_agent.finalize_step()
 
         emit_event(
             "runner.step.completed",
