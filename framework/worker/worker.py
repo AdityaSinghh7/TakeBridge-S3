@@ -30,6 +30,16 @@ logger = logging.getLogger("desktopenv.agent")
 
 class Worker(BaseModule):
     _SYSTEM_PROMPT_PATH = Path(__file__).with_name("system_prompt.txt")
+    @staticmethod
+    def _has_action_flag(method, flag: str) -> bool:
+        if not method:
+            return False
+        if getattr(method, flag, False):
+            return True
+        func = getattr(method, "__func__", None)
+        if func and getattr(func, flag, False):
+            return True
+        return False
 
     @classmethod
     def _load_system_prompt(cls, agent_class: type, skipped_actions: List[str]) -> str:
@@ -97,7 +107,8 @@ class Worker(BaseModule):
                     "Additional Connected Actions\n"
                     "You also have access to the following actions for communication and information retrieval. "
                     "Use them when needed to exchange short messages or locate information relevant to the task. "
-                    "These actions are safe to interleave with GUI steps and return quickly.\n\n"
+                    "Always prefer these connected tools over the code agent when they cover the user request—they run faster, are already authenticated, and return structured responses you can summarize with the GUI. "
+                    "Only fall back to the code agent if no connected tool applies or repeated tool attempts fail.\n\n"
                 )
                 prompt = prompt.replace(
                     connected_placeholder,
@@ -817,6 +828,8 @@ class Worker(BaseModule):
         # Extract the next action from the plan
         plan_code = parse_code_from_string(plan)
         action_kind = "gui"
+        if self.mcp_agent and self.mcp_agent.current_step_action_type == "mcp":
+            action_kind = "mcp"
         try:
             assert plan_code, "Plan code should not be empty"
             exec_code = create_pyautogui_code(self.grounding_agent, plan_code, obs)
@@ -824,9 +837,9 @@ class Worker(BaseModule):
                 method_name = plan_code.split("(")[0].split(".")[-1].strip()
                 fn = getattr(self.grounding_agent, method_name, None)
                 if fn is not None:
-                    if getattr(fn, "is_mcp_action", False):
+                    if self._has_action_flag(fn, "is_mcp_action"):
                         action_kind = "mcp"
-                    elif getattr(fn, "is_agent_action", False):
+                    elif self._has_action_flag(fn, "is_agent_action"):
                         action_kind = "gui"
         except Exception as e:
             logger.error(

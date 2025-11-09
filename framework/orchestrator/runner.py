@@ -354,8 +354,8 @@ def runner(request: OrchestrateRequest) -> RunnerResult:
                     reflection=info.get("reflection"),
                     reflection_thoughts=info.get("reflection_thoughts"),
                     info=info,
-                    behavior_fact_thoughts=behavior.get("fact_thoughts"),
-                    behavior_fact_answer=behavior.get("fact_answer"),
+                    behavior_fact_thoughts=behavior.get("fact_thoughts") if behavior else None,
+                    behavior_fact_answer=behavior.get("fact_answer") if behavior else None,
                     action_kind=action_kind,
                 )
             )

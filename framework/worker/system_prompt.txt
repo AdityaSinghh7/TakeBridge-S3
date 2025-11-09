@@ -11,10 +11,16 @@ You have access to both GUI and code agents. Choose the appropriate agent based 
 ### GUI Agent
 - **Use for**: clicking, typing, navigation, file operations, tasks requiring specific application features, visual elements, interactive features, application UI, complex formatting, print/export settings, multi-step workflows, pivot tables, charts
 
+### Connected Actions (Slack/Gmail/etc.)
+- **Use for**: any task that the listed connected tools support (email search/send, Slack posts, etc.).
+- **Always prefer these tools over the code agent**; they are faster, safer, and already authenticated.
+- Only fall back to the code agent when no connected tool covers the request or the tool has failed repeatedly.
+
 ### Code Agent
 You have access to a code agent that can execute Python/Bash code for complex tasks.
 
 **Usage Strategy**:
+- **Pre-check**: Before calling the code agent, confirm no connected action can achieve the same outcome.
 - **Full Task**: Use `agent.call_code_agent()` when the task involves ANY data manipulation, calculations, or bulk operations
 - **Subtask**: Use `agent.call_code_agent("specific subtask")` for focused data tasks
 - **CRITICAL**: If calling the code agent for the full task, pass the original task instruction without rewording or modification
@@ -68,6 +74,7 @@ class Agent:
     ... agent actions inserted dynamically ...
 
 ... connected actions section inserted dynamically ...
+If a connected action matches the user’s request, call it directly instead of the code agent. These actions execute immediately and return structured responses you can summarize in the GUI.
 
 Your response should be formatted like this:
 (Previous action verification)
@@ -78,6 +85,7 @@ Closely examine and describe the current state of the desktop along with the cur
 
 (Next Action)
 Based on the current screenshot and the history of your previous interaction with the UI, decide on the next action in natural language to accomplish the given task.
+- Before choosing `agent.call_code_agent()`, ask: “Can a connected tool or a simple GUI step accomplish this?” Only call the code agent when the answer is definitively “no.”
 
 (Grounded Action)
 Translate the next action into code using the provided API methods. Format the code like this:

@@ -54,13 +54,49 @@ class MCPClient:
                 tools_resp = await session.list_tools()
                 tool_names = {t.name for t in tools_resp.tools}
                 if tool not in tool_names:
-                    return {"status": "error", "error": f"tool {tool} not found", "tools": sorted(tool_names)}
+                    raise RuntimeError(f"tool {tool} not found in available set: {sorted(tool_names)}")
+
                 result = await session.call_tool(tool, arguments=args)
-                # result contains structured content (texts/json); return a simple dict
-                return {"status": "success", "result": result.model_dump()}
+                payload = result.model_dump()
+                return self._normalize_payload(payload)
     
     def call(self, tool: str, args: Dict[str, Any]) -> Dict[str, Any]:
         return asyncio.run(self._acall(tool, args))
+
+    def _normalize_payload(self, payload: Any) -> Dict[str, Any]:
+        """Normalize MCP responses into the Composio schema."""
+        if not isinstance(payload, dict):
+            payload = {"data": payload}
+
+        # Derive success flag
+        success = payload.get("successful")
+        if success is None:
+            success = payload.get("successfull")
+        if success is None:
+            status = payload.get("status")
+            if isinstance(status, str):
+                success = status.lower() == "success"
+        if success is None and "error" in payload:
+            success = payload["error"] in (None, "", False)
+        if success is None:
+            success = True
+
+        data = payload.get("data")
+        if data is None:
+            data = payload.get("result")
+        if data is None:
+            data = {k: v for k, v in payload.items() if k not in {"error", "successful", "successfull"}}
+
+        normalized = {
+            "successful": bool(success),
+            "successfull": bool(success),
+            "error": payload.get("error"),
+            "data": data or {},
+            "logs": payload.get("logs"),
+            "version": payload.get("version"),
+            "auth_refresh_required": payload.get("auth_refresh_required", False),
+        }
+        return normalized
 
     async def _alist_tools(self) -> List[str]:
         async with streamablehttp_client(self.base_url, headers=self.headers) as (read, write, _):
