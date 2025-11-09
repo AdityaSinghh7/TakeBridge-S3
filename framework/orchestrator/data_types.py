@@ -159,6 +159,40 @@ class GroundingConfig:
 
 
 @dataclass
+class ToolConstraints:
+    mode: str = "auto"
+    providers: Optional[List[str]] = None
+    tools: Optional[List[str]] = None
+
+    @classmethod
+    def from_dict(cls, data: Optional[Dict[str, Any]]) -> Optional["ToolConstraints"]:
+        if not data:
+            return None
+        mode = str(data.get("mode") or "auto").lower()
+        if mode not in {"auto", "custom"}:
+            raise ValueError("tool_constraints.mode must be 'auto' or 'custom'")
+        providers = data.get("providers")
+        if providers is not None:
+            providers = [
+                str(p).strip().lower()
+                for p in providers
+                if p is not None and str(p).strip()
+            ]
+        tools = data.get("tools")
+        if tools is not None:
+            tools = [
+                str(t).strip()
+                for t in tools
+                if t is not None and str(t).strip()
+            ]
+        return cls(
+            mode=mode,
+            providers=providers or None,
+            tools=tools or None,
+        )
+
+
+@dataclass
 class OrchestrateRequest:
     task: str
     worker: WorkerConfig
@@ -166,6 +200,7 @@ class OrchestrateRequest:
     controller: ControllerConfig
     platform: Optional[str] = None
     enable_code_execution: bool = False
+    tool_constraints: Optional[ToolConstraints] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "OrchestrateRequest":
@@ -181,6 +216,9 @@ class OrchestrateRequest:
             controller=ControllerConfig.from_dict(controller_data),
             platform=data.get("platform"),
             enable_code_execution=data.get("enable_code_execution", False),
+            tool_constraints=ToolConstraints.from_dict(
+                data.get("tool_constraints") or data.get("toolset")
+            ),
         )
 
 

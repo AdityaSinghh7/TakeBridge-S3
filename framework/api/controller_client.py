@@ -300,6 +300,20 @@ class VMControllerClient:
         Retrieve the desktop path on the VM (`/desktop_path`).
         """
         return self._request("POST", "/desktop_path", json={}, timeout=timeout).json()
+    
+    def get_apps(self, *, exclude_system: bool = True, timeout: Optional[float] = None) -> JsonDict:
+        """
+        Retrieve the list of available applications (`/apps`).
+        """
+        params = {"exclude_system": "true"} if exclude_system else None
+        return self._request("GET", "/apps", params=params, timeout=timeout).json()
+
+    def get_active_windows(self, *, exclude_system: bool = True, timeout: Optional[float] = None) -> JsonDict:
+        """
+        Retrieve information about currently active windows (`/active_windows`).
+        """
+        params = {"exclude_system": "true"} if exclude_system else None
+        return self._request("GET", "/active_windows", params=params, timeout=timeout).json()
 
     def accessibility_tree(self, timeout: Optional[float] = None) -> JsonDict:
         """

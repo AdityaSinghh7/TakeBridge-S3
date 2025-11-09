@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse, JSONResponse, HTMLResponse
+from urllib.parse import quote_plus
 
 from framework.mcp.oauth import COMPOSIO_API_V3, OAuthManager
 from framework.mcp.registry import refresh_registry_from_oauth
@@ -8,6 +9,13 @@ from framework.mcp.actions import register_mcp_actions
 router = APIRouter()
 
 COMPOSIO_CALLBACK = f"{COMPOSIO_API_V3}/toolkits/auth/callback"
+
+
+def _attach_error(url: str | None, message: str) -> str | None:
+    if not url:
+        return None
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}error={quote_plus(message[:400])}"
 
 
 @router.get("/api/composio-redirect")
@@ -27,7 +35,7 @@ def composio_redirect(request: Request):
         if status and status != "success":
             raise HTTPException(400, f"Composio reported status={status}")
         user_id = request.headers.get("X-User-Id", "singleton")
-        provider = app_name or "gmail"
+        provider = (app_name or "gmail").lower()
         try:
             OAuthManager.finalize_connected_account(provider, user_id, ca_id)
             # Ensure local cache pulls latest MCP details for this account
@@ -46,9 +54,16 @@ def composio_redirect(request: Request):
                     detail = f"{detail} | upstream: {resp.text[:500]}"
                 except Exception:
                     pass
+            error_redirect = OAuthManager.consume_redirect_hint(provider, user_id, success=False)
+            if error_redirect:
+                target = _attach_error(error_redirect, detail)
+                if target:
+                    return RedirectResponse(url=target, status_code=302)
             raise HTTPException(400, f"Finalize failed: {detail}")
         # Bounce to UI success page
-        return RedirectResponse(url=f"/settings/integrations?connected={provider}", status_code=302)
+        success_redirect = OAuthManager.consume_redirect_hint(provider, user_id, success=True)
+        target = success_redirect or f"/settings/integrations?connected={provider}"
+        return RedirectResponse(url=target, status_code=302)
 
     # Phase 1: provider -> your redirect: forward to Composio callback
     qs = request.url.query

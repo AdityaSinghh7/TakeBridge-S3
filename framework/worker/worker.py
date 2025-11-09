@@ -8,8 +8,6 @@ import textwrap
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-import requests
-
 from framework.grounding.grounding_agent import ACI
 from framework.mcp.mcp_agent import MCPAgent
 from framework.core.module import BaseModule
@@ -474,63 +472,61 @@ class Worker(BaseModule):
     def _fetch_apps_and_windows_info(self) -> str:
         """Fetch current apps and windows information from the server API."""
         try:
-            # Get server URL from environment variable
-            server_base_url = os.getenv("VM_SERVER_BASE_URL")
-            if not server_base_url:
-                logger.warning("VM_SERVER_BASE_URL not set, skipping apps/windows info")
+            controller = getattr(
+                getattr(self.grounding_agent, "env", None), "controller", None
+            )
+            if not controller:
+                logger.warning("Controller unavailable, skipping apps/windows info")
                 return ""
-            
-            # Ensure URL has scheme
-            if not server_base_url.startswith(("http://", "https://")):
-                server_base_url = f"http://{server_base_url}"
-            
+
             apps_info = ""
             windows_info = ""
             
-            # Fetch available apps
             try:
-                apps_response = requests.get(
-                    f"{server_base_url}/apps",
-                    params={"exclude_system": "true"},
-                    timeout=5,
-                )
-                if apps_response.status_code == 200:
-                    apps_data = apps_response.json()
+                apps_data = controller.get_apps(exclude_system=True)
+                if isinstance(apps_data, dict):
                     if apps_data.get("status") == "success":
                         app_names = apps_data.get("apps", [])
                         if app_names:
-                            apps_info = f"\n4. Currently available apps ({len(app_names)} total): {', '.join(app_names)}"
+                            apps_info = (
+                                f"\n4. Currently available apps ({len(app_names)} total): "
+                                f"{', '.join(app_names)}"
+                            )
                     else:
-                        logger.warning(f"Apps API returned non-success status: {apps_data.get('status')}")
+                        logger.warning(
+                            "Apps API returned non-success status: %s",
+                            apps_data.get("status"),
+                        )
                 else:
-                    logger.warning(f"Apps API returned status code: {apps_response.status_code}")
+                    logger.warning("Unexpected /apps response: %s", apps_data)
             except Exception as e:
                 logger.warning(f"Failed to fetch apps: {e}", exc_info=True)
             
-            # Fetch active windows
             try:
-                windows_response = requests.get(
-                    f"{server_base_url}/active_windows",
-                    params={"exclude_system": "true"},
-                    timeout=5,
-                )
-                if windows_response.status_code == 200:
-                    windows_data = windows_response.json()
+                windows_data = controller.get_active_windows(exclude_system=True)
+                if isinstance(windows_data, dict):
                     if windows_data.get("status") == "success":
                         windows = windows_data.get("windows", [])
                         if windows:
-                            windows_info = f"\n5. Currently active windows you can switch to if needed ({len(windows)} total):"
+                            windows_info = (
+                                "\n5. Currently active windows you can switch to if needed "
+                                f"({len(windows)} total):"
+                            )
                             for window in windows:
-                                app_name = window.get("app_name") or window.get("title", "Unknown")
+                                app_name = window.get("app_name") or window.get(
+                                    "title", "Unknown"
+                                )
                                 windows_info += f"\n   - {app_name}"
                         else:
-                            # Explicitly note when there are no open apps/windows
                             logger.info("Active windows API returned zero windows.")
                             windows_info = "\n5. Currently, no applications/windows are open."
                     else:
-                        logger.warning(f"Windows API returned non-success status: {windows_data.get('status')}")
+                        logger.warning(
+                            "Windows API returned non-success status: %s",
+                            windows_data.get("status"),
+                        )
                 else:
-                    logger.warning(f"Windows API returned status code: {windows_response.status_code}, response: {windows_response.text[:200]}")
+                    logger.warning("Unexpected /active_windows response: %s", windows_data)
             except Exception as e:
                 logger.warning(f"Failed to fetch windows: {e}", exc_info=True)
             

@@ -19,6 +19,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 from framework.orchestrator.data_types import (
     DEFAULT_CONTROLLER_CONFIG,
@@ -82,6 +83,17 @@ try:
 except Exception:
     # Optional dependency; safe to ignore in local dev
     pass
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "https://localhost:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 logger.info("API initialized")
 
 # Treat the API server as non-interactive so Ctrl+C exits immediately.
@@ -150,44 +162,7 @@ def _format_sse_event(event: str, data: Optional[Any] = None) -> bytes:
     parts.append("")
     return ("\n".join(parts)).encode("utf-8")
 
-
-@app.post("/orchestrate")
-async def orchestrate(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
-    """
-    Run a single orchestrator loop using the shared dataclass contracts.
-    Only the `task` field is required in the payload. Optional sections:
-      - worker: overrides worker configuration (engine params, reflection, etc.)
-      - grounding: overrides grounding/code agent configuration
-      - controller: overrides VM controller connection details
-      - platform / enable_code_execution: optional execution flags
-
-    Grounding defaults:
-      - `RUNPOD_ID` (from environment) is used to derive
-        `https://<RUNPOD_ID>-3005.proxy.runpod.net` as the base URL.
-      - `RUNPOD_API_KEY` (from environment) is added as a Bearer token when present.
-      - The `/call_llm` path is automatically appended for coordinate inference.
-      - No system prompt is sent for coordinate grounding unless supplied.
-    """
-    request = _parse_orchestrate_request(payload)
-    try:
-        result = _execute_runner(request)
-    except Exception as exc:  # pragma: no cover - runtime guard
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    return asdict(result)
-
-
-@app.get("/orchestrate/stream")
-async def orchestrate_stream(task: str) -> StreamingResponse:
-    """
-    Run the orchestrator loop and stream lifecycle updates back to the client via SSE.
-    """
-    request = OrchestrateRequest(
-        task=task,
-        worker=WorkerConfig.from_dict({}),
-        grounding=GroundingConfig.from_dict({}),
-        controller=ControllerConfig.from_dict({}),
-    )
+def _create_streaming_response(request: OrchestrateRequest) -> StreamingResponse:
     queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue()
     loop = asyncio.get_running_loop()
 
@@ -221,18 +196,14 @@ async def orchestrate_stream(task: str) -> StreamingResponse:
             raise
 
     async def _drain_queue():
-        # logger.info("GEMINI_DEBUG: Starting to drain queue")
         try:
             while True:
                 chunk = await queue.get()
                 if chunk is None:
-                    # logger.info("GEMINI_DEBUG: Received None, breaking")
                     break
-                # logger.info(f"GEMINI_DEBUG: Yielding chunk: {chunk!r}")
                 yield chunk
                 await asyncio.sleep(0.01)
         finally:
-            # logger.info("GEMINI_DEBUG: Draining queue finished")
             while not queue.empty():
                 try:
                     queue.get_nowait()
@@ -287,6 +258,54 @@ async def orchestrate_stream(task: str) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+@app.post("/orchestrate")
+async def orchestrate(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+    """
+    Run a single orchestrator loop using the shared dataclass contracts.
+    Only the `task` field is required in the payload. Optional sections:
+      - worker: overrides worker configuration (engine params, reflection, etc.)
+      - grounding: overrides grounding/code agent configuration
+      - controller: overrides VM controller connection details
+      - platform / enable_code_execution: optional execution flags
+
+    Grounding defaults:
+      - `RUNPOD_ID` (from environment) is used to derive
+        `https://<RUNPOD_ID>-3005.proxy.runpod.net` as the base URL.
+      - `RUNPOD_API_KEY` (from environment) is added as a Bearer token when present.
+      - The `/call_llm` path is automatically appended for coordinate inference.
+      - No system prompt is sent for coordinate grounding unless supplied.
+    """
+    request = _parse_orchestrate_request(payload)
+    try:
+        result = _execute_runner(request)
+    except Exception as exc:  # pragma: no cover - runtime guard
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return asdict(result)
+
+
+@app.get("/orchestrate/stream")
+async def orchestrate_stream(task: str) -> StreamingResponse:
+    """
+    Backward-compatible streaming endpoint that only accepts a `task` query param.
+    """
+    request = OrchestrateRequest(
+        task=task,
+        worker=WorkerConfig.from_dict({}),
+        grounding=GroundingConfig.from_dict({}),
+        controller=ControllerConfig.from_dict({}),
+    )
+    return _create_streaming_response(request)
+
+
+@app.post("/orchestrate/stream")
+async def orchestrate_stream_post(payload: Dict[str, Any] = Body(...)) -> StreamingResponse:
+    """
+    Streaming endpoint with full payload support (tool constraints, controller overrides, etc.).
+    """
+    request = _parse_orchestrate_request(payload)
+    return _create_streaming_response(request)
 
 
 @app.get("/config")

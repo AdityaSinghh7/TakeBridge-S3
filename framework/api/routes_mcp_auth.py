@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Request, HTTPException
-from typing import Optional
+from typing import Any, Optional
 from fastapi.responses import JSONResponse, RedirectResponse
+from urllib.parse import quote_plus
 
 from framework.mcp.oauth import (
     OAuthManager,
@@ -8,7 +9,7 @@ from framework.mcp.oauth import (
     COMPOSIO_KEY as _COMPOSIO_KEY,
     COMPOSIO_API_V3 as _COMPOSIO_API_V3,
 )
-from framework.mcp.actions import register_mcp_actions
+from framework.mcp.actions import register_mcp_actions, describe_provider_actions
 from framework.mcp.registry import refresh_registry_from_oauth
 from framework.settings import build_redirect, OAUTH_REDIRECT_BASE
 import os
@@ -19,12 +20,34 @@ from framework.mcp.mcp_client import MCPClient
 
 router = APIRouter(prefix="/api/mcp/auth", tags=["mcp-auth"])
 
+def _normalize_provider(provider: str) -> str:
+    return (provider or "").strip().lower()
+
+def _attach_error(url: str | None, error_message: str) -> str | None:
+    if not url:
+        return None
+    separator = "&" if "?" in url else "?"
+    return f"{url}{separator}error={quote_plus(error_message[:400])}"
+
 
 @router.get("/{provider}/start")
-def start(provider: str, request: Request):
+def start(
+    provider: str,
+    request: Request,
+    redirect_success: Optional[str] = None,
+    redirect_error: Optional[str] = None,
+):
+    provider = _normalize_provider(provider)
     user_id = request.headers.get("X-User-Id", "singleton")
     # Build redirect deterministically from environment configuration
     redirect_uri = build_redirect(provider)
+    if redirect_success or redirect_error:
+        OAuthManager.set_redirect_hints(
+            provider,
+            user_id,
+            success_url=redirect_success,
+            error_url=redirect_error,
+        )
     try:
         url = OAuthManager.start_oauth(provider, user_id, redirect_uri)
         return JSONResponse({"authorization_url": url})
@@ -41,6 +64,7 @@ def start(provider: str, request: Request):
 
 @router.get("/{provider}/callback", name="oauth_callback")
 def callback(provider: str, request: Request, code: Optional[str] = None, state: Optional[str] = None):
+    provider = _normalize_provider(provider)
     user_id = request.headers.get("X-User-Id", "singleton")
     try:
         OAuthManager.handle_callback(provider, user_id, code or "", state or "")
@@ -49,10 +73,59 @@ def callback(provider: str, request: Request, code: Optional[str] = None, state:
         # Make newly available clients & actions discoverable to Worker
         refresh_registry_from_oauth(user_id)
         register_mcp_actions()
-        # Optional: redirect to your app UI success page
-        return RedirectResponse(url=f"/settings/integrations?connected={provider}")
+        # Redirect to preferred UI destination if provided
+        redirect_url = OAuthManager.consume_redirect_hint(provider, user_id, success=True)
+        target = redirect_url or f"/settings/integrations?connected={provider}"
+        return RedirectResponse(url=target)
     except Exception as e:  # pragma: no cover - safety
+        error_redirect = OAuthManager.consume_redirect_hint(provider, user_id, success=False)
+        if error_redirect:
+            target = _attach_error(error_redirect, str(e))
+            if target:
+                return RedirectResponse(url=target, status_code=302)
         raise HTTPException(400, f"OAuth failed: {e}")
+
+
+@router.get("/providers")
+def list_providers(request: Request):
+    """List configured providers plus caller-specific authorization flags."""
+    user_id = request.headers.get("X-User-Id", "singleton")
+    catalog = describe_provider_actions()
+    providers: list[dict[str, Any]] = []
+    for prov, data in catalog.items():
+        env_key = f"COMPOSIO_{prov.upper()}_AUTH_CONFIG_ID"
+        providers.append(
+            {
+                "provider": prov,
+                "display_name": prov.capitalize(),
+                "authorized": OAuthManager.is_authorized(prov, user_id),
+                "auth_config_present": bool(os.getenv(env_key)),
+                "actions": [action["name"] for action in data["actions"]],
+            }
+        )
+    return {"providers": providers}
+
+
+@router.get("/tools/available")
+def available_tools(request: Request, provider: Optional[str] = None):
+    """Surface detailed action metadata per provider for UI presentation."""
+    user_id = request.headers.get("X-User-Id", "singleton")
+    catalog = describe_provider_actions()
+    requested = _normalize_provider(provider) if provider else None
+    providers: list[dict[str, Any]] = []
+    for prov, data in catalog.items():
+        if requested and prov != requested:
+            continue
+        providers.append(
+            {
+                "provider": prov,
+                "authorized": OAuthManager.is_authorized(prov, user_id),
+                "actions": data["actions"],
+            }
+        )
+    if requested and not providers:
+        raise HTTPException(404, f"Unknown provider '{provider}'")
+    return {"providers": providers}
 
 
 @router.get("/status")
@@ -71,8 +144,31 @@ def status(request: Request):
     }
 
 
+@router.get("/{provider}/status/live")
+def live_status(provider: str, request: Request):
+    """Force-refresh provider status directly from Composio before responding."""
+    provider = _normalize_provider(provider)
+    user_id = request.headers.get("X-User-Id", "singleton")
+    try:
+        OAuthManager.sync(provider, user_id, force=True)
+    except Exception as exc:  # pragma: no cover - upstream guard
+        raise HTTPException(502, f"Composio sync failed: {exc}")
+
+    with session_scope() as db:
+        ca_id, ac_id, url, headers = crud.get_active_context_for_provider(db, user_id, provider)
+    return {
+        "provider": provider,
+        "authorized": bool(url),
+        "connected_account_id": ca_id,
+        "auth_config_id": ac_id,
+        "mcp_url": url,
+        "has_auth_headers": bool(headers),
+    }
+
+
 @router.post("/{provider}/finalize")
 def finalize(provider: str, payload: dict, request: Request):
+    provider = _normalize_provider(provider)
     """Finalize a connected account manually (hosted link flows that skip callback).
 
     Body:
@@ -95,6 +191,7 @@ def finalize(provider: str, payload: dict, request: Request):
 
 @router.delete("/{provider}")
 def disconnect(provider: str, request: Request, connected_account_id: str | None = None):
+    provider = _normalize_provider(provider)
     """
     Disconnect a provider for the current user.
 
@@ -121,6 +218,7 @@ def disconnect(provider: str, request: Request, connected_account_id: str | None
 @router.get("/_debug/redirect/{provider}")
 def debug_redirect(provider: str):
     """Debug helper to inspect the exact redirect URI constructed for a provider."""
+    provider = _normalize_provider(provider)
     return {"redirect_uri": build_redirect(provider)}
 
 
@@ -185,7 +283,8 @@ def debug_auth_configs(provider: str | None = None):
                         }
                     )
                 if provider:
-                    norm = [x for x in norm if (x.get("provider") or "").lower() == provider.lower()]
+                    prov = _normalize_provider(provider)
+                    norm = [x for x in norm if (x.get("provider") or "").lower() == prov]
                 return {"count": len(norm), "auth_configs": norm}
             last_err = f"HTTP {resp.status_code}: {resp.text[:300]}"
         except Exception as e:
@@ -225,6 +324,7 @@ def debug_mcp_client(request: Request, provider: str, test_tool: str | None = No
       - provider: gmail|slack
       - test_tool: optional tool name to invoke with empty args
     """
+    provider = _normalize_provider(provider)
     user_id = request.headers.get("X-User-Id", "singleton")
     url = OAuthManager.get_mcp_url(user_id, provider)
     hdrs = OAuthManager.get_headers(user_id, provider)
@@ -255,7 +355,7 @@ def debug_connected_accounts(request: Request, provider: str):
     """
     import requests
     user_id = request.headers.get("X-User-Id", "singleton")
-    prov = (provider or "").lower()
+    prov = _normalize_provider(provider)
     ac_env = f"COMPOSIO_{prov.upper()}_AUTH_CONFIG_ID"
     ac_id = os.getenv(ac_env, "")
     if not ac_id:

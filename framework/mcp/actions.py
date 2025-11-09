@@ -1,3 +1,4 @@
+import inspect
 import json
 from typing import Any, Iterable
 
@@ -7,6 +8,9 @@ from .mcp_agent import MCPAgent
 from framework.utils.streaming import emit_event
 from framework.grounding.grounding_agent import ACI
 init_registry()
+
+_ALLOWED_PROVIDERS: set[str] | None = None
+_ALLOWED_TOOLS: set[str] | None = None
 
 def _sleep_snippet(sec: float = 0.5) -> str:
     return f"import time; time.sleep({sec})"
@@ -338,7 +342,15 @@ def _register_mcp_actions_on_aci() -> None:
     system prompt before the user connects providers via OAuth.
     """
     provider_actions = _provider_actions_map()
+    provider_filter = _ALLOWED_PROVIDERS
+    tool_filter = _ALLOWED_TOOLS
     for provider, fns in provider_actions.items():
+        if provider_filter is not None and provider not in provider_filter:
+            emit_event(
+                "mcp.actions.registration.skipped",
+                {"server": provider, "reason": "filtered"},
+            )
+            continue
         if not OAuthManager.is_authorized(provider):
             emit_event(
                 "mcp.actions.registration.skipped",
@@ -351,11 +363,21 @@ def _register_mcp_actions_on_aci() -> None:
                 {"server": provider, "reason": "unconfigured"},
             )
             continue
+        registered_action_names: list[str] = []
         for fn in fns:
+            if tool_filter is not None and fn.__name__ not in tool_filter:
+                continue
             setattr(ACI, fn.__name__, fn)
+            registered_action_names.append(fn.__name__)
+        if not registered_action_names:
+            emit_event(
+                "mcp.actions.registration.skipped",
+                {"server": provider, "reason": "tool_filter"},
+            )
+            continue
         emit_event(
             "mcp.actions.registration.completed",
-            {"server": provider, "actions": [fn.__name__ for fn in fns]},
+            {"server": provider, "actions": registered_action_names},
         )
 
 def register_mcp_actions() -> None:
@@ -366,5 +388,37 @@ def register_mcp_actions() -> None:
     """
     _reset_mcp_actions_on_aci()
     _register_mcp_actions_on_aci()
+
+def configure_mcp_action_filters(
+    providers: Iterable[str] | None = None,
+    tools: Iterable[str] | None = None,
+) -> None:
+    """Limit MCP actions registered on ACI to the provided providers/tools."""
+    global _ALLOWED_PROVIDERS, _ALLOWED_TOOLS
+    _ALLOWED_PROVIDERS = None
+    _ALLOWED_TOOLS = None
+    if providers:
+        _ALLOWED_PROVIDERS = {p.lower() for p in providers if p}
+    if tools:
+        _ALLOWED_TOOLS = {t for t in tools if t}
+    register_mcp_actions()
+
+
+def describe_provider_actions() -> dict[str, dict[str, Any]]:
+    """Return structured metadata for available providers and their actions."""
+    catalog: dict[str, dict[str, Any]] = {}
+    for provider, funcs in _provider_actions_map().items():
+        actions: list[dict[str, Any]] = []
+        for fn in funcs:
+            doc = inspect.getdoc(fn) or ""
+            actions.append(
+                {
+                    "name": fn.__name__,
+                    "doc": doc.strip(),
+                    "provider": provider,
+                }
+            )
+        catalog[provider] = {"provider": provider, "actions": actions}
+    return catalog
 
 _register_mcp_actions_on_aci()

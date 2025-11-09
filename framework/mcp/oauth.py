@@ -109,6 +109,36 @@ class OAuthManager:
 
         snippet = r.text.strip()[:500]
         raise RuntimeError(f"HTTP {r.status_code} {url} body={snippet}")
+    @classmethod
+    def set_redirect_hints(
+        cls,
+        provider: str,
+        user_id: str,
+        success_url: str | None = None,
+        error_url: str | None = None,
+    ) -> None:
+        """Cache preferred redirect destinations for the OAuth finale."""
+        if not success_url and not error_url:
+            return
+        user_id = user_id or "singleton"
+        _ensure_user(user_id)
+        slot = _store[user_id].setdefault(provider, {})
+        if success_url:
+            slot["redirect_success"] = success_url
+        if error_url:
+            slot["redirect_error"] = error_url
+
+    @classmethod
+    def consume_redirect_hint(cls, provider: str, user_id: str, success: bool) -> str | None:
+        """Pop redirect hints for this provider/user based on outcome."""
+        user_id = user_id or "singleton"
+        prov_store = _store.get(user_id, {})
+        slot = prov_store.get(provider)
+        if not slot:
+            return None
+        success_url = slot.pop("redirect_success", None)
+        error_url = slot.pop("redirect_error", None)
+        return success_url if success else (error_url or success_url)
 
     @classmethod
     def handle_callback(cls, provider: str, user_id: str, code: str, state: str) -> None:
