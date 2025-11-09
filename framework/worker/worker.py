@@ -322,7 +322,7 @@ class Worker(BaseModule):
                     if apps_data.get("status") == "success":
                         app_names = apps_data.get("apps", [])
                         if app_names:
-                            apps_info = f"\n4. Currently available apps ({len(app_names)} total): {', '.join(app_names)}"
+                            apps_info = f"\n4. Currently installed apps ({len(app_names)} total on the desktop): {', '.join(app_names)}"
                     else:
                         logger.warning(f"Apps API returned non-success status: {apps_data.get('status')}")
                 else:
@@ -556,10 +556,10 @@ class Worker(BaseModule):
                 # First turn: replace placeholder
                 updated_sys_prompt = current_sys_prompt.replace(placeholder, apps_windows_info)
                 self.generator_agent.add_system_prompt(updated_sys_prompt)
-            elif "Currently available apps" in current_sys_prompt:
+            elif "Currently installed apps" in current_sys_prompt:
                 # Subsequent turns: replace existing apps/windows section
-                # Pattern to match the apps/windows section (from "4. Currently available apps" to just before "### END OF GUIDELINES")
-                pattern = r'\n4\. Currently available apps.*?(?=\n### END OF GUIDELINES|$)'
+                # Pattern to match the apps/windows section (from "4. Currently installed apps" to just before "### END OF GUIDELINES")
+                pattern = r'\n4\. Currently installed apps.*?(?=\n### END OF GUIDELINES|$)'
                 match = re.search(pattern, current_sys_prompt, re.DOTALL)
                 if match:
                     # Replace the existing section

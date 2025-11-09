@@ -99,7 +99,7 @@ class PROCEDURAL_MEMORY:
         4. Only return one code block every time. There must be a single line of code in the code block.
         5. Do not do anything other than the exact specified task. Return with `agent.done()` immediately after the subtask is completed or `agent.fail()` if it cannot be completed.
         6. Whenever possible, your grounded action should use hot-keys with the agent.hotkey() action instead of clicking or dragging.
-        7. My computer's password is 'osworld-public-evaluation', feel free to use it when you need sudo rights.
+        7. My computer's password is 'password', feel free to use it when you need sudo rights.
         8. Generate agent.fail() as your grounded action if you get exhaustively stuck on the task and believe it is impossible.
         9. Generate agent.done() as your grounded action when your believe the task is fully complete.
         10. Do not use the "command" + "tab" hotkey on MacOS.
@@ -157,7 +157,7 @@ class PROCEDURAL_MEMORY:
 
     # Core Guidelines:
     - Execute Python/Bash code step-by-step to progress toward the goal
-    - Use sudo with: "echo osworld-public-evaluation | sudo -S [COMMANDS]"
+    - Use sudo with: "echo password | sudo -S [COMMANDS]"
     - Username: "user"
     - Print results and handle errors appropriately
     - Code execution may not show immediately on screen

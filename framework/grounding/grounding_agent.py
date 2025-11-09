@@ -137,7 +137,7 @@ def set_cell_values(new_cell_values: dict[str, str], app_name: str = "Untitled 1
 
     # Clean up previous TCP connections.
     subprocess.run(
-        'echo \"osworld-public-evaluation\" | sudo -S ss --kill --tcp state TIME-WAIT sport = :2002',
+        'echo \"password\" | sudo -S ss --kill --tcp state TIME-WAIT sport = :2002',
         shell=True,
         check=True,
         text=True,
@@ -338,7 +338,7 @@ class OSWorldACI(ACI):
                 self.grounding_model.reset()
 
                 # Configure the context, UI-TARS demo does not use system prompt
-                prompt = f"Query:{ref_expr}\nOutput only the coordinate of one point in your response.\n"
+                prompt = f"Query:{ref_expr}\nReturn the coordinate of the point where a user should click to satisfy the query. \n If the query refers to an input box/field, choose a point inside the editable area of that field, not on its label text.\nOutput only the coordinate of one point in your response.  \n"
                 self.grounding_model.add_message(
                     text_content=prompt, image_content=obs["screenshot"], put_text_last=True
                 )
@@ -684,14 +684,14 @@ class OSWorldACI(ACI):
             )
         app_or_filename = normalized_target
         if self.platform == "linux":
-            return f"import pyautogui; import time; pyautogui.hotkey('win'); time.sleep(0.5); pyautogui.write({repr(app_or_filename)}); time.sleep(0.5); pyautogui.hotkey('enter'); time.sleep(1.0)"
+            return f"import pyautogui; import time; pyautogui.hotkey('win'); time.sleep(0.5); pyautogui.write({repr(app_or_filename)}, interval=0.1); time.sleep(0.5); pyautogui.hotkey('enter'); time.sleep(1.0)"
         elif self.platform == "darwin":
             return f"import pyautogui; import time; pyautogui.hotkey('command', 'space', interval=0.5); pyautogui.typewrite({repr(app_or_filename)}); pyautogui.press('enter'); time.sleep(1.0)"
         elif self.platform == "windows":
             return (
                 "import pyautogui; import time; "
                 "pyautogui.hotkey('win'); time.sleep(0.5); "
-                f"pyautogui.write({repr(app_or_filename)}); time.sleep(1.0); "
+                f"pyautogui.write({repr(app_or_filename)}, interval=0.1); time.sleep(1.0); "
                 "pyautogui.press('enter'); time.sleep(0.5)"
             )
         else:
@@ -752,7 +752,7 @@ class OSWorldACI(ACI):
             "    import pyperclip\n"
             "except ImportError:\n"
             "    import subprocess\n"
-            "    subprocess.run('echo \"osworld-public-evaluation\" | sudo -S apt-get install -y xclip xsel', shell=True, check=True)\n"
+            "    subprocess.run('echo \"password\" | sudo -S apt-get install -y xclip xsel', shell=True, check=True)\n"
             "    subprocess.check_call([subprocess.sys.executable, '-m', 'pip', 'install', 'pyperclip'])\n"
             "    import pyperclip\n\n"
         )
@@ -777,7 +777,7 @@ class OSWorldACI(ACI):
             command += f"pyautogui.hotkey({repr('command' if self.platform == 'darwin' else 'ctrl')}, 'v'); "
         else:
             # Use regular pyautogui.write() for ASCII text
-            command += f"pyautogui.write({repr(text)}); "
+            command += f"pyautogui.write({repr(text)}, interval=0.1); "
 
         if enter:
             command += "pyautogui.press('enter'); "
