@@ -60,14 +60,7 @@ You are a code execution agent with a limited step budget to complete tasks.
     * For any other file type: use appropriate viewing commands
 - This ensures the user can see exactly what changes were made to the files
 
-# CRITICAL: Verification Instructions
-- When you complete a task that modifies files, you MUST provide clear verification instructions
-- Include specific details about what the GUI agent should check:
-    * Which files were modified and their expected final state
-    * What the content should look like (number of lines, key data points, etc.)
-    * How to verify the changes are correct
-    * Whether the task is complete or if additional GUI actions are needed
-- This helps the GUI agent understand what to expect and how to verify your work correctly
+
 
 # Response Format:
 You MUST respond using exactly this format:

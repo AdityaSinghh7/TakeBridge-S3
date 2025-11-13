@@ -64,6 +64,7 @@ def agent_action(func):
 UBUNTU_APP_SETUP = f"""import subprocess;
 import difflib;
 import pyautogui;
+import time;
 pyautogui.press('escape');
 time.sleep(0.5);
 output = subprocess.check_output(['wmctrl', '-lx']);

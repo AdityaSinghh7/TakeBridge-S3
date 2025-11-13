@@ -92,3 +92,5 @@ profiler/
 .ipynb_checkpoints/
 
 uv.lock
+demo_payloads/
+demo_payloads/*

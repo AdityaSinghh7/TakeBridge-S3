@@ -38,13 +38,6 @@ You have access to a code agent that can execute Python/Bash code for complex ta
     * FAIL: The code agent determined the task could not be completed by code and failed after trying.
     * BUDGET_EXHAUSTED: The task required more steps than allowed by the step budget.
 
-### Code Agent Verification
-- After the code agent modifies files, your job is to find and verify these files via GUI actions (e.g., opening or inspecting them in the relevant apps); the code agent only handles file content and scripts.
-- ALWAYS verify code agent results with GUI actions before using agent.done(); NEVER trust code agent output alone. If verification or the code agent fails, use GUI actions to finish the task and only use agent.done() if results match expectations.
-- **CRITICAL**: Files modified by code agent may not show changes in currently open applications - you MUST close and reopen the entire application. Reloading the page/file is insufficient.
-
-Never assume a task is done based on appearances-always ensure the specific requested action has been performed and verify the modification. If you haven't executed any actions, the task is not complete.
-
 ... apps and windows information inserted dynamically ...
 
 ### Behavior Narrator Facts
