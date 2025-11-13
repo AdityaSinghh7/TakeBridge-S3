@@ -6,8 +6,8 @@ load_dotenv()
 
 import os
 from sqlalchemy import text
-from framework.db.engine import engine, session_scope
-from framework.db.models import User, ConnectedAccount, MCPConnection
+from shared.db.engine import engine, session_scope
+from shared.db.models import User, ConnectedAccount, MCPConnection
 
 def main() -> int:
     url = os.getenv("DB_URL", "sqlite:///./takebridge.db")

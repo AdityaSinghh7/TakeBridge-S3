@@ -75,10 +75,10 @@ dev = [
 ]
 
 [project.scripts]
-takebridge-server = "framework.api.server:app"
+takebridge-server = "server.api.server:app"
 
 [tool.hatch.build.targets.wheel]
-packages = ["framework"]
+packages = ["computer_use_agent", "mcp_agent", "server", "shared"]
 
 [tool.black]
 line-length = 88

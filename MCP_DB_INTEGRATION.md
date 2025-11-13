@@ -96,15 +96,16 @@ CRUD helpers in `framework/db/crud.py` encapsulate all write patterns:
 - `refresh_registry_from_oauth` (line `40`) is a thin wrapper the routes call
   after syncing OAuth so that new MCP clients become available immediately.
 
-### MCP actions (`framework/mcp/actions.py`)
+### MCP actions (`mcp_agent/actions.py`)
 
 - Each action (e.g., `slack_post_message`, `gmail_send_email`) first checks
   `OAuthManager.is_authorized` before grabbing the corresponding registry client
   and calling `client.call`. This prevents the worker from attempting MCP
   tools when DB state says the user is disconnected (`framework/mcp/actions.py:14-196`).
-- `register_mcp_actions` (lines `216-224`) removes stale action methods from
-  the grounding agent (`ACI`) and re-adds only the providers currently
-  connected, so the worker prompt never advertises tools the DB cannot back.
+- `configure_mcp_action_filters` limits the provider/tool set, while
+  `computer_use_agent/tools/mcp_action_registry.py:sync_registered_actions`
+  rebinds the grounding agent (`ACI`) so only currently authorized MCP tools
+  are exposed to the worker prompt.
 
 ### FastAPI surface (`framework/api/routes_mcp_auth.py`)
 
@@ -138,8 +139,8 @@ different tenants can co-exist once the rest of the stack forwards that header.
      latest headers + URLs from Composio.
 4. **Refresh registry / actions**
    - `refresh_registry_from_oauth` rebuilds the in-memory `MCP` client map,
-     then `register_mcp_actions` rebinds the worker-facing methods so only the
-     newly authorized tools appear in prompts.
+     then `sync_registered_actions` rebinds the worker-facing methods so only
+     the newly authorized tools appear in prompts.
 5. **Runtime usage**
    - When the worker attempts, say, `gmail_send_email`, it first confirms DB
      authorization via `OAuthManager.is_authorized`, then reuses the cached

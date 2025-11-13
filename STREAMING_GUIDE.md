@@ -25,7 +25,7 @@ The `/orchestrate/stream` endpoint accepts the same payload as `/orchestrate`, b
 ```
 
 - `task` *(string, required)* – natural language instruction sent to the worker.
-- Optional nested overrides (`worker`, `grounding`, `controller`, `platform`, `enable_code_execution`) follow the shapes in `framework/orchestrator/data_types.py`.
+- Optional nested overrides (`worker`, `grounding`, `controller`, `platform`, `enable_code_execution`) follow the shapes in `computer_use_agent/orchestrator/data_types.py`.
 
 ### 1.2 Making the Request (Node.js / server-side fetch)
 
@@ -59,7 +59,7 @@ Key callouts:
 
 ## 2. Subscribing to the Streaming Event Emitters
 
-The orchestrator publishes structured events via a custom emitter stack (`framework/utils/streaming.py`). Inside the server each module calls `emit_event(...)`; on the wire everything is serialized as standard SSE lines.
+The orchestrator publishes structured events via a custom emitter stack (`computer_use_agent/utils/streaming.py`). Inside the server each module calls `emit_event(...)`; on the wire everything is serialized as standard SSE lines.
 
 ### 2.1 SSE Frame Anatomy
 
@@ -92,7 +92,7 @@ The connection ends naturally right after `response.completed` (or `response.fai
 
 ### 3.1 Canonical Event List
 
-Below is the full taxonomy of events currently emitted by the framework. Event names are sanitized to `[A-Za-z0-9-_.]`, so dots in cost sources are preserved. Payloads are JSON objects.
+Below is the full taxonomy of events currently emitted by the computer-use agent stack. Event names are sanitized to `[A-Za-z0-9-_.]`, so dots in cost sources are preserved. Payloads are JSON objects.
 
 | Event name | When it fires | Representative payload |
 | --- | --- | --- |
@@ -474,7 +474,7 @@ export default function ResultTimeline({ runState }: { runState: OrchestrateRunS
 
 ## Appendix: Testing Checklist
 
-1. Start the orchestrator server (`uvicorn framework.api.server:app --reload`).
+1. Start the orchestrator server (`uvicorn server.api.server:app --reload`).
 2. Run `curl -N http://localhost:8000/orchestrate/stream -H 'Content-Type: application/json' -d '{ "task": "Ping" }'` to confirm raw SSE output.
 3. Execute `npm run dev` in the Next.js app and navigate to `/run?task=Open%20Calculator`. Confirm the timeline renders after the run completes.
 4. Trigger a failure (e.g., unplug the controller) to confirm `response.failed` surfaces in `runState.errors`.

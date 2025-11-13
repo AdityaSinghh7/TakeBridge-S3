@@ -4,7 +4,7 @@ from logging.config import fileConfig
 from sqlalchemy import engine_from_config, pool
 from alembic import context
 
-from framework.db.models import Base  # import your metadata
+from shared.db.models import Base  # import your metadata
 
 config = context.config
 fileConfig(config.config_file_name)

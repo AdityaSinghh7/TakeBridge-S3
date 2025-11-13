@@ -6,8 +6,8 @@ the FastAPI server root you're running locally (default `http://localhost:8000`,
 or whatever tunnel/exposed host you point Composio at). Unless noted otherwise:
 
 > Dev-only scope
-> - start the FastAPI server locally with `uvicorn framework.api.server:app --reload --port 8000` (or equivalent) before hitting these routes;
-> - keep Composio configured to call back into the same host (see `framework/settings.py:7`, where `OAUTH_REDIRECT_BASE` defaults to `http://localhost:8000`);
+> - start the FastAPI server locally with `uvicorn server.api.server:app --reload --port 8000` (or equivalent) before hitting these routes;
+> - keep Composio configured to call back into the same host (see `computer_use_agent/settings.py:7`, where `OAUTH_REDIRECT_BASE` defaults to `http://localhost:8000`);
 > - frontend builds should pass their own dev redirect URLs (e.g., `http://localhost:3000/settings/integrations`) through the `redirect_*` fields documented below so the server can bounce users back into your UI.
 
 - include `X-User-Id` with the logical tenant id (defaults to `singleton`);

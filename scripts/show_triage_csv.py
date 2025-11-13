@@ -9,7 +9,7 @@ logging.basicConfig(level=logging.DEBUG)
 import json
 import os
 
-from framework.api.controller_client import VMControllerClient
+from server.api.controller_client import VMControllerClient
 
 logger = logging.getLogger(__name__)
 

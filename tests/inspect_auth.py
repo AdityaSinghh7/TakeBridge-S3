@@ -14,8 +14,8 @@ load_dotenv()
 import os
 from typing import Any, Dict
 
-from framework.db.engine import session_scope
-from framework.db.models import ConnectedAccount, MCPConnection
+from shared.db.engine import session_scope
+from shared.db.models import ConnectedAccount, MCPConnection
 
 
 def inspect(user_id: str) -> Dict[str, Any]:
@@ -49,4 +49,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
