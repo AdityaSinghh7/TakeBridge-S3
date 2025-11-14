@@ -29,8 +29,8 @@ except Exception:  # pragma: no cover
     load_dotenv = None
     find_dotenv = None
 
-from openai import OpenAI
 try:
+    from openai import OpenAI
     from openai import (
         APIConnectionError,
         APIError,
@@ -44,7 +44,20 @@ except Exception:  # pragma: no cover
     except Exception:  # pragma: no cover
         APIError = Exception  # type: ignore[assignment]
     APIConnectionError = APITimeoutError = APIStatusError = RateLimitError = Exception  # type: ignore[assignment]
-from openai.types.responses import Response
+    class _MissingOpenAI:  # pragma: no cover
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError(
+                "The 'openai' package is required to instantiate OAIClient. "
+                "Install openai>=1.0 or set MCP_PLANNER_LLM_ENABLED=0 to disable planner LLM calls."
+            )
+    OpenAI = _MissingOpenAI  # type: ignore
+try:
+    from openai.types.responses import Response
+except Exception:  # pragma: no cover
+    class Response:  # type: ignore
+        """Fallback Response type used when openai package is unavailable."""
+
+        pass
 
 Message = Dict[str, Any]
 InputItem = Dict[str, Any]

@@ -4,6 +4,7 @@ from typing import List, Tuple
 
 from computer_use_agent.grounding.grounding_agent import ACI
 from mcp_agent.actions import iter_available_action_functions
+from mcp_agent.toolbox import refresh_manifest
 from shared.streaming import emit_event
 
 _REGISTERED_ACTION_NAMES: set[str] = set()
@@ -41,4 +42,11 @@ def sync_registered_actions() -> None:
         emit_event(
             "mcp.actions.registration.skipped",
             {"reason": "no_available_actions"},
+        )
+    try:
+        refresh_manifest()
+    except Exception as exc:
+        emit_event(
+            "mcp.toolbox.refresh.failed",
+            {"error": str(exc)},
         )

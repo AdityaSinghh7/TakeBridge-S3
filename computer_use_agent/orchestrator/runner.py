@@ -133,14 +133,14 @@ def runner(
             grounding_api_key=grounding_cfg.grounding_api_key,
         )
 
-            agent = AgentS3(
-                worker_cfg.engine_params,
-                grounding_agent,
-                mcp_bridge=mcp_bridge,
-                platform=platform.lower() if platform else "unknown",
-                max_trajectory_length=worker_cfg.max_trajectory_length,
-                enable_reflection=worker_cfg.enable_reflection,
-            )
+        agent = AgentS3(
+            worker_cfg.engine_params,
+            grounding_agent,
+            mcp_bridge=mcp_bridge,
+            platform=platform.lower() if platform else "unknown",
+            max_trajectory_length=worker_cfg.max_trajectory_length,
+            enable_reflection=worker_cfg.enable_reflection,
+        )
 
         behavior_narrator = BehaviorNarrator(engine_params=worker_cfg.engine_params)
 

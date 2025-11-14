@@ -9,7 +9,12 @@ from mcp_agent.oauth import (
     COMPOSIO_KEY as _COMPOSIO_KEY,
     COMPOSIO_API_V3 as _COMPOSIO_API_V3,
 )
-from mcp_agent.actions import describe_provider_actions
+from mcp_agent.toolbox import (
+    get_manifest as get_toolbox_manifest,
+    list_providers as toolbox_list_providers,
+    safe_filename,
+    search_tools as toolbox_search_tools,
+)
 from mcp_agent.registry import refresh_registry_from_oauth
 from shared.settings import build_redirect, OAUTH_REDIRECT_BASE
 import os
@@ -91,17 +96,24 @@ def callback(provider: str, request: Request, code: Optional[str] = None, state:
 def list_providers(request: Request):
     """List configured providers plus caller-specific authorization flags."""
     user_id = request.headers.get("X-User-Id", "singleton")
-    catalog = describe_provider_actions()
+    summaries = toolbox_list_providers(user_id=user_id)
     providers: list[dict[str, Any]] = []
-    for prov, data in catalog.items():
+    for entry in summaries:
+        prov = entry["provider"]
         env_key = f"COMPOSIO_{prov.upper()}_AUTH_CONFIG_ID"
         providers.append(
             {
                 "provider": prov,
-                "display_name": prov.capitalize(),
-                "authorized": OAuthManager.is_authorized(prov, user_id),
+                "display_name": entry.get("display_name") or prov.capitalize(),
+                "authorized": entry.get("authorized", False),
+                "registered": entry.get("registered", False),
+                "configured": entry.get("configured", False),
                 "auth_config_present": bool(os.getenv(env_key)),
-                "actions": [action["name"] for action in data["actions"]],
+                "mcp_url": entry.get("mcp_url"),
+                "tool_count": entry.get("tool_count", 0),
+                "actions": entry.get("all_actions", []),
+                "available_tools": entry.get("available_tools", []),
+                "manifest_path": entry.get("path"),
             }
         )
     return {"providers": providers}
@@ -111,22 +123,59 @@ def list_providers(request: Request):
 def available_tools(request: Request, provider: Optional[str] = None):
     """Surface detailed action metadata per provider for UI presentation."""
     user_id = request.headers.get("X-User-Id", "singleton")
-    catalog = describe_provider_actions()
     requested = _normalize_provider(provider) if provider else None
-    providers: list[dict[str, Any]] = []
-    for prov, data in catalog.items():
-        if requested and prov != requested:
+    manifest = get_toolbox_manifest(user_id=user_id, persist=False)
+    providers_out: list[dict[str, Any]] = []
+    for prov in manifest.providers:
+        if requested and prov.provider != requested:
             continue
-        providers.append(
+        providers_out.append(
             {
-                "provider": prov,
-                "authorized": OAuthManager.is_authorized(prov, user_id),
-                "actions": data["actions"],
+                "provider": prov.provider,
+                "authorized": prov.authorized,
+                "registered": prov.registered,
+                "configured": prov.configured,
+                "mcp_url": prov.mcp_url,
+                "actions": [
+                    {
+                        "name": tool.name,
+                        "provider": prov.provider,
+                        "description": tool.description,
+                        "doc": tool.docstring,
+                        "short_description": tool.short_description,
+                        "available": tool.available,
+                        "path": f"providers/{prov.provider}/tools/{safe_filename(tool.name)}.json",
+                        "mcp_tool_name": tool.mcp_tool_name,
+                    }
+                    for tool in prov.actions
+                ],
             }
         )
-    if requested and not providers:
+    if requested and not providers_out:
         raise HTTPException(404, f"Unknown provider '{provider}'")
-    return {"providers": providers}
+    return {"providers": providers_out}
+
+
+@router.get("/tools/search")
+def search_tools(
+    request: Request,
+    q: Optional[str] = None,
+    provider: Optional[str] = None,
+    detail: str = "summary",
+    limit: int = 20,
+):
+    user_id = request.headers.get("X-User-Id", "singleton")
+    try:
+        results = toolbox_search_tools(
+            query=q,
+            provider=provider,
+            detail_level=detail,
+            limit=limit,
+            user_id=user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"results": results, "detail_level": detail}
 
 
 @router.get("/status")

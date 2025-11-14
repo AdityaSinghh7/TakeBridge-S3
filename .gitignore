@@ -58,6 +58,9 @@ env/
 logs/
 *.log
 
+# Generated MCP toolbox artefacts
+/toolbox/
+
 # Databases (local/dev)
 takebridge.db
 *.db
@@ -94,3 +97,4 @@ profiler/
 uv.lock
 demo_payloads/
 demo_payloads/*
+MCP_Multi_Tenant_Implementation_Plan.md

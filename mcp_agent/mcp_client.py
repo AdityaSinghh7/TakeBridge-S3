@@ -60,6 +60,10 @@ class MCPClient:
                 payload = result.model_dump()
                 return self._normalize_payload(payload)
     
+    async def acall(self, tool: str, args: Dict[str, Any]) -> Dict[str, Any]:
+        """Async-friendly wrapper that avoids nested event loops for callers already in asyncio contexts."""
+        return await self._acall(tool, args)
+
     def call(self, tool: str, args: Dict[str, Any]) -> Dict[str, Any]:
         return asyncio.run(self._acall(tool, args))
 

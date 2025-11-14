@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Iterable, Optional
 
-from computer_use_agent.core.oai_client import OAIClient, extract_assistant_text
+from shared.oai_client import OAIClient, extract_assistant_text
 from shared.latency_logger import LATENCY_LOGGER
-from computer_use_agent.utils.token_cost_tracker import TOKEN_TRACKER
+from shared.token_cost_tracker import TOKEN_TRACKER
 
 
 class LMMEngine:

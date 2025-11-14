@@ -5,16 +5,21 @@ from typing import Any, ClassVar, Dict, List, Optional
 
 from shared.streaming import emit_event
 
-from .registry import MCP, init_registry, is_registered
+from .registry import get_client, init_registry, is_registered
+
+
+def _normalize_user_id(user_id: str | None) -> str:
+    return (user_id or "singleton").strip() or "singleton"
 
 
 class MCPAgent:
     """Central coordinator for MCP tool invocations and response tracking."""
 
-    _current: ClassVar[Optional["MCPAgent"]] = None
+    _current_by_user: ClassVar[Dict[str, "MCPAgent"]] = {}
 
-    def __init__(self) -> None:
-        init_registry()
+    def __init__(self, user_id: str | None = None) -> None:
+        self.user_id = _normalize_user_id(user_id)
+        init_registry(self.user_id)
         self.last_response: Optional[Dict[str, Any]] = None
         self.history: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
         self.current_step: Optional[int] = None
@@ -23,13 +28,16 @@ class MCPAgent:
 
     @classmethod
     def set_current(cls, agent: "MCPAgent") -> None:
-        cls._current = agent
+        cls._current_by_user[agent.user_id] = agent
 
     @classmethod
-    def current(cls) -> "MCPAgent":
-        if cls._current is None:
-            cls._current = MCPAgent()
-        return cls._current
+    def current(cls, user_id: str | None = None) -> "MCPAgent":
+        normalized = _normalize_user_id(user_id)
+        agent = cls._current_by_user.get(normalized)
+        if agent is None:
+            agent = MCPAgent(user_id=normalized)
+            cls._current_by_user[normalized] = agent
+        return agent
 
     def set_step(self, step_index: Optional[int]) -> None:
         self.current_step = step_index
@@ -47,6 +55,7 @@ class MCPAgent:
             "provider": provider,
             "tool": tool,
             "step": self.current_step,
+            "user_id": self.user_id,
             "response": response,
         }
         self.last_response = entry
@@ -56,17 +65,17 @@ class MCPAgent:
         self, provider: str, tool: str, payload: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Invoke an MCP tool, record telemetry, and persist response history."""
-        client = MCP.get(provider)
-        if not client or not is_registered(provider):
+        client = get_client(provider, self.user_id)
+        if not client or not is_registered(provider, self.user_id):
             emit_event(
                 "mcp.call.skipped",
-                {"server": provider, "tool": tool, "reason": "unconfigured"},
+                {"server": provider, "tool": tool, "reason": "unconfigured", "user_id": self.user_id},
             )
             raise RuntimeError(f"MCP provider '{provider}' is not configured.")
 
         emit_event(
             "mcp.call.started",
-            {"server": provider, "tool": tool, "step": self.current_step},
+            {"server": provider, "tool": tool, "step": self.current_step, "user_id": self.user_id},
         )
         try:
             response = client.call(tool, payload)
@@ -78,6 +87,7 @@ class MCPAgent:
                     "tool": tool,
                     "step": self.current_step,
                     "error": str(exc),
+                    "user_id": self.user_id,
                 },
             )
             raise
@@ -88,6 +98,7 @@ class MCPAgent:
                 "tool": tool,
                 "step": self.current_step,
                 "response": response,
+                "user_id": self.user_id,
             },
         )
         self._record_response(provider, tool, response)

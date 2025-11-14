@@ -195,4 +195,3 @@ class TokenCostTracker:
 
 TOKEN_TRACKER = TokenCostTracker()
 atexit.register(TOKEN_TRACKER.write_summary)
-

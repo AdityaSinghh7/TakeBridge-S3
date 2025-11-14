@@ -1,18 +1,122 @@
 import inspect
 import json
-from typing import Any, Iterable
+import os
+from typing import Any, Callable, Iterable, Tuple, cast
 
 from .registry import init_registry, is_registered
 from .oauth import OAuthManager
 from .mcp_agent import MCPAgent
+from .types import ToolInvocationResult
 from shared.streaming import emit_event
 init_registry()
+
+SUPPORTED_PROVIDERS: tuple[str, ...] = ("slack", "gmail")
 
 _ALLOWED_PROVIDERS: set[str] | None = None
 _ALLOWED_TOOLS: set[str] | None = None
 
-def _sleep_snippet(sec: float = 0.5) -> str:
-    return f"import time; time.sleep({sec})"
+def _payload_key_list(payload: dict[str, Any] | None) -> list[str]:
+    if not payload:
+        return []
+    return sorted(str(key) for key in payload.keys())
+
+
+def _current_user_id() -> str:
+    return (os.getenv("TB_USER_ID") or "singleton").strip() or "singleton"
+
+
+def _structured_result(
+    provider: str,
+    tool: str,
+    *,
+    successful: bool,
+    error: str | None = None,
+    data: Any = None,
+    logs: Any = None,
+    payload_keys: Iterable[str] | None = None,
+) -> ToolInvocationResult:
+    keys = sorted([str(key) for key in payload_keys] if payload_keys else [])
+    return cast(
+        ToolInvocationResult,
+        {
+            "successful": bool(successful),
+            "error": error,
+            "data": data,
+            "logs": logs,
+            "provider": provider,
+            "tool": tool,
+            "payload_keys": keys,
+        },
+    )
+
+
+def _normalize_tool_response(
+    provider: str,
+    tool: str,
+    payload_keys: list[str],
+    response: dict[str, Any] | None,
+) -> ToolInvocationResult:
+    normalized: dict[str, Any] = dict(response or {})
+    success = normalized.get("successful")
+    if success is None:
+        success = normalized.get("successfull")
+    if success is None and "error" in normalized:
+        success = normalized["error"] in (None, "", False)
+    if success is None:
+        success = True
+    normalized["successful"] = bool(success)
+    normalized.setdefault("error", normalized.get("error"))
+    normalized.setdefault("data", normalized.get("data"))
+    normalized.setdefault("logs", normalized.get("logs"))
+    normalized["provider"] = provider
+    normalized["tool"] = tool
+    normalized["payload_keys"] = payload_keys
+    return cast(ToolInvocationResult, normalized)
+
+def _emit_action_event(
+    event: str,
+    provider: str,
+    tool: str,
+    *,
+    payload: dict[str, Any] | None = None,
+    extra: dict[str, Any] | None = None,
+    user_id: str | None = None,
+) -> None:
+    """Emit telemetry for wrapper activity while redacting payload details."""
+    data: dict[str, Any] = {"server": provider, "tool": tool}
+    if payload:
+        data["payload_keys"] = sorted(payload.keys())
+    if extra:
+        data.update(extra)
+    if user_id:
+        data["user_id"] = user_id
+    emit_event(event, data)
+
+def _invoke_mcp_tool(provider: str, tool: str, payload: dict[str, Any]) -> ToolInvocationResult:
+    """Call an MCP tool via MCPAgent and return a normalized result dict."""
+    payload_keys = _payload_key_list(payload)
+    user_id = _current_user_id()
+    _emit_action_event("mcp.action.started", provider, tool, payload=payload, user_id=user_id)
+    try:
+        response = MCPAgent.current(user_id).call_tool(provider, tool, payload)
+    except Exception as exc:
+        error_message = str(exc)
+        _emit_action_event(
+            "mcp.action.failed",
+            provider,
+            tool,
+            extra={"error": error_message},
+            user_id=user_id,
+        )
+        return _structured_result(
+            provider,
+            tool,
+            successful=False,
+            error=error_message,
+            payload_keys=payload_keys,
+        )
+    _emit_action_event("mcp.action.completed", provider, tool, user_id=user_id)
+    return _normalize_tool_response(provider, tool, payload_keys, response)
 
 def mcp_action(func):
     func.is_mcp_action = True
@@ -88,11 +192,28 @@ def slack_post_message(
         unfurl_links: Optional flag to unfurl links contained in attachments.
         unfurl_media: Optional flag to unfurl media content contained in attachments.
     """
+    tool_name = "SLACK_SEND_MESSAGE"
+    user_id = _current_user_id()
     if getattr(self, "_validation_only", False):
-        return _sleep_snippet(0.0)
-    if not OAuthManager.is_authorized("slack"):
-        emit_event("mcp.call.skipped", {"server": "slack", "reason": "unauthorized"})
-        return _sleep_snippet(0.2)
+        return _structured_result(
+            "slack",
+            tool_name,
+            successful=True,
+            data={"skipped": "validation_only"},
+            payload_keys=[],
+        )
+    if not OAuthManager.is_authorized("slack", user_id=user_id):
+        emit_event(
+            "mcp.call.skipped",
+            {"server": "slack", "tool": tool_name, "reason": "unauthorized", "user_id": user_id},
+        )
+        return _structured_result(
+            "slack",
+            tool_name,
+            successful=False,
+            error="unauthorized",
+            payload_keys=[],
+        )
 
     content_provided = any([text, markdown_text, blocks, attachments])
     if not content_provided:
@@ -133,11 +254,7 @@ def slack_post_message(
     if unfurl_media is not None:
         payload["unfurl_media"] = bool(unfurl_media)
 
-    try:
-        MCPAgent.current().call_tool("slack", "SLACK_SEND_MESSAGE", payload)
-    except RuntimeError:
-        return _sleep_snippet(0.2)
-    return _sleep_snippet(0.2)
+    return _invoke_mcp_tool("slack", tool_name, payload)
 
 @mcp_action
 def slack_search_messages(
@@ -163,11 +280,28 @@ def slack_search_messages(
         highlight: Optional flag to return highlighted contexts.
         auto_paginate: Optional flag to iterate through all result pages.
     """
+    tool_name = "SLACK_SEARCH_MESSAGES"
+    user_id = _current_user_id()
     if getattr(self, "_validation_only", False):
-        return _sleep_snippet(0.0)
-    if not OAuthManager.is_authorized("slack"):
-        emit_event("mcp.call.skipped", {"server": "slack", "reason": "unauthorized"})
-        return _sleep_snippet(0.2)
+        return _structured_result(
+            "slack",
+            tool_name,
+            successful=True,
+            data={"skipped": "validation_only"},
+            payload_keys=[],
+        )
+    if not OAuthManager.is_authorized("slack", user_id=user_id):
+        emit_event(
+            "mcp.call.skipped",
+            {"server": "slack", "tool": tool_name, "reason": "unauthorized", "user_id": user_id},
+        )
+        return _structured_result(
+            "slack",
+            tool_name,
+            successful=False,
+            error="unauthorized",
+            payload_keys=[],
+        )
 
     payload: dict[str, Any] = {"query": query}
     if count is not None:
@@ -183,11 +317,7 @@ def slack_search_messages(
     if auto_paginate is not None:
         payload["auto_paginate"] = bool(auto_paginate)
 
-    try:
-        MCPAgent.current().call_tool("slack", "SLACK_SEARCH_MESSAGES", payload)
-    except RuntimeError:
-        return _sleep_snippet(0.2)
-    return _sleep_snippet(0.2)
+    return _invoke_mcp_tool("slack", tool_name, payload)
 
 def _norm_recipients(x):
     if x is None or x == "":
@@ -227,11 +357,28 @@ def gmail_send_email(
         thread_id: Optional Gmail thread to reply into.
         is_html: Optional boolean indicating if the body contains HTML.
     """
+    tool_name = "GMAIL_SEND_EMAIL"
+    user_id = _current_user_id()
     if getattr(self, "_validation_only", False):
-        return _sleep_snippet(0.0)
-    if not OAuthManager.is_authorized("gmail"):
-        emit_event("mcp.call.skipped", {"server":"gmail","reason":"unauthorized"})
-        return _sleep_snippet(0.2)
+        return _structured_result(
+            "gmail",
+            tool_name,
+            successful=True,
+            data={"skipped": "validation_only"},
+            payload_keys=[],
+        )
+    if not OAuthManager.is_authorized("gmail", user_id=user_id):
+        emit_event(
+            "mcp.call.skipped",
+            {"server": "gmail", "tool": tool_name, "reason": "unauthorized", "user_id": user_id},
+        )
+        return _structured_result(
+            "gmail",
+            tool_name,
+            successful=False,
+            error="unauthorized",
+            payload_keys=[],
+        )
     primary, extra_tos = _primary_plus_rest(to)
     cc_list = _norm_recipients(cc) + extra_tos
     bcc_list = _norm_recipients(bcc)
@@ -248,11 +395,7 @@ def gmail_send_email(
     if thread_id:
         args["thread_id"] = thread_id
     # Composio tool name is provider-prefixed
-    try:
-        MCPAgent.current().call_tool("gmail", "GMAIL_SEND_EMAIL", args)
-    except RuntimeError:
-        return _sleep_snippet(0.2)
-    return _sleep_snippet(0.2)
+    return _invoke_mcp_tool("gmail", tool_name, args)
 
 @mcp_action
 def gmail_search(
@@ -282,11 +425,28 @@ def gmail_search(
         verbose: Optional flag for verbose response metadata.
         user_id: Optional Gmail user identifier (defaults to 'me').
     """
+    tool_name = "GMAIL_FETCH_EMAILS"
+    user_id = _current_user_id()
     if getattr(self, "_validation_only", False):
-        return _sleep_snippet(0.0)
-    if not OAuthManager.is_authorized("gmail"):
-        emit_event("mcp.call.skipped", {"server": "gmail", "reason": "unauthorized"})
-        return _sleep_snippet(0.2)
+        return _structured_result(
+            "gmail",
+            tool_name,
+            successful=True,
+            data={"skipped": "validation_only"},
+            payload_keys=[],
+        )
+    if not OAuthManager.is_authorized("gmail", user_id=user_id):
+        emit_event(
+            "mcp.call.skipped",
+            {"server": "gmail", "tool": tool_name, "reason": "unauthorized", "user_id": user_id},
+        )
+        return _structured_result(
+            "gmail",
+            tool_name,
+            successful=False,
+            error="unauthorized",
+            payload_keys=[],
+        )
 
     payload: dict[str, Any] = {
         "query": query,
@@ -307,16 +467,32 @@ def gmail_search(
     if verbose is not None:
         payload["verbose"] = bool(verbose)
 
-    try:
-        MCPAgent.current().call_tool("gmail", "GMAIL_FETCH_EMAILS", payload)
-    except RuntimeError:
-        return _sleep_snippet(0.2)
-    return _sleep_snippet(0.2)
+    return _invoke_mcp_tool("gmail", tool_name, payload)
+
+
+PROVIDER_ACTIONS: dict[str, Tuple[Callable[..., Any], ...]] = {
+    "slack": (slack_post_message, slack_search_messages),
+    "gmail": (gmail_send_email, gmail_search),
+}
+
+if set(PROVIDER_ACTIONS) != set(SUPPORTED_PROVIDERS):
+    missing = set(SUPPORTED_PROVIDERS) - set(PROVIDER_ACTIONS)
+    extra = set(PROVIDER_ACTIONS) - set(SUPPORTED_PROVIDERS)
+    raise RuntimeError(
+        "Provider inventory mismatch. Missing: "
+        f"{sorted(missing)} Extra: {sorted(extra)}"
+    )
+
 
 def _provider_actions_map():
+    return PROVIDER_ACTIONS
+
+
+def get_provider_action_map() -> dict[str, Tuple[Callable[..., Any], ...]]:
+    """Return a read-only mapping of provider -> MCP action callables."""
     return {
-        "slack": (slack_post_message, slack_search_messages),
-        "gmail": (gmail_send_email, gmail_search),
+        provider: tuple(funcs)
+        for provider, funcs in _provider_actions_map().items()
     }
 
 
