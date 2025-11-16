@@ -17,7 +17,7 @@ else:
 
 class User(Base):
     __tablename__ = "users"
-    id = Column(String, primary_key=True)  # "singleton" for now
+    id = Column(String, primary_key=True)  # Historically "singleton" in dev; now per-user ids.
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     accounts = relationship("ConnectedAccount", back_populates="user", cascade="all,delete-orphan")
 

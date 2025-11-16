@@ -2,18 +2,35 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from shared.streaming import emit_event
 from shared.token_cost_tracker import TokenCostTracker
 
 from .summarize import redact_payload, summarize_payload
 
-from .budget import Budget, BudgetTracker
+from .budget import Budget, BudgetSnapshot, BudgetTracker
 from .prompt import PLANNER_PROMPT
+
+StepType = Literal["tool", "sandbox", "search", "finish"]
+
+
+@dataclass
+class PlannerStep:
+    index: int
+    type: StepType
+    command: Dict[str, Any]
+    success: bool
+    preview: str
+    result_key: Optional[str] = None
+    error: Optional[str] = None
+    output: Any | None = None
+    is_summary: bool = False
 
 
 @dataclass
@@ -36,6 +53,7 @@ class PlannerContext:
     discovery_completed: bool = False
     raw_outputs: Dict[str, Any] = field(default_factory=dict)
     registry_version: Optional[int] = None
+    steps: List[PlannerStep] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.budget_tracker = BudgetTracker(self.budget)
@@ -46,6 +64,12 @@ class PlannerContext:
         self.summary_threshold_bytes = 16_000
         self.summary_item_limit = 50
         self._search_index: Dict[str, Dict[str, Any]] = {}
+        self._persist_summaries = os.getenv("MCP_SUMMARY_ALWAYS_PERSIST", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
     def record_event(self, event: str, payload: Dict[str, Any]) -> None:
         safe_payload = self._redact_for_logs(payload)
@@ -53,6 +77,33 @@ class PlannerContext:
         log_entry = {"event": event, **enriched}
         self.logs.append(log_entry)
         emit_event(event, enriched)
+
+    def record_step(
+        self,
+        *,
+        type: StepType,
+        command: Dict[str, Any],
+        success: bool,
+        preview: str,
+        result_key: str | None = None,
+        error: str | None = None,
+        output: Any | None = None,
+        is_summary: bool = False,
+    ) -> None:
+        normalized_preview = preview.strip() or "n/a"
+        self.steps.append(
+            PlannerStep(
+                index=len(self.steps),
+                type=type,
+                command=command,
+                success=success,
+                preview=normalized_preview[:200],
+                result_key=result_key,
+                error=error,
+                output=output,
+                is_summary=is_summary,
+            )
+        )
 
     def add_search_results(self, results: List[Dict[str, Any]], *, replace: bool = False) -> None:
         if replace:
@@ -87,6 +138,34 @@ class PlannerContext:
         self.sandbox_summaries.append(summary)
         self._trim_context()
 
+    def resolve_mcp_tool_name(self, provider: str, tool_name: str) -> str:
+        key = f"{(provider or '').strip().lower()}.{(tool_name or '').strip().lower()}"
+        entry = self._search_index.get(key)
+        if entry:
+            resolved = entry.get("mcp_tool_name")
+            if resolved:
+                return resolved
+        return tool_name
+
+    def append_raw_output(self, key: str, entry: Dict[str, Any]) -> Dict[str, Any]:
+        """Append a structured entry to `raw_outputs`, preserving older history."""
+        existing = self.raw_outputs.get(key)
+        if existing is None:
+            self.raw_outputs[key] = [entry]
+        elif isinstance(existing, list):
+            existing.append(entry)
+        else:
+            self.raw_outputs[key] = [existing, entry]
+        return entry
+
+    def get_raw_output_entries(self, key: str) -> List[Dict[str, Any]]:
+        value = self.raw_outputs.get(key)
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        return [value]
+
     def summarize_tool_output(
         self,
         label: str,
@@ -103,7 +182,7 @@ class PlannerContext:
             payload,
             purpose=purpose,
             storage_dir=storage_dir,
-            persist_payload=True,
+            persist_payload=self._persist_summaries,
         )
         self.add_tool_summary(summary)
         self.record_event(
@@ -141,7 +220,7 @@ class PlannerContext:
             payload,
             purpose=purpose,
             storage_dir=storage_dir,
-            persist_payload=True,
+            persist_payload=self._persist_summaries,
         )
         self.add_sandbox_summary(summary)
         self.record_event(
@@ -173,6 +252,62 @@ class PlannerContext:
             return True
         return False
 
+    def planner_state(self, _snapshot: BudgetSnapshot) -> Dict[str, Any]:
+        recent_count = 3
+        recent_steps = self.steps[-recent_count:]
+        history_summary = self._history_summary(len(recent_steps))
+        tools_root = str((self.toolbox_root / "sandbox_py" / "servers").resolve())
+        available_servers = sorted(
+            {
+                (entry.get("server") or entry.get("provider", "")).strip()
+                for entry in self.search_results
+                if (entry.get("server") or entry.get("provider"))
+            }
+        )
+        recent_entries: List[Dict[str, Any]] = []
+        for step in recent_steps:
+            entry: Dict[str, Any] = {
+                "index": step.index,
+                "type": step.type,
+                "status": "success" if step.success else "error",
+                "summary": step.preview,
+            }
+            command = step.command or {}
+            if step.type == "search":
+                entry["query"] = command.get("query")
+                entry["detail_level"] = command.get("detail_level")
+                if isinstance(step.output, list):
+                    entry["result_count"] = len(step.output)
+            elif step.type == "sandbox":
+                entry["label"] = command.get("label") or step.result_key
+            elif step.type == "tool":
+                entry["provider"] = command.get("provider")
+                entry["tool"] = command.get("tool")
+            if step.result_key:
+                entry["result_key"] = step.result_key
+            if step.error:
+                entry["error"] = step.error
+            if step.output is not None:
+                entry["output"] = step.output
+                entry["is_summary"] = step.is_summary
+            recent_entries.append(entry)
+        return {
+            "task": self.task,
+            "tools_root": tools_root,
+            "available_servers": available_servers,
+            "history_summary": history_summary,
+            "recent_steps": recent_entries,
+        }
+
+    def _history_summary(self, recent_count: int) -> str:
+        total = len(self.steps)
+        earlier = total - recent_count
+        if earlier <= 0:
+            return "No earlier steps."
+        counts = Counter(step.type for step in self.steps[:earlier])
+        parts = [f"{counts[step_type]} {step_type}" for step_type in sorted(counts)]
+        return f"Earlier steps summarized: {', '.join(parts)}."
+
     def _estimate_bytes(self, payload: Any) -> int:
         try:
             serialized = json.dumps(payload, ensure_ascii=False, default=str)
@@ -188,7 +323,12 @@ class PlannerContext:
             self.sandbox_summaries[:] = self.sandbox_summaries[-max_items:]
         if len(self.search_results) > max_items:
             self.search_results[:] = self.search_results[-max_items:]
-            self._search_index = {self._search_key(entry): entry for entry in self.search_results if self._search_key(entry)}
+            new_index: Dict[str, Dict[str, Any]] = {}
+            for entry in self.search_results:
+                key = self._search_key(entry)
+                if key:
+                    new_index[key] = entry
+            self._search_index = new_index
         self._update_tool_menu()
 
     def _redact_for_logs(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -238,20 +378,20 @@ class PlannerContext:
             return 0.0
 
     def _update_tool_menu(self, limit: int = 8) -> None:
-        top_items = self.search_results[:limit]
-        menu = []
-        for entry in top_items:
-            key = self._search_key(entry)
-            if not key:
+        available_items = [entry for entry in self.search_results if entry.get("available")]
+        menu: List[Dict[str, Any]] = []
+        for entry in available_items[:limit]:
+            provider = (entry.get("provider") or "").strip().lower()
+            tool = (entry.get("tool") or "").strip().lower()
+            if not provider or not tool:
                 continue
             menu.append(
                 {
-                    "qualified_name": key,
-                    "provider": entry.get("provider"),
-                    "tool": entry.get("tool"),
-                    "available": entry.get("available"),
-                    "short_description": entry.get("short_description") or entry.get("description") or "",
-                    "parameters": entry.get("parameters", []),
+                    "qualified_name": f"{provider}.{tool}",
+                    "provider": provider,
+                    "provider_path": f"sandbox_py/servers/{provider}",
+                    "tool": tool,
+                    "path": f"sandbox_py/servers/{provider}/{tool}.py",
                 }
             )
         self.tool_menu = menu

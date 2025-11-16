@@ -3,7 +3,7 @@ Inspect DB-backed OAuth/MCP state per provider for the current user.
 
 Usage:
   export DB_URL=...            # ensure this matches the server
-  export USER_ID=singleton     # or your real user id
+  export USER_ID=dev-local     # or your real user id
   python -m tests.inspect_auth
 """
 from __future__ import annotations
@@ -42,7 +42,7 @@ def inspect(user_id: str) -> Dict[str, Any]:
 
 
 def main() -> int:
-    user_id = os.getenv("USER_ID", "singleton")
+    user_id = os.getenv("USER_ID", "dev-local")
     print({"user_id": user_id, "providers": inspect(user_id)})
     return 0
 

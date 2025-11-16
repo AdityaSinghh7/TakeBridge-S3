@@ -4,11 +4,22 @@ from urllib.parse import quote_plus
 
 from mcp_agent.oauth import COMPOSIO_API_V3, OAuthManager
 from mcp_agent.registry import refresh_registry_from_oauth
+from mcp_agent.user_identity import normalize_user_id
 from computer_use_agent.tools.mcp_action_registry import sync_registered_actions
 
 router = APIRouter()
 
 COMPOSIO_CALLBACK = f"{COMPOSIO_API_V3}/toolkits/auth/callback"
+
+
+def _require_user_id(request: Request) -> str:
+    raw = (request.headers.get("X-User-Id") or "").strip()
+    if not raw:
+        raise HTTPException(400, "Missing X-User-Id header.")
+    try:
+        return normalize_user_id(raw)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 def _attach_error(url: str | None, message: str) -> str | None:
@@ -34,7 +45,7 @@ def composio_redirect(request: Request):
     if ca_id:
         if status and status != "success":
             raise HTTPException(400, f"Composio reported status={status}")
-        user_id = request.headers.get("X-User-Id", "singleton")
+        user_id = _require_user_id(request)
         provider = (app_name or "gmail").lower()
         try:
             OAuthManager.finalize_connected_account(provider, user_id, ca_id)
@@ -44,7 +55,7 @@ def composio_redirect(request: Request):
             except Exception:
                 pass
             refresh_registry_from_oauth(user_id)
-            sync_registered_actions()
+            sync_registered_actions(user_id)
         except Exception as e:
             # Attempt to surface upstream error body if available (requests HTTPError)
             detail = str(e)

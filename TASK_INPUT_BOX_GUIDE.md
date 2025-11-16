@@ -129,7 +129,7 @@ async function streamOrchestrator(payload: Record<string, unknown>) {
     headers: {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
-      "X-User-Id": userId ?? "singleton",
+      "X-User-Id": userId,
     },
     credentials: "include",
     body: JSON.stringify(payload),

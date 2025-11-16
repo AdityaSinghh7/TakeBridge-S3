@@ -8,13 +8,22 @@ import pytest
 from mcp_agent.planner import Budget, BudgetSnapshot, execute_mcp_task
 
 
+TEST_USER = "test-user"
+
+
 class FinishLLM:
     def __init__(self, summary: str) -> None:
         self.summary = summary
 
     def generate_plan(self, context):
         return {
-            "text": json.dumps({"type": "finish", "summary": self.summary}),
+            "text": json.dumps(
+                {
+                    "type": "finish",
+                    "summary": self.summary,
+                    "reasoning": "Task can be marked complete.",
+                }
+            ),
             "response": None,
         }
 
@@ -29,7 +38,7 @@ def test_budget_defaults_and_snapshot():
 
 def test_execute_mcp_task_returns_structured_result(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("mcp_agent.planner.discovery.search_tools", lambda **kwargs: [])
-    result = execute_mcp_task("noop task", llm=FinishLLM("All done."))
+    result = execute_mcp_task("noop task", user_id=TEST_USER, llm=FinishLLM("All done."))
     assert result["success"] is True
     assert result["final_summary"] == "All done."
     assert result["budget_usage"]["max_steps"] == 10
@@ -50,7 +59,7 @@ def test_execute_mcp_task_runs_tool_search(monkeypatch: pytest.MonkeyPatch):
         return [{"provider": "slack", "tool": "send_message", "short_description": "foo", "available": True}]
 
     monkeypatch.setattr("mcp_agent.planner.discovery.search_tools", fake_search)
-    result = execute_mcp_task("send slack update", user_id="tester", llm=FinishLLM("done"))
+    result = execute_mcp_task("send slack update", user_id=TEST_USER, llm=FinishLLM("done"))
     assert captured["query"] == "send slack update"
     assert result["logs"][0]["event"] == "mcp.planner.started"
     event_names = [log["event"] for log in result["logs"]]
@@ -64,15 +73,15 @@ def test_execute_mcp_task_accepts_custom_llm(monkeypatch: pytest.MonkeyPatch):
             return {"messages": [], "text": "done", "response": None}
 
     monkeypatch.setattr("mcp_agent.planner.discovery.search_tools", lambda **kwargs: [])
-    result = execute_mcp_task("task", llm=StubLLM())
+    result = execute_mcp_task("task", user_id=TEST_USER, llm=StubLLM())
     assert "custom.llm.called" in [log["event"] for log in result["logs"]]
 
 
 def test_execute_mcp_task_without_llm_returns_parse_error(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("mcp_agent.planner.discovery.search_tools", lambda **kwargs: [])
-    result = execute_mcp_task("task without llm")
+    result = execute_mcp_task("task without llm", user_id=TEST_USER)
     assert result["success"] is False
-    assert result["error"] == "planner_parse_error"
+    assert result["error"] == "planner_llm_disabled"
 
 
 def test_execute_tool_command(monkeypatch: pytest.MonkeyPatch):
@@ -90,10 +99,19 @@ def test_execute_tool_command(monkeypatch: pytest.MonkeyPatch):
                             "provider": "slack",
                             "tool": "SLACK_SEND_MESSAGE",
                             "payload": {"channel": "#general", "text": "hi"},
+                            "reasoning": "Send a Slack message once.",
                         }
                     )
                 }
-            return {"text": json.dumps({"type": "finish", "summary": "done"})}
+            return {
+                "text": json.dumps(
+                    {
+                        "type": "finish",
+                        "summary": "done",
+                        "reasoning": "Slack tool has been called.",
+                    }
+                )
+            }
 
     tool_llm = ToolLLM()
 
@@ -106,7 +124,36 @@ def test_execute_tool_command(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr("mcp_agent.planner.runtime.call_direct_tool", fake_call_direct_tool)
 
-    result = execute_mcp_task("tool command", llm=tool_llm)
+    # Provide minimal index so SLACK_SEND_MESSAGE passes validation.
+    from mcp_agent.toolbox.models import ParameterSpec, ToolSpec
+    from mcp_agent.toolbox.index import ToolboxIndex
+
+    parameter = ParameterSpec(
+        name="text",
+        kind="positional_or_keyword",
+        required=True,
+        has_default=False,
+        annotation="str",
+        description=None,
+    )
+    tool = ToolSpec(
+        provider="slack",
+        name="SLACK_SEND_MESSAGE",
+        description="Send slack message",
+        short_description="Send slack message",
+        docstring="",
+        python_name="SLACK_SEND_MESSAGE",
+        python_signature="SLACK_SEND_MESSAGE(text: str)",
+        parameters=[parameter],
+        mcp_tool_name="SLACK_SEND_MESSAGE",
+        oauth_provider="slack",
+        oauth_required=True,
+        available=True,
+    )
+    index = ToolboxIndex(providers={}, tools_by_id={tool.tool_id: tool})
+    monkeypatch.setattr("mcp_agent.planner.runtime.get_index", lambda *args, **kwargs: index)
+
+    result = execute_mcp_task("tool command", user_id=TEST_USER, llm=tool_llm)
     assert result["success"] is True
     assert "test.tool.called" in [log["event"] for log in result["logs"]]
     assert "mcp.summary.created" in [log["event"] for log in result["logs"]]
@@ -120,8 +167,24 @@ def test_execute_sandbox_command(monkeypatch: pytest.MonkeyPatch):
         def generate_plan(self, context):
             self.calls += 1
             if self.calls == 1:
-                return {"text": json.dumps({"type": "sandbox", "code": "return {'status': 'ok'}"})}
-            return {"text": json.dumps({"type": "finish", "summary": "sandbox done"})}
+                return {
+                    "text": json.dumps(
+                        {
+                            "type": "sandbox",
+                            "code": "return {'status': 'ok'}",
+                            "reasoning": "Run simple sandbox to return ok.",
+                        }
+                    )
+                }
+            return {
+                "text": json.dumps(
+                    {
+                        "type": "finish",
+                        "summary": "sandbox done",
+                        "reasoning": "Sandbox has completed.",
+                    }
+                )
+            }
 
     monkeypatch.setattr("mcp_agent.planner.discovery.search_tools", lambda **kwargs: [])
 
@@ -144,21 +207,24 @@ def test_execute_sandbox_command(monkeypatch: pytest.MonkeyPatch):
                 )()
             },
         )()
-        context.raw_outputs[f"sandbox.{label}"] = {
-            "type": "sandbox",
-            "label": label,
-            "success": True,
-            "result": {"status": "ok"},
-            "logs": [],
-            "error": None,
-            "timed_out": False,
-        }
+        context.append_raw_output(
+            f"sandbox.{label}",
+            {
+                "type": "sandbox",
+                "label": label,
+                "success": True,
+                "result": {"status": "ok"},
+                "logs": [],
+                "error": None,
+                "timed_out": False,
+            },
+        )
         context.summarize_sandbox_output("sandbox_test", {"status": "ok"}, force=True)
         return result
 
     monkeypatch.setattr("mcp_agent.planner.runtime.run_sandbox_plan", fake_run_sandbox_plan)
 
-    result = execute_mcp_task("sandbox command", llm=SandboxLLM())
+    result = execute_mcp_task("sandbox command", user_id=TEST_USER, llm=SandboxLLM())
     assert result["success"] is True
     assert "test.sandbox.called" in [log["event"] for log in result["logs"]]
     assert "mcp.summary.created" in [log["event"] for log in result["logs"]]
@@ -174,6 +240,7 @@ def test_budget_exceeded_stops_loop(monkeypatch: pytest.MonkeyPatch):
                         "provider": "slack",
                         "tool": "SLACK_SEND_MESSAGE",
                         "payload": {"channel": "#general", "text": "loop"},
+                        "reasoning": "Looping tool call to test budget.",
                     }
                 )
             }
@@ -184,6 +251,35 @@ def test_budget_exceeded_stops_loop(monkeypatch: pytest.MonkeyPatch):
         lambda context, provider, tool, payload: {"successful": True},
     )
 
-    result = execute_mcp_task("budget loop", llm=LoopLLM(), budget=Budget(max_steps=1))
+    # Provide minimal index so SLACK_SEND_MESSAGE passes validation.
+    from mcp_agent.toolbox.models import ParameterSpec, ToolSpec
+    from mcp_agent.toolbox.index import ToolboxIndex
+
+    parameter = ParameterSpec(
+        name="text",
+        kind="positional_or_keyword",
+        required=True,
+        has_default=False,
+        annotation="str",
+        description=None,
+    )
+    tool = ToolSpec(
+        provider="slack",
+        name="SLACK_SEND_MESSAGE",
+        description="Send slack message",
+        short_description="Send slack message",
+        docstring="",
+        python_name="SLACK_SEND_MESSAGE",
+        python_signature="SLACK_SEND_MESSAGE(text: str)",
+        parameters=[parameter],
+        mcp_tool_name="SLACK_SEND_MESSAGE",
+        oauth_provider="slack",
+        oauth_required=True,
+        available=True,
+    )
+    index = ToolboxIndex(providers={}, tools_by_id={tool.tool_id: tool})
+    monkeypatch.setattr("mcp_agent.planner.runtime.get_index", lambda *args, **kwargs: index)
+
+    result = execute_mcp_task("budget loop", user_id=TEST_USER, llm=LoopLLM(), budget=Budget(max_steps=1))
     assert result["success"] is False
     assert result["error"] == "budget_exceeded"

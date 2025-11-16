@@ -39,6 +39,7 @@ def summarize_payload(
 
     summary = {
         "label": label,
+        "is_summary": True,
         "original_size": size_bytes,
         "truncated": truncated,
         "schema": schema,
@@ -121,13 +122,13 @@ def _derive_aggregates(payload: Any) -> Dict[str, Any]:
 def _purpose_notes(purpose: str, truncated: bool) -> str:
     notes = []
     if purpose == "for_user":
-        notes.append("Condensed summary for user-facing output.")
+        notes.append("User-facing condensed summary.")
     elif purpose == "for_debug":
-        notes.append("Includes extra metadata for debugging.")
+        notes.append("Debug summary with additional metadata.")
     else:
-        notes.append("Planner-focused summary.")
+        notes.append("Planner-focused summary: schema + sample + aggregates only.")
     if truncated:
-        notes.append("Full payload persisted separately or truncated.")
+        notes.append("Underlying payload is larger than shown; only partial data visible.")
     return " ".join(notes)
 
 

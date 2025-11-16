@@ -1,0 +1,96 @@
+{
+  "availability_reason": "unauthorized",
+  "available": false,
+  "description": "Workspace-wide Slack message search with query modifiers (e.g., `in:#channel`, `from:@user`, `before:YYYY-MM-DD`) plus pagination and sorting controls.",
+  "docstring": "Description:\n    Workspace-wide Slack message search with query modifiers (e.g., `in:#channel`, `from:@user`, `before:YYYY-MM-DD`) plus pagination and sorting controls.\nArgs:\n    query: Required Slack search query string.\n    count: Optional number of results per page (defaults to 20, Slack default 1).\n    page: Optional page index for paginated results.\n    sort: Optional sort field ('score' or 'timestamp').\n    sort_dir: Optional direction ('asc' or 'desc').\n    highlight: Optional flag to return highlighted contexts.\n    auto_paginate: Optional flag to iterate through all result pages.",
+  "manifest_generated_at": "2025-11-16T07:28:58.945346+00:00",
+  "mcp_tool_name": "SLACK_SEARCH_MESSAGES",
+  "name": "slack_search_messages",
+  "oauth_provider": "slack",
+  "oauth_required": true,
+  "parameters": [
+    {
+      "annotation": "str",
+      "description": "Required Slack search query string.",
+      "has_default": false,
+      "kind": "positional_or_keyword",
+      "name": "query",
+      "required": true
+    },
+    {
+      "annotation": "int",
+      "default": 20,
+      "description": "Optional number of results per page (defaults to 20, Slack default 1).",
+      "has_default": true,
+      "kind": "keyword_only",
+      "name": "count",
+      "required": false
+    },
+    {
+      "annotation": "int | None",
+      "default": null,
+      "description": "Optional page index for paginated results.",
+      "has_default": true,
+      "kind": "keyword_only",
+      "name": "page",
+      "required": false
+    },
+    {
+      "annotation": "str | None",
+      "default": null,
+      "description": "Optional sort field ('score' or 'timestamp').",
+      "has_default": true,
+      "kind": "keyword_only",
+      "name": "sort",
+      "required": false
+    },
+    {
+      "annotation": "str | None",
+      "default": null,
+      "description": "Optional direction ('asc' or 'desc').",
+      "has_default": true,
+      "kind": "keyword_only",
+      "name": "sort_dir",
+      "required": false
+    },
+    {
+      "annotation": "bool | None",
+      "default": null,
+      "description": "Optional flag to return highlighted contexts.",
+      "has_default": true,
+      "kind": "keyword_only",
+      "name": "highlight",
+      "required": false
+    },
+    {
+      "annotation": "bool | None",
+      "default": null,
+      "description": "Optional flag to iterate through all result pages.",
+      "has_default": true,
+      "kind": "keyword_only",
+      "name": "auto_paginate",
+      "required": false
+    }
+  ],
+  "path": "providers/slack/tools/slack_search_messages.json",
+  "provider": "slack",
+  "provider_status": {
+    "all_actions": [
+      "slack_post_message",
+      "slack_search_messages"
+    ],
+    "authorized": false,
+    "available_tools": [],
+    "configured": true,
+    "display_name": "Slack",
+    "mcp_url": null,
+    "provider": "slack",
+    "registered": true,
+    "tool_count": 2
+  },
+  "python_name": "slack_search_messages",
+  "python_signature": "slack_search_messages(self, query: str, *, count: int = 20, page: int | None = None, sort: str | None = None, sort_dir: str | None = None, highlight: bool | None = None, auto_paginate: bool | None = None)",
+  "short_description": "Workspace-wide Slack message search with query modifiers (e.g., `in:#channel`, `from:@user`, `before:YYYY-MM-DD`) plus pagination and sorting controls",
+  "source_line": 266,
+  "source_path": "mcp_agent/actions.py"
+}

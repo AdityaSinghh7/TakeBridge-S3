@@ -1,0 +1,472 @@
+{
+  "fingerprint": "739af4f30479bc2be842406c34f7519100e4fad8d8994df96bc40c369d8ac92d",
+  "generated_at": "2025-11-16T07:28:58.945346+00:00",
+  "providers": [
+    {
+      "actions": [
+        {
+          "available": true,
+          "description": "Sends an email via Gmail API using the authenticated user's Google profile display name. At least one of recipient_email, cc, or bcc must be provided. Atleast one of subject or body must be provided. Requires `is_html=True` if the body contains HTML and valid `s3key`, `mimetype`, `name` for any attachment.",
+          "docstring": "Description:\n    Sends an email via Gmail API using the authenticated user's Google profile display name. At least one of recipient_email, cc, or bcc must be provided. Atleast one of subject or body must be provided. Requires `is_html=True` if the body contains HTML and valid `s3key`, `mimetype`, `name` for any attachment.\nArgs:\n    to: Comma-separated recipients.\n    subject: Subject line text.\n    body: Plain text or simple HTML body.\n    cc: Optional comma-separated CC recipients.\n    bcc: Optional comma-separated BCC recipients.\n    thread_id: Optional Gmail thread to reply into.\n    is_html: Optional boolean indicating if the body contains HTML.",
+          "list_params": {
+            "bcc": "recipient_list",
+            "cc": "recipient_list"
+          },
+          "mcp_tool_name": "GMAIL_SEND_EMAIL",
+          "name": "gmail_send_email",
+          "oauth_provider": "gmail",
+          "oauth_required": true,
+          "parameters": [
+            {
+              "annotation": "str",
+              "description": "Comma-separated recipients.",
+              "has_default": false,
+              "kind": "positional_or_keyword",
+              "name": "to",
+              "required": true
+            },
+            {
+              "annotation": "str",
+              "description": "Subject line text.",
+              "has_default": false,
+              "kind": "positional_or_keyword",
+              "name": "subject",
+              "required": true
+            },
+            {
+              "annotation": "str",
+              "description": "Plain text or simple HTML body.",
+              "has_default": false,
+              "kind": "positional_or_keyword",
+              "name": "body",
+              "required": true
+            },
+            {
+              "annotation": "str",
+              "default": "",
+              "description": "Optional comma-separated CC recipients.",
+              "has_default": true,
+              "kind": "positional_or_keyword",
+              "name": "cc",
+              "required": false
+            },
+            {
+              "annotation": "str",
+              "default": "",
+              "description": "Optional comma-separated BCC recipients.",
+              "has_default": true,
+              "kind": "positional_or_keyword",
+              "name": "bcc",
+              "required": false
+            },
+            {
+              "annotation": "str",
+              "default": "",
+              "description": "Optional Gmail thread to reply into.",
+              "has_default": true,
+              "kind": "positional_or_keyword",
+              "name": "thread_id",
+              "required": false
+            },
+            {
+              "annotation": "bool",
+              "default": false,
+              "description": "Optional boolean indicating if the body contains HTML.",
+              "has_default": true,
+              "kind": "positional_or_keyword",
+              "name": "is_html",
+              "required": false
+            }
+          ],
+          "primary_param": "to",
+          "provider": "gmail",
+          "python_name": "gmail_send_email",
+          "python_signature": "gmail_send_email(self, to: str, subject: str, body: str, cc: str = '', bcc: str = '', thread_id: str = '', is_html: bool = False)",
+          "short_description": "Sends an email via Gmail API using the authenticated user's Google profile display name",
+          "source_line": 344,
+          "source_path": "mcp_agent/actions.py"
+        },
+        {
+          "available": true,
+          "description": "Fetches a list of email messages from a Gmail account, supporting filtering, pagination, and optional full content retrieval.",
+          "docstring": "Description:\n    Fetches a list of email messages from a Gmail account, supporting filtering, pagination, and optional full content retrieval.\nArgs:\n    query: Required Gmail search query (e.g., 'from:alice has:attachment').\n    max_results: Optional maximum number of results to return (defaults to 20, API default 1).\n    label_ids: Optional comma-separated string or iterable of label IDs to include.\n    page_token: Optional pagination token from a previous response.\n    include_payload: Optional flag to return full MIME payloads.\n    include_spam_trash: Optional flag to include spam and trash.\n    ids_only: Optional flag to return only message ids/snippets.\n    verbose: Optional flag for verbose response metadata.\n    user_id: Optional Gmail user identifier (defaults to 'me').",
+          "list_params": {
+            "label_ids": "string_list"
+          },
+          "mcp_tool_name": "GMAIL_FETCH_EMAILS",
+          "name": "gmail_search",
+          "oauth_provider": "gmail",
+          "oauth_required": true,
+          "parameters": [
+            {
+              "annotation": "str",
+              "description": "Required Gmail search query (e.g., 'from:alice has:attachment').",
+              "has_default": false,
+              "kind": "positional_or_keyword",
+              "name": "query",
+              "required": true
+            },
+            {
+              "annotation": "int",
+              "default": 20,
+              "description": "Optional maximum number of results to return (defaults to 20, API default 1).",
+              "has_default": true,
+              "kind": "positional_or_keyword",
+              "name": "max_results",
+              "required": false
+            },
+            {
+              "annotation": "Any | None",
+              "default": null,
+              "description": "Optional comma-separated string or iterable of label IDs to include.",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "label_ids",
+              "required": false
+            },
+            {
+              "annotation": "str | None",
+              "default": null,
+              "description": "Optional pagination token from a previous response.",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "page_token",
+              "required": false
+            },
+            {
+              "annotation": "bool | None",
+              "default": null,
+              "description": "Optional flag to return full MIME payloads.",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "include_payload",
+              "required": false
+            },
+            {
+              "annotation": "bool | None",
+              "default": null,
+              "description": "Optional flag to include spam and trash.",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "include_spam_trash",
+              "required": false
+            },
+            {
+              "annotation": "bool | None",
+              "default": null,
+              "description": "Optional flag to return only message ids/snippets.",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "ids_only",
+              "required": false
+            },
+            {
+              "annotation": "bool | None",
+              "default": null,
+              "description": "Optional flag for verbose response metadata.",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "verbose",
+              "required": false
+            },
+            {
+              "annotation": "str",
+              "default": "me",
+              "description": "Optional Gmail user identifier (defaults to 'me').",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "user_id",
+              "required": false
+            }
+          ],
+          "provider": "gmail",
+          "python_name": "gmail_search",
+          "python_signature": "gmail_search(self, query: str, max_results: int = 20, *, label_ids: typing.Any | None = None, page_token: str | None = None, include_payload: bool | None = None, include_spam_trash: bool | None = None, ids_only: bool | None = None, verbose: bool | None = None, user_id: str = 'me')",
+          "short_description": "Fetches a list of email messages from a Gmail account, supporting filtering, pagination, and optional full content retrieval",
+          "source_line": 407,
+          "source_path": "mcp_agent/actions.py"
+        }
+      ],
+      "all_actions": [
+        "gmail_send_email",
+        "gmail_search"
+      ],
+      "authorized": true,
+      "available_tools": [
+        "gmail_send_email",
+        "gmail_search"
+      ],
+      "configured": true,
+      "display_name": "Gmail",
+      "last_refreshed": "2025-11-16T07:28:58.945346+00:00",
+      "mcp_url": "https://backend.composio.dev/v3/mcp/6b48134b-f60d-4de0-803e-d61ebc4f093d?connected_account_ids=ca_thWm04tNUKhT&user_id=dev-local",
+      "provider": "gmail",
+      "registered": true,
+      "tool_count": 2
+    },
+    {
+      "actions": [
+        {
+          "availability_reason": "unauthorized",
+          "available": false,
+          "description": "Posts a message to a Slack channel, direct message, or private group; requires content via `text`, `blocks`, or `attachments`.",
+          "docstring": "Description:\n    Posts a message to a Slack channel, direct message, or private group; requires content via `text`, `blocks`, or `attachments`.\nArgs:\n    channel: Required channel ID or name (e.g., '#ops').\n    text: Optional plain-text body for the message.\n    markdown_text: Optional markdown-formatted body (`markdown_text` field).\n    blocks: Optional Block Kit payload as JSON string or serializable object.\n    attachments: Optional legacy attachments JSON string or serializable object.\n    thread_ts: Optional parent message timestamp for threaded replies.\n    reply_broadcast: Optional flag to broadcast the thread reply back to the channel.\n    as_user: Optional flag to post as the authenticated Slack user.\n    username: Optional bot username override (requires `as_user=False`).\n    icon_emoji: Optional emoji icon string (e.g., ':robot_face:').\n    icon_url: Optional image URL to use as the icon.\n    link_names: Optional flag to expand channel/user mentions in `text`.\n    parse: Optional Slack parse mode ('none' or 'full').\n    mrkdwn: Optional flag to enable markdown parsing within blocks.\n    unfurl_links: Optional flag to unfurl links contained in attachments.\n    unfurl_media: Optional flag to unfurl media content contained in attachments.",
+          "mcp_tool_name": "SLACK_SEND_MESSAGE",
+          "name": "slack_post_message",
+          "oauth_provider": "slack",
+          "oauth_required": true,
+          "parameters": [
+            {
+              "annotation": "str",
+              "description": "Required channel ID or name (e.g., '#ops').",
+              "has_default": false,
+              "kind": "positional_or_keyword",
+              "name": "channel",
+              "required": true
+            },
+            {
+              "annotation": "str",
+              "default": "",
+              "description": "Optional plain-text body for the message.",
+              "has_default": true,
+              "kind": "positional_or_keyword",
+              "name": "text",
+              "required": false
+            },
+            {
+              "annotation": "str",
+              "default": "",
+              "description": "Optional markdown-formatted body (`markdown_text` field).",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "markdown_text",
+              "required": false
+            },
+            {
+              "annotation": "Any | None",
+              "default": null,
+              "description": "Optional Block Kit payload as JSON string or serializable object.",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "blocks",
+              "required": false
+            },
+            {
+              "annotation": "Any | None",
+              "default": null,
+              "description": "Optional legacy attachments JSON string or serializable object.",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "attachments",
+              "required": false
+            },
+            {
+              "annotation": "str | None",
+              "default": null,
+              "description": "Optional parent message timestamp for threaded replies.",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "thread_ts",
+              "required": false
+            },
+            {
+              "annotation": "bool | None",
+              "default": null,
+              "description": "Optional flag to broadcast the thread reply back to the channel.",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "reply_broadcast",
+              "required": false
+            },
+            {
+              "annotation": "bool | None",
+              "default": null,
+              "description": "Optional flag to post as the authenticated Slack user.",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "as_user",
+              "required": false
+            },
+            {
+              "annotation": "str | None",
+              "default": null,
+              "description": "Optional bot username override (requires `as_user=False`).",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "username",
+              "required": false
+            },
+            {
+              "annotation": "str | None",
+              "default": null,
+              "description": "Optional emoji icon string (e.g., ':robot_face:').",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "icon_emoji",
+              "required": false
+            },
+            {
+              "annotation": "str | None",
+              "default": null,
+              "description": "Optional image URL to use as the icon.",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "icon_url",
+              "required": false
+            },
+            {
+              "annotation": "bool | None",
+              "default": null,
+              "description": "Optional flag to expand channel/user mentions in `text`.",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "link_names",
+              "required": false
+            },
+            {
+              "annotation": "str | None",
+              "default": null,
+              "description": "Optional Slack parse mode ('none' or 'full').",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "parse",
+              "required": false
+            },
+            {
+              "annotation": "bool | None",
+              "default": null,
+              "description": "Optional flag to enable markdown parsing within blocks.",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "mrkdwn",
+              "required": false
+            },
+            {
+              "annotation": "bool | None",
+              "default": null,
+              "description": "Optional flag to unfurl links contained in attachments.",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "unfurl_links",
+              "required": false
+            },
+            {
+              "annotation": "bool | None",
+              "default": null,
+              "description": "Optional flag to unfurl media content contained in attachments.",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "unfurl_media",
+              "required": false
+            }
+          ],
+          "provider": "slack",
+          "python_name": "slack_post_message",
+          "python_signature": "slack_post_message(self, channel: str, text: str = '', *, markdown_text: str = '', blocks: typing.Any | None = None, attachments: typing.Any | None = None, thread_ts: str | None = None, reply_broadcast: bool | None = None, as_user: bool | None = None, username: str | None = None, icon_emoji: str | None = None, icon_url: str | None = None, link_names: bool | None = None, parse: str | None = None, mrkdwn: bool | None = None, unfurl_links: bool | None = None, unfurl_media: bool | None = None)",
+          "short_description": "Posts a message to a Slack channel, direct message, or private group; requires content via `text`, `blocks`, or `attachments`",
+          "source_line": 160,
+          "source_path": "mcp_agent/actions.py",
+          "structured_params": [
+            "attachments",
+            "blocks"
+          ]
+        },
+        {
+          "availability_reason": "unauthorized",
+          "available": false,
+          "description": "Workspace-wide Slack message search with query modifiers (e.g., `in:#channel`, `from:@user`, `before:YYYY-MM-DD`) plus pagination and sorting controls.",
+          "docstring": "Description:\n    Workspace-wide Slack message search with query modifiers (e.g., `in:#channel`, `from:@user`, `before:YYYY-MM-DD`) plus pagination and sorting controls.\nArgs:\n    query: Required Slack search query string.\n    count: Optional number of results per page (defaults to 20, Slack default 1).\n    page: Optional page index for paginated results.\n    sort: Optional sort field ('score' or 'timestamp').\n    sort_dir: Optional direction ('asc' or 'desc').\n    highlight: Optional flag to return highlighted contexts.\n    auto_paginate: Optional flag to iterate through all result pages.",
+          "mcp_tool_name": "SLACK_SEARCH_MESSAGES",
+          "name": "slack_search_messages",
+          "oauth_provider": "slack",
+          "oauth_required": true,
+          "parameters": [
+            {
+              "annotation": "str",
+              "description": "Required Slack search query string.",
+              "has_default": false,
+              "kind": "positional_or_keyword",
+              "name": "query",
+              "required": true
+            },
+            {
+              "annotation": "int",
+              "default": 20,
+              "description": "Optional number of results per page (defaults to 20, Slack default 1).",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "count",
+              "required": false
+            },
+            {
+              "annotation": "int | None",
+              "default": null,
+              "description": "Optional page index for paginated results.",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "page",
+              "required": false
+            },
+            {
+              "annotation": "str | None",
+              "default": null,
+              "description": "Optional sort field ('score' or 'timestamp').",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "sort",
+              "required": false
+            },
+            {
+              "annotation": "str | None",
+              "default": null,
+              "description": "Optional direction ('asc' or 'desc').",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "sort_dir",
+              "required": false
+            },
+            {
+              "annotation": "bool | None",
+              "default": null,
+              "description": "Optional flag to return highlighted contexts.",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "highlight",
+              "required": false
+            },
+            {
+              "annotation": "bool | None",
+              "default": null,
+              "description": "Optional flag to iterate through all result pages.",
+              "has_default": true,
+              "kind": "keyword_only",
+              "name": "auto_paginate",
+              "required": false
+            }
+          ],
+          "provider": "slack",
+          "python_name": "slack_search_messages",
+          "python_signature": "slack_search_messages(self, query: str, *, count: int = 20, page: int | None = None, sort: str | None = None, sort_dir: str | None = None, highlight: bool | None = None, auto_paginate: bool | None = None)",
+          "short_description": "Workspace-wide Slack message search with query modifiers (e.g., `in:#channel`, `from:@user`, `before:YYYY-MM-DD`) plus pagination and sorting controls",
+          "source_line": 266,
+          "source_path": "mcp_agent/actions.py"
+        }
+      ],
+      "all_actions": [
+        "slack_post_message",
+        "slack_search_messages"
+      ],
+      "authorized": false,
+      "available_tools": [],
+      "configured": true,
+      "display_name": "Slack",
+      "last_refreshed": "2025-11-16T07:28:58.945346+00:00",
+      "mcp_url": null,
+      "provider": "slack",
+      "registered": true,
+      "tool_count": 2
+    }
+  ],
+  "registry_version": 1,
+  "user_id": "dev-local"
+}

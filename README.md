@@ -3,7 +3,7 @@
 ## Standalone MCP Planner
 
 The repository now exposes a Python-only planner entrypoint at
-`mcp_agent.planner.execute_mcp_task(task: str, user_id: str = "singleton", budget: Budget | None = None, extra_context: dict | None = None) -> MCPTaskResult`.
+`mcp_agent.planner.execute_mcp_task(task: str, *, user_id: str, budget: Budget | None = None, extra_context: dict | None = None) -> MCPTaskResult`.
 
 - Returns a structured result with `success`, `final_summary`, `raw_outputs`, `budget_usage`, `logs`, and optional `error`.
 - Budgets cover steps, tool calls, sandbox runs, and estimated LLM spend (tracked via `shared.token_cost_tracker`).
@@ -15,7 +15,7 @@ The repository now exposes a Python-only planner entrypoint at
 
 To add another provider in this architecture:
 
-1. Implement wrapper functions in `mcp_agent.actions` that normalize inputs and call `MCPAgent.current().call_tool`.
+1. Implement wrapper functions in `mcp_agent.actions` that normalize inputs and call `MCPAgent.current(user_id).call_tool`.
 2. Ensure OAuth/registry configuration is available (via `OAuthManager`) so the builder can mark the provider as authorized and the wrappers can execute.
 3. Regenerate the toolbox (`toolbox/builder.py`) so manifests and sandbox Python stubs include the new provider; the planner continues to consume discovery data via `search_tools(...)`.
 
@@ -29,7 +29,7 @@ To add another provider in this architecture:
 
 - Action helpers in `mcp_agent/actions.py` now return structured `ToolInvocationResult` dictionaries (`successful`, `error`, `data`, etc.) instead of Python string snippets; update any direct consumers accordingly.
 - Multi-tenant runs rely on a normalized `user_id` and the `TB_USER_ID` environment variable. The planner sets this automatically for sandbox subprocesses, but bespoke runners must export it before invoking generated sandbox code to ensure MCP calls route to the correct registry bucket.
-- MCP registries, toolbox manifests, and planner raw outputs are now scoped per user and guarded by locks so concurrent requests do not leak state. When integrating, always pass the caller’s `user_id` into `execute_mcp_task(...)` (defaults to `"singleton"` for single-tenant use).
+- MCP registries, toolbox manifests, and planner raw outputs are now scoped per user and guarded by locks so concurrent requests do not leak state. When integrating, always pass the caller’s stable `user_id` into `execute_mcp_task(...)`. For local testing, use `mcp_agent.dev.resolve_dev_user()` or export `TB_USER_ID` once and reuse it.
 
 ### Legacy scripts
 

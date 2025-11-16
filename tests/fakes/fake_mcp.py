@@ -13,13 +13,21 @@ class StubMCPClient:
         self.headers: Dict[str, str] = {}
 
     def call(self, tool: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._build_response(tool, payload)
+
+    async def acall(self, tool: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return self._build_response(tool, payload)
+
+    def _build_response(self, tool: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         CALL_HISTORY.append({"provider": self.provider, "tool": tool, "payload": payload})
         return {
             "successful": True,
             "data": {
-                "provider": self.provider,
-                "tool": tool,
-                "echo": payload,
+                "data": {
+                    "provider": self.provider,
+                    "tool": tool,
+                    "echo": payload,
+                }
             },
             "logs": [f"{self.provider}.{tool} invoked"],
         }

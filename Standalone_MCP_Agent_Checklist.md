@@ -30,7 +30,7 @@ Reference checklist derived from the "Standalone MCP Agent Plan (Detailed, Pytho
 - [x] Add regression tests (or reuse existing ones) to confirm core registry refresh logic still runs when new Composio connections appear.
 
 ## 4. Layer 2 – Action Wrappers
-- [x] Enumerate existing wrappers (`slack_post_message`, `gmail_send_email`, etc.) and confirm they only call MCP through `MCPAgent.current().call_tool`.
+- [x] Enumerate existing wrappers (`slack_post_message`, `gmail_send_email`, etc.) and confirm they only call MCP through `MCPAgent.current(user_id).call_tool`.
 - [x] Normalize arguments inside each wrapper (lists vs strings, payload schemas) per plan requirements.
 - [x] Ensure `emit_event(...)` telemetry fires from every wrapper call.
 - [x] Document how new providers add wrappers without touching the planner.

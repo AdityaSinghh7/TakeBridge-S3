@@ -15,14 +15,16 @@ from mcp_agent.actions import (
     describe_available_actions,
 )
 from mcp_agent.mcp_agent import MCPAgent
+from mcp_agent.user_identity import normalize_user_id, require_env_user_id
 from shared.streaming import emit_event
 
 
 class MCPAgentBridge(MCPToolBridge):
     """Concrete MCP bridge backed by the legacy MCPAgent."""
 
-    def __init__(self) -> None:
-        self._agent = MCPAgent()
+    def __init__(self, user_id: str | None = None) -> None:
+        resolved = normalize_user_id(user_id) if user_id is not None else require_env_user_id()
+        self._agent = MCPAgent(resolved)
         MCPAgent.set_current(self._agent)
 
     def set_step(self, step_index: Optional[int]) -> None:
@@ -57,13 +59,14 @@ class MCPAgentBridge(MCPToolBridge):
                 name=entry["name"],
                 doc=entry.get("doc", ""),
             )
-            for entry in describe_available_actions()
+            for entry in describe_available_actions(user_id=self._agent.user_id)
         ]
 
 
 @contextmanager
-def configure_mcp_tools(constraints: Optional[ToolConstraints]) -> Iterator[None]:
+def configure_mcp_tools(constraints: Optional[ToolConstraints], *, user_id: str | None = None) -> Iterator[None]:
     """Apply tool constraints and synchronize MCP action shims for the run."""
+    active_user = normalize_user_id(user_id) if user_id is not None else require_env_user_id()
     providers = None
     tools = None
     mode = "auto"
@@ -73,7 +76,7 @@ def configure_mcp_tools(constraints: Optional[ToolConstraints]) -> Iterator[None
             providers = constraints.providers
             tools = constraints.tools
     configure_mcp_action_filters(providers, tools)
-    sync_registered_actions()
+    sync_registered_actions(user_id=active_user)
     emit_event(
         "runner.tools.configured",
         {
@@ -86,4 +89,4 @@ def configure_mcp_tools(constraints: Optional[ToolConstraints]) -> Iterator[None
         yield
     finally:
         configure_mcp_action_filters(None, None)
-        sync_registered_actions()
+        sync_registered_actions(user_id=active_user)

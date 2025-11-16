@@ -13,8 +13,10 @@ from shared.streaming import emit_event
 from mcp_agent.actions import get_provider_action_map
 from mcp_agent.oauth import OAuthManager
 from mcp_agent.registry import init_registry, is_registered, registry_version
+from mcp_agent.user_identity import normalize_user_id
 
 from .models import ParameterSpec, ProviderSpec, ToolSpec, ToolboxManifest
+from .index import ToolboxIndex
 from .python_generator import PythonGenerator
 from .utils import (
     action_signature,
@@ -98,8 +100,8 @@ def _detect_helper_params(
 class ToolboxBuilder:
     """Build and persist tool metadata derived from MCP action wrappers."""
 
-    def __init__(self, *, user_id: str | None = None, base_dir: Path | None = None):
-        self.user_id = (user_id or "singleton").strip() or "singleton"
+    def __init__(self, *, user_id: str, base_dir: Path | None = None):
+        self.user_id = normalize_user_id(user_id)
         self.base_dir = (base_dir or default_toolbox_root()).resolve()
         self.generated_at = utcnow_iso()
 
@@ -108,17 +110,18 @@ class ToolboxBuilder:
         providers: List[ProviderSpec] = []
         for provider, funcs in sorted(get_provider_action_map().items()):
             providers.append(self._build_provider(provider, funcs))
+        current_version = registry_version(self.user_id)
         payload = {
             "user_id": self.user_id,
             "generated_at": self.generated_at,
-            "registry_version": registry_version(self.user_id),
+            "registry_version": current_version,
             "providers": [provider.to_dict() for provider in providers],
         }
         fingerprint = fingerprint_manifest(payload)
         return ToolboxManifest(
             user_id=self.user_id,
             generated_at=self.generated_at,
-            registry_version=registry_version(self.user_id),
+            registry_version=current_version,
             fingerprint=fingerprint,
             providers=providers,
         )
@@ -246,8 +249,6 @@ class ToolboxBuilder:
 
         return_annotation = format_annotation(signature.return_annotation)
         provider_literal, mcp_tool = extract_call_tool_metadata(func)
-        if not mcp_tool:
-            mcp_tool = f"{provider.upper()}_{func.__name__.upper()}"
         available = authorized and registered
         if not authorized:
             reason = "unauthorized"
@@ -307,13 +308,13 @@ def _write_existing_manifest(entry: CacheEntry) -> None:
 
 
 def get_manifest(
-    user_id: str | None = None,
+    user_id: str,
     *,
     refresh: bool = False,
     persist: bool = True,
     base_dir: Path | None = None,
 ) -> ToolboxManifest:
-    user = (user_id or "singleton").strip() or "singleton"
+    user = normalize_user_id(user_id)
     root = (base_dir or default_toolbox_root()).resolve()
     key = _cache_key(user, root)
     current_version = registry_version(user)
@@ -355,7 +356,7 @@ def get_manifest(
 
 
 def refresh_manifest(
-    user_id: str | None = None,
+    user_id: str,
     *,
     base_dir: Path | None = None,
 ) -> ToolboxManifest:
@@ -365,7 +366,7 @@ def refresh_manifest(
 def invalidate_manifest_cache(user_id: str | None = None) -> None:
     normalized = None
     if user_id is not None:
-        normalized = (user_id or "singleton").strip() or "singleton"
+        normalized = normalize_user_id(user_id)
     with _MANIFEST_CACHE_LOCK:
         if normalized is None:
             _MANIFEST_CACHE.clear()
@@ -373,3 +374,17 @@ def invalidate_manifest_cache(user_id: str | None = None) -> None:
         keys_to_remove = [key for key in _MANIFEST_CACHE if key[0] == normalized]
         for key in keys_to_remove:
             _MANIFEST_CACHE.pop(key, None)
+
+
+def get_index(
+    user_id: str,
+    *,
+    base_dir: Path | None = None,
+) -> ToolboxIndex:
+    """
+    Convenience helper to construct a ToolboxIndex for the given user.
+
+    This reuses the manifest cache and does not persist any new files.
+    """
+    manifest = get_manifest(user_id=user_id, base_dir=base_dir, persist=False)
+    return ToolboxIndex.from_manifest(manifest)

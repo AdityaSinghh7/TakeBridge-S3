@@ -10,7 +10,7 @@ Endpoints queried (GET):
 
 Environment:
   SERVER_URL  (default: http://localhost:8000)
-  USER_ID     (default: singleton)
+  USER_ID     (default: dev-local)
   PROVIDER    (default: gmail)
 
 Usage:
@@ -46,7 +46,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Debug MCP OAuth/Composio endpoints")
     parser.add_argument("--provider", default=os.getenv("PROVIDER", "gmail"), help="Provider slug, e.g. gmail, slack")
     parser.add_argument("--base", default=os.getenv("SERVER_URL", "http://localhost:8000"), help="Server base URL")
-    parser.add_argument("--user-id", default=os.getenv("USER_ID", "singleton"), help="User id header value")
+    parser.add_argument("--user-id", default=os.getenv("USER_ID", "dev-local"), help="User id header value")
     args = parser.parse_args()
 
     base = args.base.rstrip("/")
@@ -81,4 +81,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

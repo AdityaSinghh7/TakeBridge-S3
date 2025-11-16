@@ -9,10 +9,21 @@ from fastapi import APIRouter, Request, HTTPException
 
 from mcp_agent.oauth import OAuthManager
 from mcp_agent.registry import refresh_registry_from_oauth, MCP
+from mcp_agent.user_identity import normalize_user_id
 from computer_use_agent.tools.mcp_action_registry import sync_registered_actions
 
 
 router = APIRouter(prefix="/api/mcp/tools", tags=["mcp-tools (test-only)"])
+
+
+def _require_user_id(request: Request) -> str:
+    raw = (request.headers.get("X-User-Id") or "").strip()
+    if not raw:
+        raise HTTPException(400, "Missing X-User-Id header.")
+    try:
+        return normalize_user_id(raw)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 
 @router.post("/gmail/send_email")
@@ -27,7 +38,7 @@ def gmail_send_email_route(payload: dict, request: Request):
     - bcc (str, optional)
     - thread_id (str, optional)
     """
-    user_id = request.headers.get("X-User-Id", "singleton")
+    user_id = _require_user_id(request)
     if not OAuthManager.is_authorized("gmail", user_id):
         raise HTTPException(400, "unauthorized: gmail not connected for this user")
 
@@ -39,7 +50,7 @@ def gmail_send_email_route(payload: dict, request: Request):
         pass
 
     refresh_registry_from_oauth(user_id)
-    sync_registered_actions()
+    sync_registered_actions(user_id)
     client = MCP.get("gmail")
     if not client:
         raise HTTPException(400, "unconfigured: gmail MCP client missing")

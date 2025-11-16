@@ -17,7 +17,7 @@ def test_perform_initial_discovery_calls_search_tools_once(monkeypatch):
         }
     ]
 
-    def fake_registry_version(user_id=None):
+    def fake_registry_version(user_id):
         return 1
 
     def fake_search_tools(*, query, detail_level, limit, user_id):
@@ -48,7 +48,7 @@ def test_discovery_refreshes_when_registry_version_changes(monkeypatch):
 
     versions = {"value": 1}
 
-    def fake_registry_version(user_id=None):
+    def fake_registry_version(user_id):
         return versions["value"]
 
     def fake_search_tools(*, query, detail_level, limit, user_id):
@@ -78,7 +78,7 @@ def test_discovery_refreshes_when_registry_version_changes(monkeypatch):
 def test_refined_discovery_appends_and_deduplicates(monkeypatch):
     context = PlannerContext(task="demo", user_id="tester", budget=Budget())
 
-    def fake_registry_version(user_id=None):
+    def fake_registry_version(user_id):
         return 1
 
     def fake_search_tools(*, query, detail_level, limit, user_id):
@@ -100,13 +100,13 @@ def test_refined_discovery_appends_and_deduplicates(monkeypatch):
 
     perform_refined_discovery(context, query="gmail attachments", detail_level="full", limit=3)
     assert len(context.search_results) == 1, "Duplicate tool entries should be deduplicated."
-    assert context.tool_menu[0]["short_description"] == "gmail attachments"
+    assert context.tool_menu[0]["qualified_name"] == "gmail.gmail_search"
 
 
 def test_discovery_allows_unknown_providers(monkeypatch):
     context = PlannerContext(task="notion work", user_id="tester", budget=Budget())
 
-    def fake_registry_version(user_id=None):
+    def fake_registry_version(user_id):
         return 1
 
     def fake_search_tools(*, query, detail_level, limit, user_id):

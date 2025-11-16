@@ -13,6 +13,8 @@ from mcp_agent import registry
 from mcp_agent.mcp_agent import MCPAgent
 from tests.fakes.fake_mcp import CALL_HISTORY, reset_history
 
+TEST_USER = "test-user"
+
 
 class ScriptedLLM:
     def __init__(self, commands: List[dict]):
@@ -34,14 +36,14 @@ def fake_registry(monkeypatch):
     registry.MCP.clear()
     registry._REGISTRY_VERSION_BY_USER = {}
     MCPAgent._current_by_user = {}
-    registry.init_registry("singleton")
-    assert registry.is_registered("slack", "singleton")
+    registry.init_registry(TEST_USER)
+    assert registry.is_registered("slack", TEST_USER)
     monkeypatch.setattr(
         "mcp_agent.mcp_agent.init_registry",
-        lambda user_id=None: registry.init_registry(user_id or "singleton"),
+        lambda user_id: registry.init_registry(user_id),
     )
     class _StubAgent:
-        def __init__(self, user_id: str = "singleton") -> None:
+        def __init__(self, user_id: str = TEST_USER) -> None:
             self.user_id = user_id
 
         def call_tool(self, provider: str, tool: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -52,7 +54,7 @@ def fake_registry(monkeypatch):
 
     monkeypatch.setattr(
         "mcp_agent.mcp_agent.MCPAgent.current",
-        classmethod(lambda cls, user_id=None: _StubAgent(user_id or "singleton")),  # type: ignore[arg-type]
+        classmethod(lambda cls, user_id: _StubAgent(user_id)),  # type: ignore[arg-type]
     )
 
 
@@ -73,12 +75,18 @@ def test_execute_task_with_slack_tool(monkeypatch):
 
     llm = ScriptedLLM(
         [
-            {"type": "tool", "provider": "slack", "tool": "slack_post_message", "payload": {"channel": "#ops", "text": "Hello"}},
-            {"type": "finish", "summary": "sent"},
+            {
+                "type": "tool",
+                "provider": "slack",
+                "tool": "slack_post_message",
+                "payload": {"channel": "#ops", "text": "Hello"},
+                "reasoning": "Use slack_post_message to send the update.",
+            },
+            {"type": "finish", "summary": "sent", "reasoning": "Slack message has been sent."},
         ]
     )
 
-    result = execute_mcp_task("Send Slack update", llm=llm)
+    result = execute_mcp_task("Send Slack update", user_id=TEST_USER, llm=llm)
     assert result["success"] is True, result
     assert result["final_summary"] == "sent"
     assert CALL_HISTORY and CALL_HISTORY[0]["provider"] == "slack"
@@ -100,7 +108,7 @@ def test_execute_task_with_gmail_sandbox(monkeypatch, tmp_path):
     monkeypatch.setattr("mcp_agent.planner.discovery.search_tools", fake_search_tools)
 
     toolbox_root = tmp_path / "toolbox"
-    builder = ToolboxBuilder(user_id="test", base_dir=toolbox_root)
+    builder = ToolboxBuilder(user_id=TEST_USER, base_dir=toolbox_root)
     manifest = builder.build()
     builder.persist(manifest)
 
@@ -110,14 +118,16 @@ return {"sandbox": result}
 """
     llm = ScriptedLLM(
         [
-            {"type": "sandbox", "code": code_body},
-            {"type": "finish", "summary": "gmail done"},
+            {"type": "sandbox", "code": code_body, "reasoning": "Run Gmail search via sandbox code."},
+            {"type": "finish", "summary": "gmail done", "reasoning": "Gmail sandbox work completed."},
         ]
     )
 
-    result = execute_mcp_task("Process Gmail data", llm=llm, toolbox_root=toolbox_root)
+    result = execute_mcp_task("Process Gmail data", user_id=TEST_USER, llm=llm, toolbox_root=toolbox_root)
     assert result["success"] is True, result
-    sandbox_output = result["raw_outputs"].get("sandbox.sandbox", {})
+    sandbox_entries = result["raw_outputs"].get("sandbox.sandbox", [])
+    assert sandbox_entries
+    sandbox_output = sandbox_entries[-1]
     assert sandbox_output["success"] is True
     sandbox_payload = sandbox_output["result"]["sandbox"]["data"]["data"]
     assert sandbox_payload["provider"] == "gmail"

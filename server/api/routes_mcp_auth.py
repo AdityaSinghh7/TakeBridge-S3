@@ -9,6 +9,7 @@ from mcp_agent.oauth import (
     COMPOSIO_KEY as _COMPOSIO_KEY,
     COMPOSIO_API_V3 as _COMPOSIO_API_V3,
 )
+from mcp_agent.user_identity import normalize_user_id
 from mcp_agent.toolbox import (
     get_manifest as get_toolbox_manifest,
     list_providers as toolbox_list_providers,
@@ -25,6 +26,16 @@ from computer_use_agent.tools.mcp_action_registry import sync_registered_actions
 
 
 router = APIRouter(prefix="/api/mcp/auth", tags=["mcp-auth"])
+
+
+def _require_user_id(request: Request) -> str:
+    raw = (request.headers.get("X-User-Id") or "").strip()
+    if not raw:
+        raise HTTPException(400, "Missing X-User-Id header.")
+    try:
+        return normalize_user_id(raw)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
 
 def _normalize_provider(provider: str) -> str:
     return (provider or "").strip().lower()
@@ -44,7 +55,7 @@ def start(
     redirect_error: Optional[str] = None,
 ):
     provider = _normalize_provider(provider)
-    user_id = request.headers.get("X-User-Id", "singleton")
+    user_id = _require_user_id(request)
     # Build redirect deterministically from environment configuration
     redirect_uri = build_redirect(provider)
     if redirect_success or redirect_error:
@@ -71,14 +82,14 @@ def start(
 @router.get("/{provider}/callback", name="oauth_callback")
 def callback(provider: str, request: Request, code: Optional[str] = None, state: Optional[str] = None):
     provider = _normalize_provider(provider)
-    user_id = request.headers.get("X-User-Id", "singleton")
+    user_id = _require_user_id(request)
     try:
         OAuthManager.handle_callback(provider, user_id, code or "", state or "")
         # Pull latest connected account + MCP server details explicitly
         OAuthManager.sync(provider, user_id, force=True)
         # Make newly available clients & actions discoverable to Worker
         refresh_registry_from_oauth(user_id)
-        sync_registered_actions()
+        sync_registered_actions(user_id)
         # Redirect to preferred UI destination if provided
         redirect_url = OAuthManager.consume_redirect_hint(provider, user_id, success=True)
         target = redirect_url or f"/settings/integrations?connected={provider}"
@@ -95,7 +106,7 @@ def callback(provider: str, request: Request, code: Optional[str] = None, state:
 @router.get("/providers")
 def list_providers(request: Request):
     """List configured providers plus caller-specific authorization flags."""
-    user_id = request.headers.get("X-User-Id", "singleton")
+    user_id = _require_user_id(request)
     summaries = toolbox_list_providers(user_id=user_id)
     providers: list[dict[str, Any]] = []
     for entry in summaries:
@@ -122,7 +133,7 @@ def list_providers(request: Request):
 @router.get("/tools/available")
 def available_tools(request: Request, provider: Optional[str] = None):
     """Surface detailed action metadata per provider for UI presentation."""
-    user_id = request.headers.get("X-User-Id", "singleton")
+    user_id = _require_user_id(request)
     requested = _normalize_provider(provider) if provider else None
     manifest = get_toolbox_manifest(user_id=user_id, persist=False)
     providers_out: list[dict[str, Any]] = []
@@ -164,7 +175,7 @@ def search_tools(
     detail: str = "summary",
     limit: int = 20,
 ):
-    user_id = request.headers.get("X-User-Id", "singleton")
+    user_id = _require_user_id(request)
     try:
         results = toolbox_search_tools(
             query=q,
@@ -180,7 +191,7 @@ def search_tools(
 
 @router.get("/status")
 def status(request: Request):
-    user_id = request.headers.get("X-User-Id", "singleton")
+    user_id = _require_user_id(request)
     # Rehydrate from Composio on-demand so status survives restarts
     for prov in ("slack", "gmail"):
         try:
@@ -198,7 +209,7 @@ def status(request: Request):
 def live_status(provider: str, request: Request):
     """Force-refresh provider status directly from Composio before responding."""
     provider = _normalize_provider(provider)
-    user_id = request.headers.get("X-User-Id", "singleton")
+    user_id = _require_user_id(request)
     try:
         OAuthManager.sync(provider, user_id, force=True)
     except Exception as exc:  # pragma: no cover - upstream guard
@@ -224,7 +235,7 @@ def finalize(provider: str, payload: dict, request: Request):
     Body:
       - connected_account_id (str): e.g., "ca_..."
     """
-    user_id = request.headers.get("X-User-Id", "singleton")
+    user_id = _require_user_id(request)
     ca_id = payload.get("connected_account_id") or payload.get("id") or payload.get("ca_id")
     if not ca_id:
         raise HTTPException(400, "connected_account_id is required")
@@ -233,7 +244,7 @@ def finalize(provider: str, payload: dict, request: Request):
         # Explicitly sync to fetch MCP connection details now that we know CA id
         OAuthManager.sync(provider, user_id, force=True)
         refresh_registry_from_oauth(user_id)
-        sync_registered_actions()
+        sync_registered_actions(user_id)
         return summary
     except Exception as e:
         raise HTTPException(400, f"Finalize failed: {e}")
@@ -250,7 +261,7 @@ def disconnect(provider: str, request: Request, connected_account_id: str | None
       - Else, all CAs for (user, provider) are deactivated.
       - Clears MCP URLs/headers so is_authorized() flips to False immediately.
     """
-    user_id = request.headers.get("X-User-Id", "singleton")
+    user_id = _require_user_id(request)
 
     with session_scope() as db:
         if connected_account_id:
@@ -260,7 +271,7 @@ def disconnect(provider: str, request: Request, connected_account_id: str | None
 
     # Clear in-memory registry + re-register actions (removes tools from ACI)
     refresh_registry_from_oauth(user_id)
-    sync_registered_actions()
+    sync_registered_actions(user_id)
 
     return {"status": "disconnected", "provider": provider, **summary}
 
@@ -375,7 +386,7 @@ def debug_mcp_client(request: Request, provider: str, test_tool: str | None = No
       - test_tool: optional tool name to invoke with empty args
     """
     provider = _normalize_provider(provider)
-    user_id = request.headers.get("X-User-Id", "singleton")
+    user_id = _require_user_id(request)
     url = OAuthManager.get_mcp_url(user_id, provider)
     hdrs = OAuthManager.get_headers(user_id, provider)
     if not url:
@@ -404,7 +415,7 @@ def debug_connected_accounts(request: Request, provider: str):
     Uses X-User-Id header for the user filter and env for auth_config id.
     """
     import requests
-    user_id = request.headers.get("X-User-Id", "singleton")
+    user_id = _require_user_id(request)
     prov = _normalize_provider(provider)
     ac_env = f"COMPOSIO_{prov.upper()}_AUTH_CONFIG_ID"
     ac_id = os.getenv(ac_env, "")

@@ -42,16 +42,32 @@ def run_sandbox_plan(
             "label": normalized_label,
         },
     )
-    context.raw_outputs[f"sandbox.{normalized_label}"] = {
+    normalized_result = _collapse_single_key_data(result.result)
+    entry = {
         "type": "sandbox",
         "label": normalized_label,
         "success": result.success,
         "timed_out": result.timed_out,
         "logs": result.logs,
         "error": result.error,
-        "result": result.result,
+        "result": normalized_result,
         "code_preview": code_body[:1200],
     }
-    if result.result is not None:
-        context.summarize_sandbox_output(normalized_label, result.result)
+    key = f"sandbox.{normalized_label}"
+    context.append_raw_output(key, entry)
+    if normalized_result is not None:
+        summary = context.summarize_sandbox_output(normalized_label, normalized_result)
+        if summary:
+            entry["summary"] = summary
     return SandboxExecutionResult(result=result, code_body=code_body)
+
+
+def _collapse_single_key_data(value: Any) -> Any:
+    if isinstance(value, dict):
+        collapsed = {k: _collapse_single_key_data(v) for k, v in value.items()}
+        if set(collapsed.keys()) == {"data"} and isinstance(collapsed["data"], dict):
+            return collapsed["data"]
+        return collapsed
+    if isinstance(value, list):
+        return [_collapse_single_key_data(item) for item in value]
+    return value

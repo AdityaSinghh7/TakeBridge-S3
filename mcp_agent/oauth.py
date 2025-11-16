@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 import typing as t
 import requests
 from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
 from shared.db.engine import session_scope
 from shared.db import crud
+
+from .user_identity import normalize_user_id
 
 # ---- Composio API base + key ----
 COMPOSIO_HOST = os.getenv("COMPOSIO_API_BASE", os.getenv("COMPOSIO_BASE_URL", "https://backend.composio.dev")).rstrip("/")
@@ -37,6 +40,7 @@ AUTH_CONFIG_IDS = {
 #       "last_sync": 1730000000.0
 #   }
 _store: dict[str, dict[str, dict[str, t.Any]]] = {}
+_STORE_LOCK = threading.RLock()
 
 
 def _headers() -> dict[str, str]:
@@ -53,8 +57,9 @@ def _require_auth_config(provider: str) -> str:
 
 
 def _ensure_user(user_id: str) -> None:
-    if user_id not in _store:
-        _store[user_id] = {}
+    with _STORE_LOCK:
+        if user_id not in _store:
+            _store[user_id] = {}
 
 
 class OAuthManager:
@@ -75,7 +80,7 @@ class OAuthManager:
         `redirect_uri` is ignored here for white-label; we always use COMPOSIO_REDIRECT
         in the Composio Auth Config itself.
         """
-        user_id = user_id or "singleton"
+        user_id = normalize_user_id(user_id)
         auth_config_id = _require_auth_config(provider)
 
         url = f"{COMPOSIO_API_V3}/connected_accounts"
@@ -120,24 +125,26 @@ class OAuthManager:
         """Cache preferred redirect destinations for the OAuth finale."""
         if not success_url and not error_url:
             return
-        user_id = user_id or "singleton"
+        user_id = normalize_user_id(user_id)
         _ensure_user(user_id)
-        slot = _store[user_id].setdefault(provider, {})
-        if success_url:
-            slot["redirect_success"] = success_url
-        if error_url:
-            slot["redirect_error"] = error_url
+        with _STORE_LOCK:
+            slot = _store[user_id].setdefault(provider, {})
+            if success_url:
+                slot["redirect_success"] = success_url
+            if error_url:
+                slot["redirect_error"] = error_url
 
     @classmethod
     def consume_redirect_hint(cls, provider: str, user_id: str, success: bool) -> str | None:
         """Pop redirect hints for this provider/user based on outcome."""
-        user_id = user_id or "singleton"
-        prov_store = _store.get(user_id, {})
-        slot = prov_store.get(provider)
-        if not slot:
-            return None
-        success_url = slot.pop("redirect_success", None)
-        error_url = slot.pop("redirect_error", None)
+        user_id = normalize_user_id(user_id)
+        with _STORE_LOCK:
+            prov_store = _store.get(user_id, {})
+            slot = prov_store.get(provider)
+            if not slot:
+                return None
+            success_url = slot.pop("redirect_success", None)
+            error_url = slot.pop("redirect_error", None)
         return success_url if success else (error_url or success_url)
 
     @classmethod
@@ -157,7 +164,7 @@ class OAuthManager:
         either from the account details or by generating one via the MCP servers API.
         Persist the MCP details into memory for this single-user setup.
         """
-        user_id = user_id or "singleton"
+        user_id = normalize_user_id(user_id)
         _ensure_user(user_id)
 
         # 1) Poll the connected account until ACTIVE, then fetch details
@@ -220,40 +227,41 @@ class OAuthManager:
             crud.upsert_mcp_connection(db, ca_row.id, mcp_url, mcp_headers, last_error=None)
 
         # Keep lightweight cache for quick TTL-based sync throttling
-        _store[user_id][provider] = {
-            "connected_account_id": connected_account_id,
-            "mcp_url": mcp_url,
-            "mcp_headers": mcp_headers or {},
-            "last_sync": time.time(),
-        }
+        with _STORE_LOCK:
+            _store[user_id][provider] = {
+                "connected_account_id": connected_account_id,
+                "mcp_url": mcp_url,
+                "mcp_headers": mcp_headers or {},
+                "last_sync": time.time(),
+            }
         return {"provider": provider, "connected_account_id": connected_account_id, "mcp_url": mcp_url}
 
     @classmethod
     def disconnect(cls, provider: str, user_id: str) -> None:
-        user_id = user_id or "singleton"
+        user_id = normalize_user_id(user_id)
         # Also clear DB, not just memory
         with session_scope() as db:
             crud.disconnect_provider(db, user_id, provider)
-        if user_id in _store:
-            _store[user_id].pop(provider, None)
+        with _STORE_LOCK:
+            if user_id in _store:
+                _store[user_id].pop(provider, None)
 
     @classmethod
-    def is_authorized(cls, provider: str, user_id: str | None = None) -> bool:
-        user_id = user_id or "singleton"
+    def is_authorized(cls, provider: str, user_id: str) -> bool:
         with session_scope() as db:
-            return crud.is_authorized(db, user_id, provider)
+            return crud.is_authorized(db, normalize_user_id(user_id), provider)
 
     # ----------------- MCP connection exposure to your registry -----------------
 
     @classmethod
     def get_mcp_url(cls, user_id: str, provider: str) -> str | None:
         with session_scope() as db:
-            url, _ = crud.get_active_mcp_for_provider(db, user_id or "singleton", provider)
+            url, _ = crud.get_active_mcp_for_provider(db, normalize_user_id(user_id), provider)
             return url
 
     @classmethod
     def get_headers(cls, user_id: str, provider: str) -> dict[str, str]:
-        uid = user_id or "singleton"
+        uid = normalize_user_id(user_id)
         with session_scope() as db:
             ca_id, ac_id, _url, hdrs = crud.get_active_context_for_provider(db, uid, provider)
             hdrs = (hdrs or {}).copy()
@@ -299,12 +307,13 @@ class OAuthManager:
         Fetch the latest Connected Account + MCP HTTP server details from Composio
         and cache them in memory. For single-user, this is fine; later back with DB.
         """
-        user_id = user_id or "singleton"
+        user_id = normalize_user_id(user_id)
         _ensure_user(user_id)
 
-        slot = _store[user_id].get(provider, {})
-        last = slot.get("last_sync", 0.0)
-        if not force and (time.time() - last) < 30 and slot.get("mcp_url"):
+        with _STORE_LOCK:
+            slot_snapshot = dict(_store[user_id].get(provider, {}))
+        last = slot_snapshot.get("last_sync", 0.0)
+        if not force and (time.time() - last) < 30 and slot_snapshot.get("mcp_url"):
             return  # fresh enough
 
         auth_config_id = _require_auth_config(provider)
@@ -322,7 +331,7 @@ class OAuthManager:
 
         # Determine which connected account ID to use. If we already know one,
         # prefer it; otherwise list accounts for THIS user + auth_config.
-        existing_ca_id = slot.get("connected_account_id")
+        existing_ca_id = slot_snapshot.get("connected_account_id")
         ca_id = None
         detail = None  # ensure defined; avoids UnboundLocalError when we set later
         if existing_ca_id:
@@ -467,12 +476,13 @@ class OAuthManager:
             crud.upsert_mcp_connection(db, ca_row.id, mcp_url, mcp_headers, last_error=None)
 
         # Lightweight cache for rate-limiting external calls
-        _store[user_id][provider] = {
-            "connected_account_id": ca_id,
-            "mcp_url": mcp_url,
-            "mcp_headers": mcp_headers or {},
-            "last_sync": time.time(),
-        }
+        with _STORE_LOCK:
+            _store[user_id][provider] = {
+                "connected_account_id": ca_id,
+                "mcp_url": mcp_url,
+                "mcp_headers": mcp_headers or {},
+                "last_sync": time.time(),
+            }
 
 
 # ----------------- Module-level helpers for MCP server generation -----------------
@@ -551,12 +561,13 @@ def _ensure_mcp_server(provider: str, auth_config_id: str) -> str:
 
 def _generate_mcp_url(server_id: str, user_id: str, ca_id: str) -> dict:
     """Generate an MCP URL for a given server+user+connected account."""
+    uid = normalize_user_id(user_id)
     r = requests.post(
         f"{COMPOSIO_API_V3}/mcp/servers/generate",
         headers=_headers(),
         json={
             "mcp_server_id": server_id,
-            "user_ids": [user_id or "singleton"],
+            "user_ids": [uid],
             "connected_account_ids": [ca_id],
         },
         timeout=20,
@@ -623,7 +634,7 @@ def _generate_mcp_url(server_id: str, user_id: str, ca_id: str) -> dict:
     chosen_url = connected_url or base_url
     # Make sure chosen_url has explicit binding params
     if chosen_url:
-        chosen_url = _ensure_account_bound_url(chosen_url, user_id or "singleton", ca_id)
+        chosen_url = _ensure_account_bound_url(chosen_url, uid, ca_id)
     return {"mcp_url": chosen_url, "connected_mcp_url": connected_url, "mcp_token": token}
 
 
@@ -640,7 +651,7 @@ def _ensure_account_bound_url(url: str, user_id: str, ca_id: str) -> str:
         q = dict(parse_qsl(pr.query, keep_blank_values=True))
         # Merge without duplicating
         q.setdefault("connected_account_ids", ca_id)
-        q.setdefault("user_id", user_id or "singleton")
+        q.setdefault("user_id", user_id)
         new_q = urlencode(q)
         return urlunparse((pr.scheme, pr.netloc, pr.path, pr.params, new_q, pr.fragment))
     except Exception:

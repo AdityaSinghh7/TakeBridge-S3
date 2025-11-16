@@ -26,7 +26,7 @@ where single-tenant assumptions still exist.
 4. **FastAPI routes (`framework/api/routes_mcp_auth.py`,
    `framework/api/route_composio_redirect.py`)** – API endpoints drive the
    OAuth lifecycle, kick off syncs, and refresh the registry + actions whenever
-   OAuth state changes. Each route reads `X-User-Id` (defaulting to `singleton`)
+   OAuth state changes. Each route requires `X-User-Id`
    to decide which user's rows to touch.
 
 The figure below shows the high-level flow:
@@ -45,7 +45,7 @@ User ↔ FastAPI (OAuth routes) ↔ OAuthManager ↔ Composio APIs
 
 | Table | Purpose | Key fields |
 | --- | --- | --- |
-| `users` | Logical owner of OAuth connections. For now this table usually contains a single row with id `singleton`. | `id`, `created_at` (`framework/db/models.py:18-22`) |
+| `users` | Logical owner of OAuth connections. Legacy single-tenant deployments often used a single row with id `singleton`, but multi-tenant runs insert real user ids. | `id`, `created_at` (`framework/db/models.py:18-22`) |
 | `auth_configs` | Stores the Composio `ac_*` ids per provider (`gmail`, `slack`, …) so we can validate that callbacks map to the intended provider. | `id`, `provider`, `name` (`framework/db/models.py:24-30`) |
 | `connected_accounts` | One row per user ↔ provider connection. Unique on `(user_id, auth_config_id)` so that if a user reconnects we rewrite the existing record instead of creating duplicates. | Columns plus constraint in `framework/db/models.py:32-49` |
 | `mcp_connections` | Tracks the latest HTTP endpoint + headers (JSON) for a connected account, as well as last sync timestamps and error messages. | `framework/db/models.py:51-60` |
@@ -69,8 +69,7 @@ CRUD helpers in `framework/db/crud.py` encapsulate all write patterns:
 
 - **start flow**: `start_oauth` (line `72`) hits Composio’s
   `/connected_accounts` endpoint using the provider’s `auth_config_id`, returns
-  the redirect URL, and tags the request with the `user_id` (falls back to
-  `"singleton"`).
+  the redirect URL, and tags the request with the `user_id`.
 - **finalize**: `finalize_connected_account` (line `123`) waits for the
   connected account to reach `ACTIVE`, ensures an HTTP MCP URL and auth headers
   exist (generating a token if needed), then persists everything via the CRUD
@@ -117,7 +116,7 @@ CRUD helpers in `framework/db/crud.py` encapsulate all write patterns:
 - `/api/mcp/auth/status` → re-syncs each provider (best effort) then reports
   `OAuthManager.is_authorized` per provider.
 
-Every route calls `request.headers.get("X-User-Id", "singleton")` so in theory
+Every route requires an explicit `X-User-Id` header so in theory
 different tenants can co-exist once the rest of the stack forwards that header.
 
 ---
@@ -126,7 +125,7 @@ different tenants can co-exist once the rest of the stack forwards that header.
 
 1. **Start OAuth**
    - Client hits `/api/mcp/auth/{provider}/start`.
-   - Route reads `X-User-Id` (defaults to `singleton`), builds the redirect via
+   - Route reads `X-User-Id`, builds the redirect via
      `build_redirect`, and returns the Composio-hosted URL (`routes_mcp_auth.py:23-39`).
 2. **Provider redirects back**
    - Our branded redirect endpoint `/api/composio-redirect` either forwards the
@@ -153,7 +152,7 @@ different tenants can co-exist once the rest of the stack forwards that header.
 Because the registry is always rebuilt from the DB, we stay resilient across
 process restarts: `app_lifespan` in `framework/api/server.py:27-66` automatically
 invokes `OAuthManager.sync` and `refresh_registry_from_oauth` for the
-`singleton` user when FastAPI boots.
+the user defined by `TB_USER_ID` when FastAPI boots.
 
 ---
 
@@ -161,12 +160,12 @@ invokes `OAuthManager.sync` and `refresh_registry_from_oauth` for the
 
 ### Current state (single-tenant)
 
-- The API **defaults to** `user_id = "singleton"` everywhere (`routes_mcp_auth.py:25`,
+- The API **requires** `user_id` everywhere (`routes_mcp_auth.py:25`,
   `route_composio_redirect.py:29`, `mcp/registry.py:12`, etc.).
-- The orchestrator server warm-up only syncs for this singleton user
+- The orchestrator server warm-up only syncs when `TB_USER_ID` is set
   (`framework/api/server.py:27-66`).
 - `OAuthManager` keeps an in-memory `_store` keyed by user id, but every call
-  falls back to `"singleton"` if the caller passes `None` (`framework/mcp/oauth.py:78-226`).
+  expects a non-empty string (`framework/mcp/oauth.py:78-226`).
 - Result: unless a caller explicitly supplies `X-User-Id`, all OAuth state,
   DB rows, and registry entries belong to the single shared tenant.
 
@@ -183,7 +182,7 @@ to:
    MCPClient}}` or instantiate registry/ACI per request context so providers
    cannot bleed across tenants.
 3. **Inject user context into worker runs** so that `OAuthManager.is_authorized`
-   and action calls look up the correct user’s DB rows instead of the singleton.
+   and action calls look up the correct user’s DB rows instead of a legacy singleton user id.
 4. **Audit caches** (`OAuthManager._store`, ACI method bindings, etc.) so they
    become user-scoped or stateless.
 
@@ -198,11 +197,11 @@ multi-tenant support partially scaffolded at the API boundary and in the DB.
   `COMPOSIO_*_AUTH_CONFIG_ID`, `COMPOSIO_REDIRECT`, `COMPOSIO_TOKEN`,
   `COMPOSIO_MCP_SERVER_ID` manage MCP/OAuth behavior.
 - **Warm start**: restarting the API automatically (best-effort) re-syncs
-  Composio state for the singleton user so previously connected providers keep
+  Composio state for the specified user so previously connected providers keep
   working without manual intervention (`framework/api/server.py:27-66`).
 - **Debug aids**: `/api/mcp/auth/_debug/*` routes expose redirect URLs,
   Config status, direct MCP test calls, and raw DB counts for fast triage.
-- **Local testing**: `tests/*` scripts use the singleton user id and hit the
+- **Local testing**: `tests/*` scripts use the specified user id and hit the
   same API routes, making it easy to reproduce authorization flows without a UI.
 
 ---

@@ -19,13 +19,13 @@ def clear_manifest_cache():
 
 
 def test_toolbox_builder_persists_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(builder_module, "init_registry", lambda user_id=None: None)
-    monkeypatch.setattr(builder_module, "is_registered", lambda provider, user_id=None: True)
-    monkeypatch.setattr(builder_module, "registry_version", lambda user_id=None: 1)
+    monkeypatch.setattr(builder_module, "init_registry", lambda user_id: None)
+    monkeypatch.setattr(builder_module, "is_registered", lambda provider, user_id: True)
+    monkeypatch.setattr(builder_module, "registry_version", lambda user_id: 1)
     monkeypatch.setattr(
         builder_module.OAuthManager,
         "is_authorized",
-        classmethod(lambda cls, provider, user_id=None: provider == "slack"),
+        classmethod(lambda cls, provider, user_id: provider == "slack"),
     )
     monkeypatch.setattr(
         builder_module.OAuthManager,
@@ -78,7 +78,7 @@ def test_get_manifest_caches_by_registry_version(
 
     class StubBuilder:
         def __init__(self, *, user_id=None, base_dir=None):
-            self.user_id = user_id or "singleton"
+            self.user_id = user_id
             self.base_dir = base_dir
 
         def build(self) -> ToolboxManifest:
@@ -95,7 +95,7 @@ def test_get_manifest_caches_by_registry_version(
             return {"manifest": 1}
 
     monkeypatch.setattr(builder_module, "ToolboxBuilder", StubBuilder)
-    monkeypatch.setattr(builder_module, "registry_version", lambda user_id=None: state["version"])
+    monkeypatch.setattr(builder_module, "registry_version", lambda user_id: state["version"])
 
     manifest1 = builder_module.get_manifest(
         user_id="tester", persist=False, base_dir=tmp_path
@@ -154,7 +154,14 @@ def test_search_tools_respects_detail_levels(monkeypatch: pytest.MonkeyPatch):
         fingerprint="fp",
         providers=[provider],
     )
-    monkeypatch.setattr(search_module, "get_manifest", lambda **_: manifest)
+
+    from mcp_agent.toolbox.index import ToolboxIndex
+
+    monkeypatch.setattr(
+        search_module,
+        "get_index",
+        lambda **_: ToolboxIndex.from_manifest(manifest),
+    )
 
     names = search_module.search_tools(query="slack", detail_level="names", user_id="u")
     assert names[0]["qualified_name"] == "slack.send_message"
@@ -162,8 +169,13 @@ def test_search_tools_respects_detail_levels(monkeypatch: pytest.MonkeyPatch):
     summary = search_module.search_tools(
         query="message", detail_level="summary", user_id="u"
     )[0]
-    assert summary["parameters"] == ["channel"]
-    assert summary["path"].endswith("send_message.json")
+    assert summary["qualified_name"] == "slack.send_message"
+    assert summary["short_description"] == "Send message"
+    assert summary["path"].endswith("sandbox_py/servers/slack/send_message.py")
+    assert summary["tool_id"] == "slack.send_message"
+    assert summary["server"] == "slack"
+    assert summary["py_module"] == "sandbox_py.servers.slack"
+    assert summary["py_name"] == "send_message"
 
     full = search_module.search_tools(
         query="message", detail_level="full", user_id="u"

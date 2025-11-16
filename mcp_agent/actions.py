@@ -3,12 +3,12 @@ import json
 import os
 from typing import Any, Callable, Iterable, Tuple, cast
 
-from .registry import init_registry, is_registered
+from .registry import is_registered
 from .oauth import OAuthManager
 from .mcp_agent import MCPAgent
 from .types import ToolInvocationResult
+from .user_identity import normalize_user_id, require_env_user_id
 from shared.streaming import emit_event
-init_registry()
 
 SUPPORTED_PROVIDERS: tuple[str, ...] = ("slack", "gmail")
 
@@ -21,8 +21,14 @@ def _payload_key_list(payload: dict[str, Any] | None) -> list[str]:
     return sorted(str(key) for key in payload.keys())
 
 
+def _resolve_user_id(user_id: str | None = None) -> str:
+    if user_id is not None:
+        return normalize_user_id(user_id)
+    return require_env_user_id()
+
+
 def _current_user_id() -> str:
-    return (os.getenv("TB_USER_ID") or "singleton").strip() or "singleton"
+    return _resolve_user_id()
 
 
 def _structured_result(
@@ -65,6 +71,7 @@ def _normalize_tool_response(
     if success is None:
         success = True
     normalized["successful"] = bool(success)
+    normalized.pop("successfull", None)
     normalized.setdefault("error", normalized.get("error"))
     normalized.setdefault("data", normalized.get("data"))
     normalized.setdefault("logs", normalized.get("logs"))
@@ -518,8 +525,9 @@ def _tool_allowed(tool: str) -> bool:
     return _ALLOWED_TOOLS is None or tool in _ALLOWED_TOOLS
 
 
-def iter_available_action_functions():
+def iter_available_action_functions(user_id: str | None = None):
     """Yield (provider, function) pairs for currently available MCP actions."""
+    active_user = _resolve_user_id(user_id)
     for provider, funcs in _provider_actions_map().items():
         if not _provider_allowed(provider):
             emit_event(
@@ -527,13 +535,13 @@ def iter_available_action_functions():
                 {"server": provider, "reason": "filtered"},
             )
             continue
-        if not OAuthManager.is_authorized(provider):
+        if not OAuthManager.is_authorized(provider, user_id=active_user):
             emit_event(
                 "mcp.actions.registration.skipped",
                 {"server": provider, "reason": "unauthorized"},
             )
             continue
-        if not is_registered(provider):
+        if not is_registered(provider, active_user):
             emit_event(
                 "mcp.actions.registration.skipped",
                 {"server": provider, "reason": "unconfigured"},
@@ -563,12 +571,12 @@ def describe_provider_actions() -> dict[str, dict[str, Any]]:
     return catalog
 
 
-def describe_available_actions() -> list[dict[str, Any]]:
+def describe_available_actions(user_id: str | None = None) -> list[dict[str, Any]]:
     """Return metadata for MCP actions that are currently available."""
     catalog = describe_provider_actions()
     available: list[dict[str, Any]] = []
     allowed_names: dict[str, set[str]] = {}
-    for provider, fn in iter_available_action_functions():
+    for provider, fn in iter_available_action_functions(user_id=user_id):
         allowed_names.setdefault(provider, set()).add(fn.__name__)
     for provider, names in allowed_names.items():
         provider_info = catalog.get(provider, {})

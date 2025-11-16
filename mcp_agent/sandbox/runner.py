@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from mcp_agent.env_sync import ensure_env_for_provider
 
 SENTINEL = "___TB_RESULT___"
 
@@ -50,6 +51,9 @@ def run_python_plan(
     if not toolbox_root.exists():
         raise FileNotFoundError(f"toolbox_root does not exist: {toolbox_root}")
 
+    for provider in ("gmail", "slack"):
+        ensure_env_for_provider(user_id, provider)
+
     plan_source = _build_plan_source(code_body or "    pass")
 
     repo_root = Path(__file__).resolve().parents[2]
@@ -89,16 +93,23 @@ def run_python_plan(
     stdout = completed.stdout or ""
     stderr = completed.stderr or ""
     logs, parsed_result = _parse_process_output(stdout)
-    logs.extend(line for line in stderr.splitlines() if line)
+    stderr_lines = [line for line in stderr.splitlines() if line]
+    logs.extend(stderr_lines)
 
     success = completed.returncode == 0 and parsed_result is not None
     error: Optional[str] = None
     if not success:
-        error = (
+        detail = stderr_lines[0] if stderr_lines else (logs[0] if logs else "")
+        base = (
             f"sandbox exited with code {completed.returncode}"
             if completed.returncode
             else "sandbox produced no result"
         )
+        if detail:
+            detail = detail.strip()
+            error = f"{base}: {detail[:200]}"
+        else:
+            error = base
 
     return SandboxResult(
         success=success,

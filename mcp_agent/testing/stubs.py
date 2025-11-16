@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 import types
-from contextlib import contextmanager
+from contextlib import contextmanager, asynccontextmanager
 from pathlib import Path
 
 
@@ -35,8 +35,28 @@ def ensure_test_stubs() -> None:
         client_module = types.ModuleType("mcp.client")
         stream_module = types.ModuleType("mcp.client.streamable_http")
 
+        @asynccontextmanager
         async def _streamablehttp_client(*args, **kwargs):  # pragma: no cover
-            raise RuntimeError("streamablehttp_client stub")
+            """
+            Async-contextmanager-compatible stub for streamablehttp_client.
+
+            Yields no-op read/write/close callables that raise on use, so code
+            can safely enter the context without hitting coroutine shape errors.
+            """
+
+            async def _read() -> bytes:
+                raise RuntimeError("streamablehttp_client stub")
+
+            async def _write(_chunk) -> None:
+                raise RuntimeError("streamablehttp_client stub")
+
+            async def _close() -> None:
+                return None
+
+            try:
+                yield _read, _write, _close
+            finally:
+                await _close()
 
         stream_module.streamablehttp_client = _streamablehttp_client
         client_module.streamable_http = stream_module

@@ -26,8 +26,12 @@ def parse_planner_command(text: str) -> Dict[str, Any]:
         raise ValueError("Planner response must be a JSON object.")
 
     cmd_type = command.get("type")
-    if cmd_type not in {"tool", "sandbox", "finish", "search"}:
+    if cmd_type not in {"tool", "sandbox", "finish", "search", "fail"}:
         raise ValueError("Planner response missing 'type' or unsupported command.")
+    reasoning = command.get("reasoning")
+    if not isinstance(reasoning, str) or not reasoning.strip():
+        raise ValueError("Planner command must include non-empty 'reasoning' string.")
+    command["reasoning"] = reasoning.strip()
     _VALIDATORS[cmd_type](command)
     return command
 
@@ -38,11 +42,29 @@ def _ensure(condition: bool, message: str) -> None:
 
 
 def _validate_tool(command: Dict[str, Any]) -> None:
+    tool_id = command.get("tool_id")
+    server = command.get("server")
+    args = command.get("args")
+
     provider = command.get("provider")
     tool = command.get("tool")
-    payload = command.get("payload", {}) or {}
+    payload = command.get("payload")
+
+    if tool_id and server:
+        _ensure(isinstance(tool_id, str) and tool_id.strip(), "Tool command requires non-empty 'tool_id'.")
+        _ensure(isinstance(server, str) and server.strip(), "Tool command requires non-empty 'server'.")
+        if args is None:
+            args = {}
+        _ensure(isinstance(args, dict), "Tool command 'args' must be an object.")
+        command["tool_id"] = tool_id.strip()
+        command["server"] = server.strip()
+        command["args"] = args
+        return
+
     _ensure(isinstance(provider, str) and provider.strip(), "Tool command requires non-empty 'provider'.")
     _ensure(isinstance(tool, str) and tool.strip(), "Tool command requires non-empty 'tool'.")
+    if payload is None:
+        payload = {}
     _ensure(isinstance(payload, dict), "Tool command 'payload' must be an object.")
     command["provider"] = provider.strip()
     command["tool"] = tool.strip()
@@ -77,9 +99,18 @@ def _validate_search(command: Dict[str, Any]) -> None:
         )
 
 
+def _validate_fail(command: Dict[str, Any]) -> None:
+    reason = command.get("reason")
+    _ensure(
+        isinstance(reason, str) and reason.strip(),
+        "Fail command requires non-empty 'reason'.",
+    )
+
+
 _VALIDATORS = {
     "tool": _validate_tool,
     "sandbox": _validate_sandbox,
     "finish": _validate_finish,
     "search": _validate_search,
+    "fail": _validate_fail,
 }

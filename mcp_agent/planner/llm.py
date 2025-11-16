@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 from typing import Any, Dict, List
 
 from shared.oai_client import OAIClient, extract_assistant_text
@@ -27,19 +28,33 @@ class PlannerLLM:
         snapshot = context.budget_tracker.snapshot()
         messages = self._build_messages(context, snapshot)
 
-        if not self._llm_enabled():
+        if not self.is_enabled():
             context.record_event(
                 "mcp.llm.skipped",
                 {"model": self.model, "reason": "disabled"},
             )
             return {"messages": messages, "text": "", "response": None}
 
-        response = self._get_client().create_response(
-            model=self.model,
-            messages=messages,
-            reasoning_effort="medium",
-            max_output_tokens=1200,
-        )
+        client = self._get_client()
+        json_mode_text = {"format": {"type": "json_object"}}
+        json_mode_kwargs = {
+            "model": self.model,
+            "messages": messages,
+            "reasoning_effort": "high",
+            "max_output_tokens": 10000,
+            "text": json_mode_text,
+            "reasoning_summary": "auto",
+        }
+        try:
+            response = client.create_response(**json_mode_kwargs)
+        except TypeError as exc:
+            # Older openai SDKs may not yet support `response_format`. Fall back gracefully.
+            context.record_event(
+                "mcp.llm.json_mode.unsupported",
+                {"model": self.model, "error": str(exc)},
+            )
+            json_mode_kwargs.pop("text", None)
+            response = client.create_response(**json_mode_kwargs)
         context.token_tracker.record_response(self.model, "planner.llm", response)
         total_cost = getattr(context.token_tracker, "total_cost_usd", None)
         if isinstance(total_cost, (int, float)):
@@ -54,6 +69,9 @@ class PlannerLLM:
             "text": text,
             "response": response,
         }
+
+    def is_enabled(self) -> bool:
+        return self._llm_enabled()
 
     def _llm_enabled(self) -> bool:
         if self._enabled_override is not None:
@@ -71,47 +89,23 @@ class PlannerLLM:
         context: PlannerContext,
         snapshot: BudgetSnapshot,
     ) -> List[Dict[str, Any]]:
-        messages: List[Dict[str, Any]] = [
-            {"role": "system", "content": context.planner_prompt},
-            {
-                "role": "user",
-                "content": context.task,
-            },
-        ]
         developer_content = self._developer_message(context, snapshot)
-        messages.append({"role": "developer", "content": developer_content})
-        return messages
+        user_payload = json.dumps(
+            {"task": context.task, "extra_context": context.extra_context},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        return [
+            {"role": "system", "content": context.planner_prompt},
+            {"role": "developer", "content": developer_content},
+            {"role": "user", "content": user_payload},
+        ]
 
     def _developer_message(
         self,
         context: PlannerContext,
         snapshot: BudgetSnapshot,
     ) -> str:
-        lines = [
-            "You are the planner runtime. Use available tools/sandbox to solve the task.",
-            f"Budget remaining: steps {snapshot.steps_taken}/{snapshot.max_steps}, "
-            f"tool_calls {snapshot.tool_calls}/{snapshot.max_tool_calls}, "
-            f"code_runs {snapshot.code_runs}/{snapshot.max_code_runs}, "
-            f"llm_cost ${snapshot.estimated_llm_cost_usd:.4f}/{snapshot.max_llm_cost_usd:.2f}.",
-        ]
-        if context.tool_menu:
-            lines.append("Top tools:")
-            for tool in context.tool_menu[:5]:
-                short = tool.get("short_description") or ""
-                lines.append(
-                    f"- {tool.get('qualified_name')} "
-                    f"(available={tool.get('available')}) — {short}"
-                )
-        else:
-            lines.append("No discovery results yet.")
-        if context.tool_summaries:
-            lines.append("Recent tool summaries:")
-            for summary in context.tool_summaries[-3:]:
-                lines.append(f"- {summary.get('label', 'tool')} :: {summary.get('notes', '')}")
-        if context.sandbox_summaries:
-            lines.append("Recent sandbox summaries:")
-            for summary in context.sandbox_summaries[-2:]:
-                lines.append(f"- {summary.get('label', 'sandbox')} :: {summary.get('notes', '')}")
-        if context.extra_context:
-            lines.append(f"Extra context keys: {', '.join(sorted(context.extra_context.keys()))}")
-        return "\n".join(lines)
+        state = context.planner_state(snapshot)
+        state_json = json.dumps(state, ensure_ascii=False, sort_keys=True, indent=2)
+        return f"PLANNER_STATE_JSON\n{state_json}"

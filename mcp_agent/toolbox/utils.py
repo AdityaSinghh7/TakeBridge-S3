@@ -99,6 +99,14 @@ def action_signature(func: Any) -> str:
         return func.__name__
 
 
+def _call_name(node: ast.AST) -> Optional[str]:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
 def relative_source_path(func: Any) -> tuple[str | None, int | None]:
     try:
         src_file = inspect.getsourcefile(func) or inspect.getfile(func)
@@ -130,24 +138,47 @@ def extract_call_tool_metadata(func: Any) -> tuple[Optional[str], Optional[str]]
     tool_name: Optional[str] = None
 
     class Visitor(ast.NodeVisitor):
+        def __init__(self) -> None:
+            self._string_assignments: Dict[str, str] = {}
+
+        def visit_Assign(self, node: ast.Assign) -> Any:
+            target = node.targets[0] if node.targets else None
+            if (
+                isinstance(target, ast.Name)
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)
+            ):
+                self._string_assignments[target.id] = node.value.value
+            self.generic_visit(node)
+
+        def _string_value(self, node: ast.AST | None) -> Optional[str]:
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                return node.value
+            if isinstance(node, ast.Name):
+                return self._string_assignments.get(node.id)
+            return None
+
         def visit_Call(self, node: ast.Call) -> Any:
             nonlocal provider, tool_name
             if provider and tool_name:
                 return
             func_node = node.func
-            if isinstance(func_node, ast.Attribute) and func_node.attr == "call_tool":
-                args = node.args or []
-                if len(args) >= 2:
-                    first, second = args[0], args[1]
-                    if (
-                        isinstance(first, ast.Constant)
-                        and isinstance(first.value, str)
-                        and isinstance(second, ast.Constant)
-                        and isinstance(second.value, str)
-                    ):
-                        provider = first.value
-                        tool_name = second.value
-                        return
+            call_name = _call_name(func_node)
+            if call_name not in {"call_tool", "_invoke_mcp_tool"}:
+                self.generic_visit(node)
+                return
+
+            args = node.args or []
+            if len(args) < 2:
+                self.generic_visit(node)
+                return
+            first, second = args[0], args[1]
+            provider_value = self._string_value(first)
+            tool_value = self._string_value(second)
+            if provider_value and tool_value:
+                provider = provider_value
+                tool_name = tool_value
+                return
             self.generic_visit(node)
 
     Visitor().visit(tree)

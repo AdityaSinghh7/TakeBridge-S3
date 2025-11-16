@@ -7,6 +7,13 @@ import pytest
 
 import mcp_agent.actions as actions
 
+TEST_USER = "test-user"
+
+
+@pytest.fixture(autouse=True)
+def _set_user(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("TB_USER_ID", TEST_USER)
+
 
 class DummyAgent:
     def __init__(self) -> None:
@@ -20,7 +27,7 @@ class DummyAgent:
 def _patch_agent(monkeypatch: pytest.MonkeyPatch) -> DummyAgent:
     agent = DummyAgent()
 
-    def fake_current(cls, user_id=None):
+    def fake_current(cls, user_id):
         return agent
 
     monkeypatch.setattr(actions.MCPAgent, "current", classmethod(fake_current))
@@ -28,7 +35,7 @@ def _patch_agent(monkeypatch: pytest.MonkeyPatch) -> DummyAgent:
 
 
 def _patch_authorization(monkeypatch: pytest.MonkeyPatch, allowed: Dict[str, bool]) -> None:
-    def fake_is_authorized(cls, provider: str, user_id: str | None = None) -> bool:
+    def fake_is_authorized(cls, provider: str, user_id: str) -> bool:
         return allowed.get(provider, False)
 
     monkeypatch.setattr(actions.OAuthManager, "is_authorized", classmethod(fake_is_authorized))
@@ -89,7 +96,7 @@ def test_gmail_send_email_requires_auth_and_logs_skip(monkeypatch: pytest.Monkey
     assert result["tool"] == "GMAIL_SEND_EMAIL"
     assert (
         "mcp.call.skipped",
-        {"server": "gmail", "tool": "GMAIL_SEND_EMAIL", "reason": "unauthorized", "user_id": "singleton"},
+        {"server": "gmail", "tool": "GMAIL_SEND_EMAIL", "reason": "unauthorized", "user_id": TEST_USER},
     ) in events
 
 

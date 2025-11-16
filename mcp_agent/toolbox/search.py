@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Literal
 
-from .builder import get_manifest
+from mcp_agent.user_identity import normalize_user_id
+
+from .builder import get_index
+from .index import ToolboxIndex
 from .models import ProviderSpec, ToolSpec
 from .utils import safe_filename
 
 DetailLevel = Literal["names", "summary", "full"]
 
 
-def list_providers(user_id: str | None = None) -> List[Dict[str, Any]]:
-    manifest = get_manifest(user_id=user_id, persist=False)
+def list_providers(user_id: str) -> List[Dict[str, Any]]:
+    normalized = normalize_user_id(user_id)
+    manifest = get_manifest(user_id=normalized, persist=False)
     providers = []
     for provider in manifest.providers:
         entry = provider.summary()
@@ -25,22 +30,28 @@ def search_tools(
     provider: str | None = None,
     detail_level: DetailLevel = "summary",
     limit: int = 20,
-    user_id: str | None = None,
-) -> List[Dict[str, Any]]:
+    user_id: str,
+    ) -> List[Dict[str, Any]]:
+    normalized_user = normalize_user_id(user_id)
     norm_query = _normalize_query(query)
     provider_filter = provider.lower().strip() if provider else None
-    manifest = get_manifest(user_id=user_id, persist=False)
+    index: ToolboxIndex = get_index(user_id=normalized_user, base_dir=None)
     matches: List[tuple[int, ProviderSpec, ToolSpec]] = []
 
-    for prov in manifest.providers:
+    for prov in index.providers.values():
+        if not (prov.authorized and prov.registered and any(t.available for t in prov.actions)):
+            continue
         if provider_filter and prov.provider.lower() != provider_filter:
             continue
         for tool in prov.actions:
+            if not tool.available:
+                continue
             score = _score_tool(tool, norm_query)
             if norm_query.terms and score == 0:
                 continue
             matches.append((score, prov, tool))
 
+    matches = [entry for entry in matches if entry[0] > 0]
     matches.sort(key=lambda item: (-item[0], item[1].provider, item[2].name))
     if limit and limit > 0:
         matches = matches[:limit]
@@ -53,7 +64,7 @@ class _Query:
     def __init__(self, raw: str | None) -> None:
         text = (raw or "").strip().lower()
         self.raw = text
-        self.terms = [term for term in text.split() if term]
+        self.terms = [term for term in re.split(r"[^a-z0-9_]+", text) if term]
 
 
 def _normalize_query(query: str | None) -> _Query:
@@ -85,6 +96,8 @@ def _score_tool(tool: ToolSpec, query: _Query) -> int:
             score += 1
         if term in haystacks["mcp_tool"]:
             score += 2
+    if score > 0 and tool.available:
+        score += 1
     return score
 
 
@@ -92,7 +105,7 @@ def _result_formatter(detail_level: DetailLevel):
     if detail_level == "names":
         return _format_names
     if detail_level == "summary":
-        return _format_summary
+        return _format_for_planner
     if detail_level == "full":
         return _format_full
     raise ValueError(f"Unsupported detail level '{detail_level}'.")
@@ -105,6 +118,7 @@ def _format_names(score: int, provider: ProviderSpec, tool: ToolSpec) -> Dict[st
         "qualified_name": f"{provider.provider}.{tool.name}",
         "available": tool.available,
         "score": score,
+        "mcp_tool_name": tool.mcp_tool_name or tool.name.upper(),
     }
 
 
@@ -112,13 +126,12 @@ def _format_summary(score: int, provider: ProviderSpec, tool: ToolSpec) -> Dict[
     return {
         "provider": provider.provider,
         "tool": tool.name,
+        "qualified_name": f"{provider.provider}.{tool.name}",
         "short_description": tool.short_description,
         "available": tool.available,
-        "availability_reason": tool.availability_reason,
-        "parameters": [param.name for param in tool.parameters],
-        "mcp_tool_name": tool.mcp_tool_name,
+        "path": f"sandbox_py/servers/{provider.provider}/{tool.name}.py",
         "score": score,
-        "path": f"providers/{provider.provider}/tools/{safe_filename(tool.name)}.json",
+        "mcp_tool_name": tool.mcp_tool_name or tool.name.upper(),
     }
 
 
@@ -127,4 +140,30 @@ def _format_full(score: int, provider: ProviderSpec, tool: ToolSpec) -> Dict[str
     payload["provider_status"] = provider.summary()
     payload["score"] = score
     payload["path"] = f"providers/{provider.provider}/tools/{safe_filename(tool.name)}.json"
+    payload["mcp_tool_name"] = tool.mcp_tool_name or tool.name.upper()
     return payload
+
+
+def _format_for_planner(score: int, provider: ProviderSpec, tool: ToolSpec) -> Dict[str, Any]:
+    """
+    Standardized search result shape consumed by the planner.
+
+    Includes richer metadata while preserving legacy keys used elsewhere.
+    """
+    return {
+        "tool_id": tool.tool_id,
+        "server": tool.server,
+        "py_module": tool.py_module,
+        "py_name": tool.py_name,
+        "description": tool.short_description or tool.description,
+        "params": tool.params,
+        "score": score,
+        # Compatibility fields expected by existing planner code:
+        "provider": provider.provider,
+        "tool": tool.name,
+        "short_description": tool.short_description,
+        "qualified_name": f"{provider.provider}.{tool.name}",
+        "available": tool.available,
+        "path": f"sandbox_py/servers/{provider.provider}/{tool.name}.py",
+        "mcp_tool_name": tool.mcp_tool_name or tool.name.upper(),
+    }

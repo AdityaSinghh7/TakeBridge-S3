@@ -8,7 +8,7 @@ Follow these steps to introduce a new provider without touching planner logic:
 1. **Create wrappers in `mcp_agent/actions.py`:**
    - Decorate each wrapper with `@mcp_action`.
    - Normalize parameters inside the wrapper (strings vs lists, structured payloads).
-   - Call `MCPAgent.current().call_tool(provider, TOOL_NAME, payload)` via the helper `_invoke_mcp_tool`.
+   - Call `MCPAgent.current(user_id).call_tool(provider, TOOL_NAME, payload)` via the helper `_invoke_mcp_tool`.
    - Emit telemetry by relying on `_emit_action_event`; unauthorized paths should emit `mcp.call.skipped`.
 
 2. **Register the wrapper:**

@@ -61,6 +61,36 @@ class ToolSpec:
     primary_param: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def tool_id(self) -> str:
+        """Stable identifier used by the planner (e.g. 'gmail.gmail_search')."""
+        return f"{self.provider}.{self.name}"
+
+    @property
+    def server(self) -> str:
+        """Logical server name; today this matches the provider id."""
+        return self.provider
+
+    @property
+    def py_module(self) -> str:
+        """Python module path for the sandbox helper."""
+        return f"sandbox_py.servers.{self.provider}"
+
+    @property
+    def py_name(self) -> str:
+        """Python function name exposed by the sandbox helper."""
+        return self.python_name
+
+    @property
+    def params(self) -> Dict[str, Dict[str, Any]]:
+        """Structured parameter metadata grouped into required/optional."""
+        required: Dict[str, Any] = {}
+        optional: Dict[str, Any] = {}
+        for param in self.parameters:
+            target = required if param.required else optional
+            target[param.name] = param.annotation or "Any"
+        return {"required": required, "optional": optional}
+
     def to_dict(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {
             "provider": self.provider,
@@ -124,6 +154,11 @@ class ProviderSpec:
             "all_actions": [tool.name for tool in self.actions],
             "available_tools": [tool.name for tool in self.actions if tool.available],
         }
+
+    @property
+    def available_tools(self) -> List[str]:
+        """Convenience mirror of summary()['available_tools'] for internal callers."""
+        return [tool.name for tool in self.actions if tool.available]
 
     def to_dict(self, include_tools: bool = True) -> Dict[str, Any]:
         data = self.summary()

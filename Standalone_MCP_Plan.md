@@ -56,7 +56,7 @@ Standalone MCP Agent Plan (Detailed, Python-Only)
 * Wrappers:
 
   * Normalize arguments (string lists, structured payloads).
-  * Call MCP via `MCPAgent.current().call_tool(...)`.
+  * Call MCP via `MCPAgent.current(user_id).call_tool(...)`.
   * Emit `emit_event(...)` telemetry.
 
 **Layer 3 – Toolbox & Manifest**
@@ -83,7 +83,8 @@ Standalone MCP Agent Plan (Detailed, Python-Only)
     ```python
     execute_mcp_task(
         task: str,
-        user_id: str = "singleton",
+        *,
+        user_id: str,
         budget: Budget | None = None,
         extra_context: dict | None = None,
     ) -> MCPTaskResult
@@ -494,7 +495,7 @@ We **deprecate a separate “system prompt”** and standardize on a single **pl
 
   * Go through `sandbox_py.client.register_tool_caller(...)` which bridges to:
 
-    * `MCPAgent.current().call_tool` or directly to `MCPClient`.
+    * `MCPAgent.current(user_id).call_tool` or directly to `MCPClient`.
 * Future strategy:
 
   * Replace subprocess backend with:
