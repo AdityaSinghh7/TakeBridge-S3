@@ -44,7 +44,7 @@ slack.slack_post_message:
   mode: mutate
   success_examples:
     - args:
-        channel: "#general"
+        channel: "#social"
         text: "Hello from IO sampler"
         markdown_text: ""
         blocks: null

@@ -13,9 +13,21 @@ COMPOSIO_CALLBACK = f"{COMPOSIO_API_V3}/toolkits/auth/callback"
 
 
 def _require_user_id(request: Request) -> str:
+    # Try header first (for API calls)
     raw = (request.headers.get("X-User-Id") or "").strip()
+    
+    # Fallback to query parameter (for browser redirects)
     if not raw:
-        raise HTTPException(400, "Missing X-User-Id header.")
+        raw = (request.query_params.get("user_id") or "").strip()
+    
+    # For local development, default to dev-local if neither is present
+    if not raw:
+        import os
+        raw = os.getenv("TB_DEFAULT_USER_ID", "dev-local")
+    
+    if not raw:
+        raise HTTPException(400, "Missing X-User-Id header or user_id query parameter.")
+    
     try:
         return normalize_user_id(raw)
     except ValueError as exc:

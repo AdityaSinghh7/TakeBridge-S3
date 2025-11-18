@@ -11,6 +11,7 @@ from mcp_agent.dev import resolve_dev_user
 from mcp_agent.registry import get_configured_providers, init_registry
 from mcp_agent.toolbox.registry import get_tool_spec
 from mcp_agent.toolbox.output_schema_sampler import sample_output_schema_for_wrapper
+from mcp_agent.toolbox.load_io_specs import ensure_io_specs_loaded
 
 
 def _parse_examples_block(entry: Dict[str, Any], key: str) -> List[Dict[str, Any]]:
@@ -79,9 +80,6 @@ def main() -> None:
     if not config_path.exists():
         raise SystemExit("tool_output_samples.yaml not found; create it before generating schemas.")
 
-    cfg = yaml.safe_load(config_path.read_text()) or {}
-    schemas: Dict[str, Dict[str, Any]] = {}
-
     # Resolve user and registry state.
     user_id = resolve_dev_user(args.user_id)
     init_registry(user_id)
@@ -90,6 +88,13 @@ def main() -> None:
     allowed_providers: Optional[set[str]] = None
     if args.providers:
         allowed_providers = {p.strip() for p in str(args.providers).split(",") if p.strip()}
+
+    # Ensure IoToolSpecs are registered (from action docstrings) before we look
+    # up specs for individual tools.
+    ensure_io_specs_loaded()
+
+    cfg = yaml.safe_load(config_path.read_text()) or {}
+    schemas: Dict[str, Dict[str, Any]] = {}
 
     for key, entry in cfg.items():
         if not isinstance(entry, dict):
@@ -136,7 +141,13 @@ def main() -> None:
             print(f"[schema] Skipping {key!r}: no example args configured.")
             continue
 
-        schema = sample_output_schema_for_wrapper(spec.func, success_examples, error_examples or None)
+        schema = sample_output_schema_for_wrapper(
+            spec.func,
+            success_examples,
+            error_examples or None,
+            provider=provider,
+            tool_name=tool_name,
+        )
         if schema:
             schemas[key] = schema
 
@@ -145,8 +156,37 @@ def main() -> None:
         return
 
     out_path = Path("tool_output_schemas.generated.json")
-    out_path.write_text(json.dumps(schemas, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(f"Wrote inferred schemas for {len(schemas)} tools to {out_path}")
+    
+    # Load existing schemas if file exists
+    existing_schemas: Dict[str, Dict[str, Any]] = {}
+    if out_path.exists():
+        try:
+            existing_schemas = json.loads(out_path.read_text(encoding="utf-8"))
+            if not isinstance(existing_schemas, dict):
+                existing_schemas = {}
+        except Exception as e:
+            print(f"[schema] Warning: Could not parse existing schema file: {e}. Starting fresh.")
+            existing_schemas = {}
+    
+    # If providers filter is specified, remove existing schemas for those providers
+    if allowed_providers:
+        keys_to_remove = [
+            key for key in existing_schemas.keys()
+            if key.split(".", 1)[0] in allowed_providers
+        ]
+        for key in keys_to_remove:
+            existing_schemas.pop(key, None)
+        if keys_to_remove:
+            print(f"[schema] Removed {len(keys_to_remove)} existing schema(s) for provider(s): {', '.join(allowed_providers)}")
+    
+    # Merge new schemas with existing ones
+    merged_schemas = {**existing_schemas, **schemas}
+    
+    out_path.write_text(json.dumps(merged_schemas, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(f"Wrote inferred schemas for {len(schemas)} tool(s) to {out_path}")
+    if existing_schemas:
+        total_count = len(merged_schemas)
+        print(f"Total schemas in file: {total_count} (kept {total_count - len(schemas)} from other providers)")
 
 
 if __name__ == "__main__":

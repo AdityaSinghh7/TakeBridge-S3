@@ -99,3 +99,8 @@ demo_payloads/
 demo_payloads/*
 MCP_Multi_Tenant_Implementation_Plan.md
 planner_prompt_overhaul_plan.md
+
+--allow-mutating
+--providers
+--skip-unconfigured
+--user-id

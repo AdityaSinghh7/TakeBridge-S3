@@ -434,6 +434,22 @@ def _primary_plus_rest(x):
         return "", []
     return lst[0], lst[1:]
 
+
+def _resolve_gmail_user_id(user_id: str | None) -> str:
+    """
+    Normalize the Gmail API userId.
+
+    Gmail expects 'me' or a concrete Gmail address here. TB user ids like
+    'dev-local' are *not* valid Gmail user identifiers, so if the caller passes
+    the active TB_USER_ID, prefer 'me' instead.
+    """
+    if not user_id:
+        return "me"
+    tb_user = os.getenv("TB_USER_ID")
+    if tb_user and user_id == tb_user:
+        return "me"
+    return user_id
+
 @tool_output_schema(
     schema={
         "data": {
@@ -603,7 +619,8 @@ def gmail_search(
         user_id: Optional Gmail user identifier (defaults to 'me').
     """
     tool_name = "GMAIL_FETCH_EMAILS"
-    user_id = _current_user_id()
+    tb_user_id = _current_user_id()
+    gmail_user_id = _resolve_gmail_user_id(user_id)
     if getattr(self, "_validation_only", False):
         return _structured_result(
             "gmail",
@@ -612,10 +629,10 @@ def gmail_search(
             data={"skipped": "validation_only"},
             payload_keys=[],
         )
-    if not OAuthManager.is_authorized("gmail", user_id=user_id):
+    if not OAuthManager.is_authorized("gmail", user_id=tb_user_id):
         emit_event(
             "mcp.call.skipped",
-            {"server": "gmail", "tool": tool_name, "reason": "unauthorized", "user_id": user_id},
+            {"server": "gmail", "tool": tool_name, "reason": "unauthorized", "user_id": tb_user_id},
         )
         return _structured_result(
             "gmail",
@@ -628,7 +645,8 @@ def gmail_search(
     payload: dict[str, Any] = {
         "query": query,
         "max_results": max_results,
-        "user_id": user_id or "me",
+        # Gmail API userId: always 'me' or explicit Gmail address, never TB user id.
+        "user_id": gmail_user_id,
     }
     norm_labels = _norm_string_list(label_ids)
     if norm_labels:

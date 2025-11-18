@@ -1,0 +1,504 @@
+{
+  "gmail.gmail_search": {
+    "success": {
+      "properties": {
+        "messages": {
+          "items": {
+            "properties": {
+              "attachmentList": {
+                "items": {
+                  "properties": {
+                    "attachmentId": {
+                      "type": "string"
+                    },
+                    "filename": {
+                      "type": "string"
+                    },
+                    "mimeType": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "attachmentId",
+                    "filename",
+                    "mimeType"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "labelIds": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "messageId": {
+                "type": "string"
+              },
+              "messageText": {
+                "type": "string"
+              },
+              "messageTimestamp": {
+                "type": "string"
+              },
+              "preview": {
+                "properties": {
+                  "body": {
+                    "type": "string"
+                  },
+                  "subject": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "body",
+                  "subject"
+                ],
+                "type": "object"
+              },
+              "sender": {
+                "type": "string"
+              },
+              "subject": {
+                "type": "string"
+              },
+              "threadId": {
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "attachmentList",
+              "labelIds",
+              "messageId",
+              "messageText",
+              "messageTimestamp",
+              "preview",
+              "sender",
+              "subject",
+              "threadId",
+              "to"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "nextPageToken": {
+          "type": "string"
+        },
+        "resultSizeEstimate": {
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "type": "object"
+    }
+  },
+  "gmail.gmail_send_email": {
+    "success": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "labelIds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "threadId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "labelIds",
+        "threadId"
+      ],
+      "type": "object"
+    }
+  },
+  "slack.slack_post_message": {
+    "success": {
+      "properties": {
+        "channel": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "message": {
+          "properties": {
+            "app_id": {
+              "type": "string"
+            },
+            "blocks": {
+              "items": {
+                "properties": {
+                  "block_id": {
+                    "type": "string"
+                  },
+                  "elements": {
+                    "items": {
+                      "properties": {
+                        "elements": {
+                          "items": {
+                            "properties": {
+                              "text": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "text",
+                              "type"
+                            ],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "type": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "elements",
+                        "type"
+                      ],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "type": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "block_id",
+                  "elements",
+                  "type"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "bot_id": {
+              "type": "string"
+            },
+            "bot_profile": {
+              "properties": {
+                "app_id": {
+                  "type": "string"
+                },
+                "deleted": {
+                  "type": "boolean"
+                },
+                "icons": {
+                  "properties": {
+                    "image_36": {
+                      "type": "string"
+                    },
+                    "image_48": {
+                      "type": "string"
+                    },
+                    "image_72": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "image_36",
+                    "image_48",
+                    "image_72"
+                  ],
+                  "type": "object"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "team_id": {
+                  "type": "string"
+                },
+                "updated": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "app_id",
+                "deleted",
+                "icons",
+                "id",
+                "name",
+                "team_id",
+                "updated"
+              ],
+              "type": "object"
+            },
+            "team": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "ts": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            },
+            "user": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "app_id",
+            "blocks",
+            "bot_id",
+            "bot_profile",
+            "team",
+            "text",
+            "ts",
+            "type",
+            "user"
+          ],
+          "type": "object"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "response_metadata": {
+          "properties": {
+            "warnings": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "warnings"
+          ],
+          "type": "object"
+        },
+        "ts": {
+          "type": "string"
+        },
+        "warning": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ok",
+        "response_metadata",
+        "warning"
+      ],
+      "type": "object"
+    }
+  },
+  "slack.slack_search_messages": {
+    "success": {
+      "properties": {
+        "error": {
+          "type": "string"
+        },
+        "messages": {
+          "properties": {
+            "matches": {
+              "items": {
+                "properties": {
+                  "channel": {
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "is_channel": {
+                        "type": "boolean"
+                      },
+                      "is_ext_shared": {
+                        "type": "boolean"
+                      },
+                      "is_group": {
+                        "type": "boolean"
+                      },
+                      "is_im": {
+                        "type": "boolean"
+                      },
+                      "is_mpim": {
+                        "type": "boolean"
+                      },
+                      "is_org_shared": {
+                        "type": "boolean"
+                      },
+                      "is_pending_ext_shared": {
+                        "type": "boolean"
+                      },
+                      "is_private": {
+                        "type": "boolean"
+                      },
+                      "is_shared": {
+                        "type": "boolean"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "pending_shared": {
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "is_channel",
+                      "is_ext_shared",
+                      "is_group",
+                      "is_im",
+                      "is_mpim",
+                      "is_org_shared",
+                      "is_pending_ext_shared",
+                      "is_private",
+                      "is_shared",
+                      "name",
+                      "pending_shared"
+                    ],
+                    "type": "object"
+                  },
+                  "db_message": {
+                    "properties": {},
+                    "required": [],
+                    "type": "object"
+                  },
+                  "iid": {
+                    "type": "string"
+                  },
+                  "no_reactions": {
+                    "type": "boolean"
+                  },
+                  "permalink": {
+                    "type": "string"
+                  },
+                  "score": {
+                    "type": "number"
+                  },
+                  "team": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "ts": {
+                    "type": "string"
+                  },
+                  "type": {
+                    "type": "string"
+                  },
+                  "user": {
+                    "type": "string"
+                  },
+                  "username": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "channel",
+                  "db_message",
+                  "iid",
+                  "no_reactions",
+                  "permalink",
+                  "score",
+                  "team",
+                  "text",
+                  "ts",
+                  "type",
+                  "user",
+                  "username"
+                ],
+                "type": "object"
+              },
+              "type": "array"
+            },
+            "pagination": {
+              "properties": {
+                "first": {
+                  "type": "integer"
+                },
+                "last": {
+                  "type": "integer"
+                },
+                "page": {
+                  "type": "integer"
+                },
+                "page_count": {
+                  "type": "integer"
+                },
+                "per_page": {
+                  "type": "integer"
+                },
+                "total_count": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "first",
+                "last",
+                "page",
+                "page_count",
+                "per_page",
+                "total_count"
+              ],
+              "type": "object"
+            },
+            "paging": {
+              "properties": {
+                "count": {
+                  "type": "integer"
+                },
+                "page": {
+                  "type": "integer"
+                },
+                "pages": {
+                  "type": "integer"
+                },
+                "total": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "count",
+                "page",
+                "pages",
+                "total"
+              ],
+              "type": "object"
+            },
+            "total": {
+              "type": "integer"
+            }
+          },
+          "required": [
+            "matches",
+            "pagination",
+            "paging",
+            "total"
+          ],
+          "type": "object"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "query": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ok"
+      ],
+      "type": "object"
+    }
+  }
+}

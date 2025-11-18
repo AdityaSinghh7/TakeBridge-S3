@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+import json
+from typing import Any, Dict, List, Optional
 
 from mcp_agent.toolbox.envelope import normalize_action_response
 from mcp_agent.toolbox.types import ActionResponse
@@ -90,10 +91,100 @@ def infer_json_schema_from_samples(samples: List[Dict[str, Any]]) -> Dict[str, A
     }
 
 
+def _unwrap_inner_envelope(obj: Any) -> Any:
+    """
+    Some providers (e.g., Composio tools) embed a secondary
+    success/error envelope that looks like:
+
+        {
+          "successfull": bool,
+          "successful": bool,
+          "error": str | None,
+          "data": {...},
+          ...
+        }
+
+    For schema inference we care about the inner `data` payload, not this
+    secondary envelope. When we detect this pattern, return `obj['data']`
+    (if it is a dict/list); otherwise return the object unchanged.
+    """
+    if isinstance(obj, dict) and "data" in obj:
+        if any(k in obj for k in ("successfull", "successful", "error", "logs", "auth_refresh_required")):
+            inner = obj.get("data")
+            if isinstance(inner, (dict, list)):
+                return inner
+    return obj
+def _extract_payload_for_schema(
+    envelope: ActionResponse,
+    provider: Optional[str] = None,
+    tool_name: Optional[str] = None,
+) -> Any:
+    """
+    Given a canonical ActionResponse, return the object we should treat as the
+    root for schema inference.
+
+    For Composio-style MCP responses, `data` often has the shape:
+        { "content": [...], "isError": bool, "meta": ..., "structuredContent": ... }
+
+    The actual tool payload is usually nested in structuredContent or in
+    JSON-encoded `content[*].text`. This helper tries to unwrap that; if it
+    can't, it falls back to envelope["data"].
+    """
+    data = envelope.get("data") or {}
+    if not isinstance(data, dict):
+        return data
+
+    has_content = isinstance(data.get("content"), list)
+    has_is_error = "isError" in data
+
+    if has_content and has_is_error:
+        # 1. Prefer structuredContent if it's already a dict
+        sc = data.get("structuredContent")
+        if isinstance(sc, dict):
+            return _unwrap_inner_envelope(sc)
+
+        # 2. Try parsing structuredContent as JSON string
+        if isinstance(sc, str):
+            try:
+                parsed = json.loads(sc)
+                if isinstance(parsed, (dict, list)):
+                    return _unwrap_inner_envelope(parsed)
+            except Exception:
+                pass
+
+        # 3. Try parsing `content[*].text` as JSON or finding nested dicts
+        for item in data.get("content", []):
+            if not isinstance(item, dict):
+                continue
+
+            # Look for a nested dict directly
+            for key in ("structuredContent", "data", "json"):
+                blob = item.get(key)
+                if isinstance(blob, dict):
+                    return _unwrap_inner_envelope(blob)
+
+            text = item.get("text")
+            if isinstance(text, str):
+                try:
+                    parsed = json.loads(text)
+                except Exception:
+                    continue
+                if isinstance(parsed, (dict, list)):
+                    return _unwrap_inner_envelope(parsed)
+
+        # If all else fails, fall through and use `data` as-is.
+
+    # Non-Composio or unknown shape → just return data (possibly unwrapped)
+    return _unwrap_inner_envelope(data)
+
+
 def sample_output_schema_for_wrapper(
     func: callable,
     success_examples: List[Dict[str, Any]],
     error_examples: List[Dict[str, Any]] | None = None,
+    *,
+    provider: str | None = None,
+    tool_name: str | None = None,
 ) -> Dict[str, Any]:
     """
     Call a wrapper function with example args and infer output schemas.
@@ -107,27 +198,25 @@ def sample_output_schema_for_wrapper(
     for payload in success_examples:
         raw: ActionResponse = func(**payload)  # type: ignore[misc]
         env = normalize_action_response(raw)
+        root = _extract_payload_for_schema(env, provider=provider, tool_name=tool_name)
         if env["successful"]:
-            data = env["data"]
-            if isinstance(data, dict):
-                success_payloads.append(data)
+            if isinstance(root, dict):
+                success_payloads.append(root)
         else:
-            data = env["data"]
-            if isinstance(data, dict):
-                error_payloads.append(data)
+            if isinstance(root, dict):
+                error_payloads.append(root)
 
     if error_examples:
         for payload in error_examples:
             raw_err: ActionResponse = func(**payload)  # type: ignore[misc]
             env_err = normalize_action_response(raw_err)
+            root_err = _extract_payload_for_schema(env_err, provider=provider, tool_name=tool_name)
             if env_err["successful"]:
-                data = env_err["data"]
-                if isinstance(data, dict):
-                    success_payloads.append(data)
+                if isinstance(root_err, dict):
+                    success_payloads.append(root_err)
             else:
-                data = env_err["data"]
-                if isinstance(data, dict):
-                    error_payloads.append(data)
+                if isinstance(root_err, dict):
+                    error_payloads.append(root_err)
 
     schema: Dict[str, Any] = {}
     if success_payloads:
@@ -135,4 +224,3 @@ def sample_output_schema_for_wrapper(
     if error_payloads:
         schema["error"] = infer_json_schema_from_samples(error_payloads)
     return schema
-

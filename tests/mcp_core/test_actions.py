@@ -122,3 +122,24 @@ def test_gmail_recipient_normalization(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "extra@example.com" in payload["cc"]
     assert payload["bcc"] == ["bcc1@example.com", "bcc2@example.com"]
     assert payload["is_html"] is True
+
+
+def test_gmail_search_uses_gmail_user_id_not_tb_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    gmail_search should pass the Gmail API userId (typically 'me')
+    through to the MCP payload, and must not overwrite it with the
+    TB user id used for MCPAgent selection.
+    """
+    _patch_authorization(monkeypatch, {"gmail": True})
+    agent = _patch_agent(monkeypatch)
+    _capture_events(monkeypatch)
+
+    # Pass an explicit Gmail user_id; this should flow through to the payload.
+    actions.gmail_search(object(), "in:inbox", max_results=3, user_id="me")
+
+    assert len(agent.calls) == 1
+    provider, tool, payload = agent.calls[0]
+    assert provider == "gmail"
+    assert tool == "GMAIL_FETCH_EMAILS"
+    # Gmail API userId should be 'me', never the TB user id.
+    assert payload["user_id"] == "me"

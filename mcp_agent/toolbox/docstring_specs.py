@@ -96,6 +96,12 @@ def build_iotoolspec_from_func(
     short_description, arg_lines = _split_docstring(doc)
     input_spec = _parse_args_block(sig, arg_lines)
 
+    # Wrap the underlying method-style function so callers can invoke it as
+    # a plain callable (**kwargs) without worrying about the `self` parameter.
+    def _wrapped(**kwargs: object) -> object:
+        dummy_self = object()
+        return func(dummy_self, **kwargs)
+
     return IoToolSpec(
         provider=provider,
         tool_name=func.__name__,
@@ -104,6 +110,5 @@ def build_iotoolspec_from_func(
         description=short_description or doc.strip(),
         input_spec=input_spec,
         output_spec=ToolOutputSpec(),
-        func=func,
+        func=_wrapped,
     )
-
