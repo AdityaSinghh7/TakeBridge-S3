@@ -164,23 +164,35 @@ def test_search_tools_respects_detail_levels(monkeypatch: pytest.MonkeyPatch):
     )
 
     names = search_module.search_tools(query="slack", detail_level="names", user_id="u")
-    assert names[0]["qualified_name"] == "slack.send_message"
-
     summary = search_module.search_tools(
         query="message", detail_level="summary", user_id="u"
-    )[0]
-    assert summary["qualified_name"] == "slack.send_message"
-    assert summary["short_description"] == "Send message"
-    assert summary["path"].endswith("sandbox_py/servers/slack/send_message.py")
-    assert summary["tool_id"] == "slack.send_message"
-    assert summary["server"] == "slack"
-    assert summary["py_module"] == "sandbox_py.servers.slack"
-    assert summary["py_name"] == "send_message"
-
+    )
     full = search_module.search_tools(
         query="message", detail_level="full", user_id="u"
-    )[0]
-    assert full["provider_status"]["provider"] == "slack"
+    )
 
-    with pytest.raises(ValueError):
-        search_module.search_tools(query=None, detail_level="invalid", user_id="u")
+    assert len(names) == 1
+    assert len(summary) == 1
+    assert len(full) == 1
+
+    entry = names[0]
+    assert entry["qualified_name"] == "slack.send_message"
+    assert entry["tool_id"] == "slack.send_message"
+    assert entry["server"] == "slack"
+    assert entry["module"] == "sandbox_py.servers.slack"
+    assert entry["function"] == "send_message"
+    assert entry["py_module"] == "sandbox_py.servers.slack"
+    assert entry["py_name"] == "send_message"
+    assert entry["short_description"] == "Send message"
+    assert entry["path"].endswith("sandbox_py/servers/slack/send_message.py")
+    assert entry["call_signature"].startswith("slack.send_message(")
+    # Internal-only fields like mcp_tool_name should not be exposed to the LLM.
+    assert "mcp_tool_name" not in entry
+
+    # All supported detail levels share the same descriptor shape.
+    assert summary[0]["tool_id"] == entry["tool_id"]
+    assert full[0]["tool_id"] == entry["tool_id"]
+
+    # Unknown detail levels are accepted and behave like "summary".
+    invalid = search_module.search_tools(query="message", detail_level="invalid", user_id="u")
+    assert invalid[0]["tool_id"] == entry["tool_id"]

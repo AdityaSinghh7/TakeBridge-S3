@@ -82,6 +82,7 @@ def test_execute_mcp_task_without_llm_returns_parse_error(monkeypatch: pytest.Mo
     result = execute_mcp_task("task without llm", user_id=TEST_USER)
     assert result["success"] is False
     assert result["error"] == "planner_llm_disabled"
+    assert result.get("error_code") == "planner_llm_disabled"
 
 
 def test_execute_tool_command(monkeypatch: pytest.MonkeyPatch):

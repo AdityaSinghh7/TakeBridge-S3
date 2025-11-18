@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from typing import Any, ClassVar, Dict, List, Optional
+import threading
 
 from shared.streaming import emit_event
 
@@ -13,6 +14,7 @@ class MCPAgent:
     """Central coordinator for MCP tool invocations and response tracking."""
 
     _current_by_user: ClassVar[Dict[str, "MCPAgent"]] = {}
+    _lock: ClassVar[threading.RLock] = threading.RLock()
 
     def __init__(self, user_id: str) -> None:
         self.user_id = normalize_user_id(user_id)
@@ -25,16 +27,18 @@ class MCPAgent:
 
     @classmethod
     def set_current(cls, agent: "MCPAgent") -> None:
-        cls._current_by_user[agent.user_id] = agent
+        with cls._lock:
+            cls._current_by_user[agent.user_id] = agent
 
     @classmethod
     def current(cls, user_id: str) -> "MCPAgent":
         normalized = normalize_user_id(user_id)
-        agent = cls._current_by_user.get(normalized)
-        if agent is None:
-            agent = MCPAgent(user_id=normalized)
-            cls._current_by_user[normalized] = agent
-        return agent
+        with cls._lock:
+            agent = cls._current_by_user.get(normalized)
+            if agent is None:
+                agent = MCPAgent(user_id=normalized)
+                cls._current_by_user[normalized] = agent
+            return agent
 
     def set_step(self, step_index: Optional[int]) -> None:
         self.current_step = step_index

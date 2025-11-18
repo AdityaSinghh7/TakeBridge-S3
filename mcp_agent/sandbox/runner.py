@@ -31,9 +31,14 @@ def run_python_plan(
     toolbox_root: Path,
     timeout_sec: int = 30,
     python_executable: str | None = None,
+    run_id: str | None = None,
 ) -> SandboxResult:
     """
     Execute generated sandbox Python code inside a temporary working directory.
+
+    This function is sandbox/OS-level only: it does not know about
+    PlannerContext or MCPAgent and simply runs a subprocess with TB_USER_ID
+    and PYTHONPATH configured for the generated toolbox.
 
     Args:
         code_body: Body of the async function the model authored (no signature).
@@ -70,6 +75,8 @@ def run_python_plan(
             path_entries.append(existing_pythonpath)
         env["PYTHONPATH"] = os.pathsep.join(str(value) for value in path_entries if value)
         env["TB_USER_ID"] = user_id
+        if run_id:
+            env["TB_RUN_ID"] = run_id
 
         try:
             completed = subprocess.run(

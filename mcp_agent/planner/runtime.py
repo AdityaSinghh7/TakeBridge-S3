@@ -20,13 +20,37 @@ from .actions import call_direct_tool
 from .sandbox import run_sandbox_plan
 
 
+# Planner result contract returned from execute_mcp_task and PlannerRuntime.run.
+# Fields:
+#   - success: overall success flag for the task.
+#   - final_summary: human-readable summary of what happened.
+#   - error / error_code / error_message / error_details: failure information
+#     (error is kept as a legacy alias for error_code to preserve existing APIs).
+#   - user_id / run_id: identifiers for the logical user and this planner run.
+#   - budget_usage: serialized BudgetSnapshot for this run.
+#   - logs: planner event log entries.
+#   - raw_outputs: per-key raw tool/sandbox outputs recorded during the run.
+#   - steps: serialized PlannerStep history.
 class MCPTaskResult(TypedDict, total=False):
     success: bool
     final_summary: str
+    error: Optional[str]
+    error_code: Optional[str]
+    error_message: Optional[str]
+    error_details: Dict[str, Any]
+    user_id: str
+    run_id: str
     raw_outputs: Dict[str, Any]
     budget_usage: Dict[str, Any]
     logs: list[Dict[str, Any]]
-    error: Optional[str]
+    steps: list[Dict[str, Any]]
+
+
+class _PlannerAbort(Exception):
+    """Internal control-flow exception used to exit the planner loop early."""
+
+    def __init__(self, result: MCPTaskResult) -> None:
+        self.result = result
 
 
 def analyze_sandbox(code: str) -> tuple[set[str], Dict[str, set[str]]]:
@@ -72,14 +96,46 @@ def analyze_sandbox(code: str) -> tuple[set[str], Dict[str, set[str]]]:
 
 
 class PlannerRuntime:
-    """Placeholder runtime until the full planner loop is implemented."""
+    """Coordinator for the high-level planner loop."""
 
     def __init__(self, context: PlannerContext, llm: PlannerLLM | None = None) -> None:
         self.context = context
         self.llm = llm or PlannerLLM()
 
     def run(self) -> MCPTaskResult:
+        """
+        Execute the planner loop until a terminal result is produced.
+
+        Flow:
+          1. Ensure the planner LLM is enabled.
+          2. Perform initial tool discovery.
+          3. Repeatedly:
+             - Check budget limits.
+             - Ask the LLM for the next command and parse it.
+             - Dispatch the command to the appropriate handler.
+        """
+        try:
+            self._ensure_llm_enabled()
+        except _PlannerAbort as exc:
+            return exc.result
         perform_initial_discovery(self.context)
+        while True:
+            exceeded = self._budget_exceeded()
+            if exceeded:
+                return self._budget_failure(exceeded)
+
+            self.context.budget_tracker.steps_taken += 1
+            try:
+                command = self._next_command()
+            except _PlannerAbort as exc:
+                return exc.result
+
+            result = self._dispatch_command(command)
+            if result is not None:
+                return result
+
+    def _ensure_llm_enabled(self) -> None:
+        """Verify that the planner LLM is enabled before starting the loop."""
         llm_enabled = True
         is_enabled = getattr(self.llm, "is_enabled", None)
         if callable(is_enabled):
@@ -88,85 +144,84 @@ class PlannerRuntime:
             except Exception:
                 llm_enabled = True
         if not llm_enabled:
-            return self._failure("planner_llm_disabled", "Planner LLM is disabled.")
-        while True:
-            exceeded = self._budget_exceeded()
-            if exceeded:
-                return self._budget_failure(exceeded)
+            result = self._failure("planner_llm_disabled", "Planner LLM is disabled.")
+            raise _PlannerAbort(result)
 
-            self.context.budget_tracker.steps_taken += 1
+    def _next_command(self) -> Dict[str, Any]:
+        """
+        Ask the LLM for the next planner command and parse it.
+
+        Handles empty-response retries and converts protocol/shape errors into a
+        terminal planner failure.
+        """
+        llm_result = self.llm.generate_plan(self.context)
+        text = llm_result.get("text") or ""
+        if not text:
+            self.context.record_event(
+                "mcp.llm.retry_empty",
+                {"model": self.llm.model},
+            )
             llm_result = self.llm.generate_plan(self.context)
             text = llm_result.get("text") or ""
-            if not text:
-                self.context.record_event(
-                    "mcp.llm.retry_empty",
-                    {"model": self.llm.model},
-                )
-                llm_result = self.llm.generate_plan(self.context)
-                text = llm_result.get("text") or ""
-            try:
-                command = parse_planner_command(text)
-            except ValueError as exc:
-                # Protocol/shape error in planner output.
-                self.context.record_event(
-                    "mcp.planner.protocol_error",
-                    {
-                        "error": str(exc),
-                        "raw_preview": text[:200],
-                    },
-                )
-                return self._failure("planner_parse_error", str(exc), preview=text)
+        try:
+            return parse_planner_command(text)
+        except ValueError as exc:
+            # Protocol/shape error in planner output.
+            self.context.record_event(
+                "mcp.planner.protocol_error",
+                {
+                    "error": str(exc),
+                    "raw_preview": text[:200],
+                },
+            )
+            result = self._failure("planner_parse_error", str(exc), preview=text)
+            raise _PlannerAbort(result)
 
-            cmd_type = command["type"]
-            if cmd_type == "finish":
-                summary = command.get("summary") or "Task completed."
-                reasoning = command.get("reasoning") or ""
-                snapshot = self.context.budget_tracker.snapshot()
-                self.context.record_event(
-                    "mcp.planner.finished",
-                    {"summary_preview": summary[:200]},
-                )
-                self.context.record_step(
-                    type="finish",
-                    command=command,
-                    success=True,
-                    preview=reasoning or summary,
-                    output={"summary": summary},
-                    is_summary=False,
-                )
-                return MCPTaskResult(
-                    success=True,
-                    final_summary=summary,
-                    raw_outputs=self.context.raw_outputs,
-                    budget_usage=snapshot.to_dict(),
-                    logs=self.context.logs,
-                    error=None,
-                )
+    def _dispatch_command(self, command: Dict[str, Any]) -> MCPTaskResult | None:
+        """
+        Route a parsed planner command to the appropriate execution path.
 
-            if cmd_type == "fail":
-                reason_text = command.get("reason") or "Planner reported a failure."
-                # Treat planner-declared fail as a clean, explicit failure.
-                return self._failure("planner_fail_action", reason_text, preview=str(command))
+        Returns a terminal MCPTaskResult when the planner should stop, or None
+        when the loop should continue.
+        """
+        cmd_type = command["type"]
+        if cmd_type == "finish":
+            summary = command.get("summary") or "Task completed."
+            reasoning = command.get("reasoning") or ""
+            self.context.record_event(
+                "mcp.planner.finished",
+                {"summary_preview": summary[:200]},
+            )
+            self.context.record_step(
+                type="finish",
+                command=command,
+                success=True,
+                preview=reasoning or summary,
+                output={"summary": summary},
+                is_summary=False,
+            )
+            return self._success_result(summary)
 
-            if cmd_type == "tool":
-                result = self._execute_tool(command)
-                if result is not None:
-                    return result
-                continue
+        if cmd_type == "fail":
+            reason_text = command.get("reason") or "Planner reported a failure."
+            # Treat planner-declared fail as a clean, explicit failure.
+            return self._failure("planner_fail_action", reason_text, preview=str(command))
 
-            if cmd_type == "sandbox":
-                result = self._execute_sandbox(command)
-                if result is not None:
-                    return result
-                continue
+        if cmd_type == "tool":
+            return self._execute_tool(command)
 
-            if cmd_type == "search":
-                result = self._execute_search(command)
-                if result is not None:
-                    return result
-                continue
+        if cmd_type == "sandbox":
+            return self._execute_sandbox(command)
 
-            return self._failure("planner_unknown_command", "Unsupported planner command.", preview=text)
+        if cmd_type == "search":
+            return self._execute_search(command)
+
+        # Unknown or unsupported command type.
+        return self._failure(
+            "planner_unknown_command",
+            "Unsupported planner command.",
+            preview=str(command),
+        )
 
     def _budget_exceeded(self) -> str | None:
         snapshot = self.context.budget_tracker.snapshot()
@@ -201,13 +256,27 @@ class PlannerRuntime:
             output={"summary": message},
             is_summary=False,
         )
+        # Use a stable, coarse-grained error_code while preserving the
+        # budget_type detail in error_details.
+        details = {
+            "budget_type": budget_type,
+            "snapshot": snapshot.to_dict(),
+        }
+        return self._failure("budget_exceeded", message, preview=message, recorded_step=True, details=details)
+
+    def _success_result(self, summary: str) -> MCPTaskResult:
+        """Build a terminal success result snapshot."""
+        snapshot = self.context.budget_tracker.snapshot()
+        steps = [asdict(step) for step in self.context.steps]
         return MCPTaskResult(
-            success=False,
-            final_summary=message,
+            success=True,
+            final_summary=summary,
+            user_id=self.context.user_id,
+            run_id=self.context.run_id,
             raw_outputs=self.context.raw_outputs,
             budget_usage=snapshot.to_dict(),
             logs=self.context.logs,
-            error="budget_exceeded",
+            steps=steps,
         )
 
     def _failure(
@@ -217,7 +286,14 @@ class PlannerRuntime:
         preview: str | None = None,
         *,
         recorded_step: bool = False,
+        details: Dict[str, Any] | None = None,
     ) -> MCPTaskResult:
+        """
+        Common helper to build a terminal failure result snapshot.
+
+        `reason` is treated as the canonical error_code and is also exposed
+        via the legacy `error` field for backwards compatibility.
+        """
         snapshot = self.context.budget_tracker.snapshot()
         self.context.record_event(
             "mcp.planner.failed",
@@ -232,18 +308,27 @@ class PlannerRuntime:
                 command={"type": "finish", "summary": summary},
                 success=False,
                 preview=summary,
-            error=reason,
-            output={"summary": summary},
-            is_summary=False,
-        )
-        return MCPTaskResult(
+                error=reason,
+                output={"summary": summary},
+                is_summary=False,
+            )
+        steps = [asdict(step) for step in self.context.steps]
+        result: MCPTaskResult = MCPTaskResult(
             success=False,
             final_summary=summary,
+            user_id=self.context.user_id,
+            run_id=self.context.run_id,
             raw_outputs=self.context.raw_outputs,
             budget_usage=snapshot.to_dict(),
             logs=self.context.logs,
             error=reason,
+            error_code=reason,
+            error_message=summary,
+            steps=steps,
         )
+        if details is not None:
+            result["error_details"] = details
+        return result
 
     def _search_stats(self) -> tuple[int, int]:
         """Return (total_search_steps, search_steps_with_results)."""
@@ -309,6 +394,7 @@ class PlannerRuntime:
                     command,
                 )
         else:
+            # Legacy shape (provider + tool + payload) kept for compatibility.
             if not provider or not tool_name:
                 return self._failure(
                     "tool_missing_fields",
@@ -425,6 +511,7 @@ class PlannerRuntime:
         if not code_body:
             return self._failure("sandbox_missing_code", "Sandbox command missing code body.", preview=str(command))
         try:
+            # Static validation: ensure sandbox code only references discovered helpers.
             used_servers, calls_by_server = analyze_sandbox(code_body)
         except SyntaxError as exc:
             label = (command.get("label") or "sandbox").strip() or "sandbox"
@@ -446,7 +533,6 @@ class PlannerRuntime:
                     and (step.command.get("label") or "").strip() == label
                 ):
                     prior_errors += 1
-
             result_key = f"sandbox.{label}"
             # Record this sandbox step as a failed attempt.
             self.context.record_step(
@@ -642,16 +728,18 @@ def execute_mcp_task(
     )
     runtime = PlannerRuntime(context, llm=llm)
     result = runtime.run()
-    snapshot = context.budget_tracker.snapshot().to_dict()
-    final_summary = result.get("final_summary")
+    # Guarantee a non-empty final_summary for callers that rely on it.
     success_flag = bool(result.get("success"))
+    final_summary = result.get("final_summary")
     if not final_summary:
-        final_summary = "Task completed." if success_flag else "Task failed."
-    return MCPTaskResult(
-        success=success_flag,
-        final_summary=final_summary,
-        raw_outputs=result.get("raw_outputs") or context.raw_outputs,
-        budget_usage=result.get("budget_usage") or snapshot,
-        logs=result.get("logs") or context.logs,
-        error=result.get("error"),
-    )
+        result["final_summary"] = "Task completed." if success_flag else "Task failed."
+    # Ensure raw_outputs / budget_usage / logs are always present even if a
+    # custom runtime result omitted them.
+    if "raw_outputs" not in result:
+        result["raw_outputs"] = context.raw_outputs
+    if "budget_usage" not in result:
+        snapshot = context.budget_tracker.snapshot().to_dict()
+        result["budget_usage"] = snapshot
+    if "logs" not in result:
+        result["logs"] = context.logs
+    return result

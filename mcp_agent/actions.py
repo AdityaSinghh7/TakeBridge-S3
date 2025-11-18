@@ -3,6 +3,8 @@ import json
 import os
 from typing import Any, Callable, Iterable, Tuple, cast
 
+from .tool_schemas import tool_output_schema
+
 from .registry import is_registered
 from .oauth import OAuthManager
 from .mcp_agent import MCPAgent
@@ -42,12 +44,23 @@ def _structured_result(
     payload_keys: Iterable[str] | None = None,
 ) -> ToolInvocationResult:
     keys = sorted([str(key) for key in payload_keys] if payload_keys else [])
+    if data is None:
+        normalized_data: Any = {}
+    elif isinstance(data, dict):
+        normalized_data = data
+    else:
+        normalized_data = {"value": data}
+    normalized_error: str | None
+    if error is None:
+        normalized_error = None
+    else:
+        normalized_error = str(error)
     return cast(
         ToolInvocationResult,
         {
             "successful": bool(successful),
-            "error": error,
-            "data": data,
+            "error": normalized_error,
+            "data": normalized_data,
             "logs": logs,
             "provider": provider,
             "tool": tool,
@@ -62,19 +75,18 @@ def _normalize_tool_response(
     payload_keys: list[str],
     response: dict[str, Any] | None,
 ) -> ToolInvocationResult:
+    # Import here to avoid circular imports between mcp_agent.actions and
+    # mcp_agent.toolbox.* during package initialization.
+    from mcp_agent.toolbox.envelope import normalize_action_response
+
     normalized: dict[str, Any] = dict(response or {})
-    success = normalized.get("successful")
-    if success is None:
-        success = normalized.get("successfull")
-    if success is None and "error" in normalized:
-        success = normalized["error"] in (None, "", False)
-    if success is None:
-        success = True
-    normalized["successful"] = bool(success)
+    envelope = normalize_action_response(normalized)
+    normalized["successful"] = envelope["successful"]
+    normalized["data"] = envelope["data"]
+    normalized["error"] = envelope.get("error")
+    # Remove legacy success keys to avoid ambiguity.
     normalized.pop("successfull", None)
-    normalized.setdefault("error", normalized.get("error"))
-    normalized.setdefault("data", normalized.get("data"))
-    normalized.setdefault("logs", normalized.get("logs"))
+    normalized.pop("success", None)
     normalized["provider"] = provider
     normalized["tool"] = tool
     normalized["payload_keys"] = payload_keys
@@ -157,6 +169,37 @@ def _norm_string_list(value: Any) -> list[str]:
         return items
     return []
 
+@tool_output_schema(
+    schema={
+        "data": {
+            "ok": "bool",
+            "channel": "str | None",
+            "ts": "str | None",
+            "message": {
+                "text": "str | None",
+                "user": "str | None",
+                "ts": "str | None",
+            },
+        }
+    },
+    pretty="""
+Canonical wrapper: { success: bool, data: dict, error: str | null }
+
+data: {
+  ok: bool,
+  channel: str | null,
+  ts: str | null,
+  message: {
+    text: str | null,
+    user: str | null,
+    ts: str | null,
+  },
+}
+
+Note: This schema approximates Slack's chat.postMessage response and should be
+updated if the Composio Slack connector returns a richer or different shape.
+""".strip(),
+)
 @mcp_action
 def slack_post_message(
     self,
@@ -263,6 +306,56 @@ def slack_post_message(
 
     return _invoke_mcp_tool("slack", tool_name, payload)
 
+@tool_output_schema(
+    schema={
+        "data": {
+            "matches": [
+                {
+                    "channel": "str",
+                    "user": "str | None",
+                    "username": "str | None",
+                    "text": "str",
+                    "permalink": "str | None",
+                    "ts": "str",
+                }
+            ],
+            "query": "str",
+            "total": "int | None",
+            "pagination": {
+                "page": "int | None",
+                "page_count": "int | None",
+                "per_page": "int | None",
+            },
+        }
+    },
+    pretty="""
+Canonical wrapper: { success: bool, data: dict, error: str | null }
+
+data: {
+  matches: [
+    {
+      channel: str,
+      user: str | null,
+      username: str | null,
+      text: str,
+      permalink: str | null,
+      ts: str,
+    },
+    ...
+  ],
+  query: str,
+  total: int | null,
+  pagination: {
+    page: int | null,
+    page_count: int | null,
+    per_page: int | null,
+  },
+}
+
+Note: This Slack search schema is intentionally approximate and may not match
+the full Composio payload. Replace with the precise connector response when available.
+""".strip(),
+)
 @mcp_action
 def slack_search_messages(
     self,
@@ -341,6 +434,33 @@ def _primary_plus_rest(x):
         return "", []
     return lst[0], lst[1:]
 
+@tool_output_schema(
+    schema={
+        "data": {
+            "messageId": "str | None",
+            "threadId": "str | None",
+            "to": "list[str] | None",
+            "subject": "str | None",
+            "messageText": "str | None",
+            "messageTimestamp": "str | None",
+        }
+    },
+    pretty="""
+Canonical wrapper: { success: bool, data: dict, error: str | null }
+
+data: {
+  messageId: str | null,
+  threadId: str | null,
+  to: list[str] | null,
+  subject: str | null,
+  messageText: str | null,
+  messageTimestamp: str | null,
+}
+
+Note: This gmail_send_email schema is a placeholder and should be aligned with
+the actual Composio GMAIL_SEND_EMAIL response contract.
+""".strip(),
+)
 @mcp_action
 def gmail_send_email(
     self,
@@ -404,6 +524,56 @@ def gmail_send_email(
     # Composio tool name is provider-prefixed
     return _invoke_mcp_tool("gmail", tool_name, args)
 
+@tool_output_schema(
+    schema={
+        "data": {
+            "messages": [
+                {
+                    "messageId": "str",
+                    "threadId": "str",
+                    "sender": "str",
+                    "to": "str | list[str]",
+                    "subject": "str",
+                    "messageText": "str",
+                    "messageTimestamp": "str",
+                    "attachmentList": "list[dict]",
+                    "labelIds": ["str"],
+                    "payload": "dict",
+                    "preview": "dict",
+                }
+            ],
+            "nextPageToken": "str | None",
+            "resultSizeEstimate": "int | None",
+        }
+    },
+    pretty="""
+Canonical wrapper: { success: bool, data: dict, error: str | null }
+
+data: {
+  messages: [
+    {
+      messageId: str,
+      threadId: str,
+      sender: str,
+      to: str | list[str],
+      subject: str,
+      messageText: str,
+      messageTimestamp: str,
+      attachmentList: list[dict],
+      labelIds: list[str],
+      payload: dict,
+      preview: dict,
+    },
+    ...
+  ],
+  nextPageToken: str | null,
+  resultSizeEstimate: int | null,
+}
+
+This schema mirrors the GMAIL_FETCH_EMAILS Composio tool used by gmail_search.
+If the upstream payload evolves, update this description to stay in sync.
+""".strip(),
+)
 @mcp_action
 def gmail_search(
     self,

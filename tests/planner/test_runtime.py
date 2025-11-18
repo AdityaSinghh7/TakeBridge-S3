@@ -284,6 +284,8 @@ def test_tool_validation_unknown_tool_id(monkeypatch, tmp_path):
 
     assert result["success"] is False
     assert result["error"] == "planner_used_unknown_tool"
+    assert result.get("error_code") == "planner_used_unknown_tool"
+    assert isinstance(result.get("steps"), list)
 
 
 def test_tool_validation_undiscovered_tool_id(monkeypatch, tmp_path):

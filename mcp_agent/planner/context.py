@@ -7,10 +7,13 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional
+import uuid
 
 from shared.streaming import emit_event
 from shared.token_cost_tracker import TokenCostTracker
+
+from mcp_agent.toolbox.builder import get_index
 
 from .summarize import redact_payload, summarize_payload
 
@@ -54,6 +57,7 @@ class PlannerContext:
     raw_outputs: Dict[str, Any] = field(default_factory=dict)
     registry_version: Optional[int] = None
     steps: List[PlannerStep] = field(default_factory=list)
+    run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
     def __post_init__(self) -> None:
         self.budget_tracker = BudgetTracker(self.budget)
@@ -71,9 +75,17 @@ class PlannerContext:
             "on",
         }
 
+    # --- Logging & step history ---
+
     def record_event(self, event: str, payload: Dict[str, Any]) -> None:
-        safe_payload = self._redact_for_logs(payload)
-        enriched = {"task": self.task, "task_id": self.task_id, "user_id": self.user_id, **safe_payload}
+        safe_payload = self.redact_for_logs(payload)
+        enriched = {
+            "task": self.task,
+            "task_id": self.task_id,
+            "user_id": self.user_id,
+            "run_id": self.run_id,
+            **safe_payload,
+        }
         log_entry = {"event": event, **enriched}
         self.logs.append(log_entry)
         emit_event(event, enriched)
@@ -105,7 +117,15 @@ class PlannerContext:
             )
         )
 
-    def add_search_results(self, results: List[Dict[str, Any]], *, replace: bool = False) -> None:
+    # --- Search / discovery state ---
+
+    def merge_search_results(self, results: List[Dict[str, Any]], *, replace: bool = False) -> None:
+        """
+        Merge new search results into the existing index, optionally replacing it.
+
+        Deduplicates by provider+tool key and keeps the highest-scoring entry
+        when duplicates are encountered.
+        """
         if replace:
             self.search_results.clear()
             self._search_index.clear()
@@ -123,28 +143,56 @@ class PlannerContext:
                 continue
             self.search_results.append(entry)
             self._search_index[key] = entry
-        self._trim_context()
+        self._trim_context_for_llm()
         self._update_tool_menu()
         self.discovery_completed = True
 
+    def add_search_results(self, results: List[Dict[str, Any]], *, replace: bool = False) -> None:
+        """
+        Backwards-compatible alias for merge_search_results.
+
+        Prefer merge_search_results(...) in new code.
+        """
+        self.merge_search_results(results, replace=replace)
+
+    def set_search_results(self, results: List[Dict[str, Any]]) -> None:
+        """Replace the current search results with the provided list."""
+        self.merge_search_results(results, replace=True)
+
     def replace_search_results(self, results: List[Dict[str, Any]]) -> None:
-        self.add_search_results(results, replace=True)
+        """Deprecated alias for set_search_results; preserved for compatibility."""
+        self.set_search_results(results)
+
+    # --- Summarization & raw outputs ---
 
     def add_tool_summary(self, summary: Dict[str, Any]) -> None:
         self.tool_summaries.append(summary)
-        self._trim_context()
+        self._trim_context_for_llm()
 
     def add_sandbox_summary(self, summary: Dict[str, Any]) -> None:
         self.sandbox_summaries.append(summary)
-        self._trim_context()
+        self._trim_context_for_llm()
 
     def resolve_mcp_tool_name(self, provider: str, tool_name: str) -> str:
-        key = f"{(provider or '').strip().lower()}.{(tool_name or '').strip().lower()}"
-        entry = self._search_index.get(key)
-        if entry:
-            resolved = entry.get("mcp_tool_name")
-            if resolved:
-                return resolved
+        """
+        Resolve a planner-facing provider/tool pair to the underlying MCP tool name.
+
+        This uses the ToolboxIndex rather than exposing internal fields like
+        `mcp_tool_name` in search results sent to the LLM.
+        """
+        provider_key = (provider or "").strip().lower()
+        tool_key = (tool_name or "").strip()
+        if not provider_key or not tool_key:
+            return tool_name
+
+        tool_id = f"{provider_key}.{tool_key}"
+        try:
+            index = get_index(self.user_id)
+        except Exception:
+            return tool_name
+        spec = index.get_tool(tool_id)
+        if spec and spec.mcp_tool_name:
+            return spec.mcp_tool_name
         return tool_name
 
     def append_raw_output(self, key: str, entry: Dict[str, Any]) -> Dict[str, Any]:
@@ -174,35 +222,14 @@ class PlannerContext:
         purpose: str = "for_planning",
         force: bool = False,
     ) -> Dict[str, Any]:
-        if not force and not self.should_summarize(payload):
-            return {}
-        storage_dir = self.summary_root / "tools"
-        summary = summarize_payload(
+        return self._summarize_and_record(
             label,
             payload,
             purpose=purpose,
-            storage_dir=storage_dir,
-            persist_payload=self._persist_summaries,
+            storage_subdir="tools",
+            add_summary_fn=self.add_tool_summary,
+            force=force,
         )
-        self.add_tool_summary(summary)
-        self.record_event(
-            "mcp.summary.created",
-            {
-                "label": label,
-                "purpose": purpose,
-                "truncated": summary.get("truncated"),
-            },
-        )
-        if summary.get("storage_ref"):
-            self.record_event(
-                "mcp.redaction.applied",
-                {
-                    "label": label,
-                    "purpose": purpose,
-                    "storage_ref": summary["storage_ref"],
-                },
-            )
-        return summary
 
     def summarize_sandbox_output(
         self,
@@ -212,35 +239,14 @@ class PlannerContext:
         purpose: str = "for_planning",
         force: bool = False,
     ) -> Dict[str, Any]:
-        if not force and not self.should_summarize(payload):
-            return {}
-        storage_dir = self.summary_root / "sandbox"
-        summary = summarize_payload(
+        return self._summarize_and_record(
             label,
             payload,
             purpose=purpose,
-            storage_dir=storage_dir,
-            persist_payload=self._persist_summaries,
+            storage_subdir="sandbox",
+            add_summary_fn=self.add_sandbox_summary,
+            force=force,
         )
-        self.add_sandbox_summary(summary)
-        self.record_event(
-            "mcp.summary.created",
-            {
-                "label": label,
-                "purpose": purpose,
-                "truncated": summary.get("truncated"),
-            },
-        )
-        if summary.get("storage_ref"):
-            self.record_event(
-                "mcp.redaction.applied",
-                {
-                    "label": label,
-                    "purpose": purpose,
-                    "storage_ref": summary["storage_ref"],
-                },
-            )
-        return summary
 
     def should_summarize(self, payload: Any) -> bool:
         size = self._estimate_bytes(payload)
@@ -252,7 +258,51 @@ class PlannerContext:
             return True
         return False
 
-    def planner_state(self, _snapshot: BudgetSnapshot) -> Dict[str, Any]:
+    def _summarize_and_record(
+        self,
+        label: str,
+        payload: Any,
+        *,
+        purpose: str,
+        storage_subdir: str,
+        add_summary_fn: Callable[[Dict[str, Any]], None],
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        """Common helper to summarize a payload and record redaction telemetry."""
+        if not force and not self.should_summarize(payload):
+            return {}
+        storage_dir = self.summary_root / storage_subdir
+        summary = summarize_payload(
+            label,
+            payload,
+            purpose=purpose,
+            storage_dir=storage_dir,
+            persist_payload=self._persist_summaries,
+        )
+        add_summary_fn(summary)
+        self.record_event(
+            "mcp.summary.created",
+            {
+                "label": label,
+                "purpose": purpose,
+                "truncated": summary.get("truncated"),
+            },
+        )
+        if summary.get("storage_ref"):
+            self.record_event(
+                "mcp.redaction.applied",
+                {
+                    "label": label,
+                    "purpose": purpose,
+                    "storage_ref": summary["storage_ref"],
+                },
+            )
+        return summary
+
+    def build_planner_state(self, _snapshot: BudgetSnapshot) -> Dict[str, Any]:
+        """
+        Build the planner_state JSON consumed by PlannerLLM; no side effects.
+        """
         recent_count = 3
         recent_steps = self.steps[-recent_count:]
         history_summary = self._history_summary(len(recent_steps))
@@ -293,11 +343,21 @@ class PlannerContext:
             recent_entries.append(entry)
         return {
             "task": self.task,
+            "user_id": self.user_id,
+            "run_id": self.run_id,
             "tools_root": tools_root,
             "available_servers": available_servers,
             "history_summary": history_summary,
             "recent_steps": recent_entries,
+            # Full, de-duplicated catalog of tools discovered via search so far.
+            "search_results": list(self.search_results),
         }
+
+    def planner_state(self, snapshot: BudgetSnapshot) -> Dict[str, Any]:
+        """
+        Deprecated alias for build_planner_state; prefer build_planner_state().
+        """
+        return self.build_planner_state(snapshot)
 
     def _history_summary(self, recent_count: int) -> str:
         total = len(self.steps)
@@ -315,7 +375,7 @@ class PlannerContext:
             serialized = str(payload)
         return len(serialized.encode("utf-8"))
 
-    def _trim_context(self, max_items: int = 50) -> None:
+    def _trim_context_for_llm(self, max_items: int = 50) -> None:
         """Keep only the most recent summaries to enforce deterministic caps."""
         if len(self.tool_summaries) > max_items:
             self.tool_summaries[:] = self.tool_summaries[-max_items:]
@@ -331,7 +391,8 @@ class PlannerContext:
             self._search_index = new_index
         self._update_tool_menu()
 
-    def _redact_for_logs(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def redact_for_logs(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Redact sensitive fields from a payload before logging."""
         try:
             return redact_payload(payload)
         except Exception:

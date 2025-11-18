@@ -1,0 +1,36 @@
+{
+  "providers": [
+    {
+      "all_actions": [
+        "gmail_send_email",
+        "gmail_search"
+      ],
+      "authorized": false,
+      "available_tools": [],
+      "configured": true,
+      "display_name": "Gmail",
+      "mcp_url": null,
+      "path": "providers/gmail/provider.json",
+      "provider": "gmail",
+      "registered": true,
+      "tool_count": 2,
+      "tools_path": "providers/gmail/tools"
+    },
+    {
+      "all_actions": [
+        "slack_post_message",
+        "slack_search_messages"
+      ],
+      "authorized": false,
+      "available_tools": [],
+      "configured": true,
+      "display_name": "Slack",
+      "mcp_url": null,
+      "path": "providers/slack/provider.json",
+      "provider": "slack",
+      "registered": true,
+      "tool_count": 2,
+      "tools_path": "providers/slack/tools"
+    }
+  ]
+}

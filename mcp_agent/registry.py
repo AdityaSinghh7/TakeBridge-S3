@@ -63,7 +63,13 @@ def _install_fake_clients(user_id: str) -> bool:
         factory = getattr(module, func_name)
     except (ValueError, ImportError, AttributeError) as exc:
         raise RuntimeError(f"Invalid MCP fake client factory '{factory_path}': {exc}") from exc
-    clients = factory(user_id=user_id)
+
+    # Factories may or may not accept a user_id kwarg; prefer passing it and
+    # fall back to a parameterless call for older implementations.
+    try:
+        clients = factory(user_id=user_id)
+    except TypeError:
+        clients = factory()
     if not isinstance(clients, dict):
         raise RuntimeError("Fake client factory must return a dict of provider -> client instances.")
     with _REGISTRY_LOCK:
@@ -127,6 +133,22 @@ def init_registry(user_id: str) -> None:
         if "gmail" not in bucket and gmail_url_env:
             bucket["gmail"] = MCPClient(gmail_url_env, headers=_env_headers("gmail"))
         _maybe_bump_version_locked(uid, before)
+
+
+def get_configured_providers(user_id: str) -> set[str]:
+    """
+    Return the set of MCP providers that are configured for the given user.
+
+    This reflects the current contents of the per-user MCP client bucket after
+    applying DB-backed connections, environment overrides, or fake clients.
+    """
+    uid = normalize_user_id(user_id)
+    # Ensure the registry is initialized for this user so the bucket is up to date.
+    init_registry(uid)
+    with _REGISTRY_LOCK:
+        bucket = _get_bucket_unlocked(uid)
+        return set(bucket.keys())
+
 
 def get_client(provider: str, user_id: str) -> MCPClient | None:
     """Return the MCP client for a provider/user, if registered."""

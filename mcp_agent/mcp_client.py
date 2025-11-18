@@ -92,6 +92,7 @@ class MCPClient:
             data = {k: v for k, v in payload.items() if k not in {"error", "successful", "successfull"}}
 
         normalized = {
+            "success": bool(success),
             "successful": bool(success),
             "successfull": bool(success),
             "error": payload.get("error"),

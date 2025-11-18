@@ -89,6 +89,12 @@ class PlannerLLM:
         context: PlannerContext,
         snapshot: BudgetSnapshot,
     ) -> List[Dict[str, Any]]:
+        """
+        Build the 3-message conversation:
+          - system: planner prompt
+          - developer: PLANNER_STATE_JSON
+          - user: task + extra_context JSON payload
+        """
         developer_content = self._developer_message(context, snapshot)
         user_payload = json.dumps(
             {"task": context.task, "extra_context": context.extra_context},

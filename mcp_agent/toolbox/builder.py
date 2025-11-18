@@ -108,6 +108,10 @@ class ToolboxBuilder:
     def build(self) -> ToolboxManifest:
         init_registry(self.user_id)
         providers: List[ProviderSpec] = []
+        # Canonical path:
+        #   mcp_agent.actions -> get_provider_action_map()
+        #   -> ToolboxBuilder.ToolSpec/ToolboxManifest/ToolboxIndex
+        #   -> search_tools(...) -> LLMToolDescriptor -> planner.
         for provider, funcs in sorted(get_provider_action_map().items()):
             providers.append(self._build_provider(provider, funcs))
         current_version = registry_version(self.user_id)
@@ -278,6 +282,18 @@ class ToolboxBuilder:
         if primary_candidates:
             primary_param = sorted(primary_candidates)[0]
 
+        raw_schema = getattr(func, "__tb_output_schema__", None)
+        raw_schema_pretty = getattr(func, "__tb_output_schema_pretty__", None)
+        if raw_schema_pretty is not None:
+            # Store as a list of lines for easier prompt rendering.
+            pretty_lines = [line.rstrip() for line in str(raw_schema_pretty).strip().splitlines()]
+        else:
+            pretty_lines = [
+                "Canonical wrapper: { success: bool, data: dict, error: str | null }",
+                "",
+                "data: <schema not documented; TODO: replace with real Composio-compatible response payload schema>",
+            ]
+
         return ToolSpec(
             provider=provider_literal or provider,
             name=func.__name__,
@@ -298,6 +314,8 @@ class ToolboxBuilder:
             structured_params=structured_params,
             list_params=list_params,
             primary_param=primary_param,
+            output_schema=raw_schema or {},
+            output_schema_pretty=pretty_lines,
         )
 
 

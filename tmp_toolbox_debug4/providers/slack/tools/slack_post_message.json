@@ -1,0 +1,210 @@
+{
+  "availability_reason": "unauthorized",
+  "available": false,
+  "description": "Posts a message to a Slack channel, direct message, or private group; requires content via `text`, `blocks`, or `attachments`.",
+  "docstring": "Description:\n    Posts a message to a Slack channel, direct message, or private group; requires content via `text`, `blocks`, or `attachments`.\nArgs:\n    channel: Required channel ID or name (e.g., '#ops').\n    text: Optional plain-text body for the message.\n    markdown_text: Optional markdown-formatted body (`markdown_text` field).\n    blocks: Optional Block Kit payload as JSON string or serializable object.\n    attachments: Optional legacy attachments JSON string or serializable object.\n    thread_ts: Optional parent message timestamp for threaded replies.\n    reply_broadcast: Optional flag to broadcast the thread reply back to the channel.\n    as_user: Optional flag to post as the authenticated Slack user.\n    username: Optional bot username override (requires `as_user=False`).\n    icon_emoji: Optional emoji icon string (e.g., ':robot_face:').\n    icon_url: Optional image URL to use as the icon.\n    link_names: Optional flag to expand channel/user mentions in `text`.\n    parse: Optional Slack parse mode ('none' or 'full').\n    mrkdwn: Optional flag to enable markdown parsing within blocks.\n    unfurl_links: Optional flag to unfurl links contained in attachments.\n    unfurl_media: Optional flag to unfurl media content contained in attachments.",
+  "manifest_generated_at": "2025-11-17T22:24:21.074557+00:00",
+  "mcp_tool_name": "SLACK_SEND_MESSAGE",
+  "name": "slack_post_message",
+  "oauth_provider": "slack",
+  "oauth_required": true,
+  "output_schema": {
+    "data": {
+      "channel": "str | None",
+      "message": {
+        "text": "str | None",
+        "ts": "str | None",
+        "user": "str | None"
+      },
+      "ok": "bool",
+      "ts": "str | None"
+    }
+  },
+  "output_schema_pretty": [
+    "Canonical wrapper: { success: bool, data: dict, error: str | null }",
+    "",
+    "data: {",
+    "  ok: bool,",
+    "  channel: str | null,",
+    "  ts: str | null,",
+    "  message: {",
+    "    text: str | null,",
+    "    user: str | null,",
+    "    ts: str | null,",
+    "  },",
+    "}",
+    "",
+    "Note: This schema approximates Slack's chat.postMessage response and should be",
+    "updated if the Composio Slack connector returns a richer or different shape."
+  ],
+  "parameters": [
+    {
+      "annotation": "str",
+      "description": "Required channel ID or name (e.g., '#ops').",
+      "has_default": false,
+      "kind": "positional_or_keyword",
+      "name": "channel",
+      "required": true
+    },
+    {
+      "annotation": "str",
+      "default": "",
+      "description": "Optional plain-text body for the message.",
+      "has_default": true,
+      "kind": "positional_or_keyword",
+      "name": "text",
+      "required": false
+    },
+    {
+      "annotation": "str",
+      "default": "",
+      "description": "Optional markdown-formatted body (`markdown_text` field).",
+      "has_default": true,
+      "kind": "keyword_only",
+      "name": "markdown_text",
+      "required": false
+    },
+    {
+      "annotation": "Any | None",
+      "default": null,
+      "description": "Optional Block Kit payload as JSON string or serializable object.",
+      "has_default": true,
+      "kind": "keyword_only",
+      "name": "blocks",
+      "required": false
+    },
+    {
+      "annotation": "Any | None",
+      "default": null,
+      "description": "Optional legacy attachments JSON string or serializable object.",
+      "has_default": true,
+      "kind": "keyword_only",
+      "name": "attachments",
+      "required": false
+    },
+    {
+      "annotation": "str | None",
+      "default": null,
+      "description": "Optional parent message timestamp for threaded replies.",
+      "has_default": true,
+      "kind": "keyword_only",
+      "name": "thread_ts",
+      "required": false
+    },
+    {
+      "annotation": "bool | None",
+      "default": null,
+      "description": "Optional flag to broadcast the thread reply back to the channel.",
+      "has_default": true,
+      "kind": "keyword_only",
+      "name": "reply_broadcast",
+      "required": false
+    },
+    {
+      "annotation": "bool | None",
+      "default": null,
+      "description": "Optional flag to post as the authenticated Slack user.",
+      "has_default": true,
+      "kind": "keyword_only",
+      "name": "as_user",
+      "required": false
+    },
+    {
+      "annotation": "str | None",
+      "default": null,
+      "description": "Optional bot username override (requires `as_user=False`).",
+      "has_default": true,
+      "kind": "keyword_only",
+      "name": "username",
+      "required": false
+    },
+    {
+      "annotation": "str | None",
+      "default": null,
+      "description": "Optional emoji icon string (e.g., ':robot_face:').",
+      "has_default": true,
+      "kind": "keyword_only",
+      "name": "icon_emoji",
+      "required": false
+    },
+    {
+      "annotation": "str | None",
+      "default": null,
+      "description": "Optional image URL to use as the icon.",
+      "has_default": true,
+      "kind": "keyword_only",
+      "name": "icon_url",
+      "required": false
+    },
+    {
+      "annotation": "bool | None",
+      "default": null,
+      "description": "Optional flag to expand channel/user mentions in `text`.",
+      "has_default": true,
+      "kind": "keyword_only",
+      "name": "link_names",
+      "required": false
+    },
+    {
+      "annotation": "str | None",
+      "default": null,
+      "description": "Optional Slack parse mode ('none' or 'full').",
+      "has_default": true,
+      "kind": "keyword_only",
+      "name": "parse",
+      "required": false
+    },
+    {
+      "annotation": "bool | None",
+      "default": null,
+      "description": "Optional flag to enable markdown parsing within blocks.",
+      "has_default": true,
+      "kind": "keyword_only",
+      "name": "mrkdwn",
+      "required": false
+    },
+    {
+      "annotation": "bool | None",
+      "default": null,
+      "description": "Optional flag to unfurl links contained in attachments.",
+      "has_default": true,
+      "kind": "keyword_only",
+      "name": "unfurl_links",
+      "required": false
+    },
+    {
+      "annotation": "bool | None",
+      "default": null,
+      "description": "Optional flag to unfurl media content contained in attachments.",
+      "has_default": true,
+      "kind": "keyword_only",
+      "name": "unfurl_media",
+      "required": false
+    }
+  ],
+  "path": "providers/slack/tools/slack_post_message.json",
+  "provider": "slack",
+  "provider_status": {
+    "all_actions": [
+      "slack_post_message",
+      "slack_search_messages"
+    ],
+    "authorized": false,
+    "available_tools": [],
+    "configured": true,
+    "display_name": "Slack",
+    "mcp_url": null,
+    "provider": "slack",
+    "registered": true,
+    "tool_count": 2
+  },
+  "python_name": "slack_post_message",
+  "python_signature": "slack_post_message(self, channel: str, text: str = '', *, markdown_text: str = '', blocks: typing.Any | None = None, attachments: typing.Any | None = None, thread_ts: str | None = None, reply_broadcast: bool | None = None, as_user: bool | None = None, username: str | None = None, icon_emoji: str | None = None, icon_url: str | None = None, link_names: bool | None = None, parse: str | None = None, mrkdwn: bool | None = None, unfurl_links: bool | None = None, unfurl_media: bool | None = None)",
+  "short_description": "Posts a message to a Slack channel, direct message, or private group; requires content via `text`, `blocks`, or `attachments`",
+  "source_line": 169,
+  "source_path": "mcp_agent/actions.py",
+  "structured_params": [
+    "attachments",
+    "blocks"
+  ]
+}

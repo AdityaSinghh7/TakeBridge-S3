@@ -1,0 +1,80 @@
+gmail.gmail_search:
+  mode: read
+  success_examples:
+    - args:
+        query: "in:inbox"
+        max_results: 3
+        user_id: "me"
+    - args:
+        query: "from:someone@example.com"
+        max_results: 2
+        user_id: "me"
+  error_examples:
+    - args:
+        query: ""
+        max_results: 0
+        user_id: "me"
+
+gmail.gmail_send_email:
+  mode: mutate
+  success_examples:
+    - args:
+        to: "someone@example.com"
+        subject: "Schema probe"
+        body: "This is a test."
+        cc: ""
+        bcc: ""
+        thread_id: ""
+        is_html: false
+
+slack.slack_search_messages:
+  mode: read
+  success_examples:
+    - args:
+        query: "test"
+        count: 5
+        auto_paginate: false
+  error_examples:
+    - args:
+        query: ""
+        count: 0
+        auto_paginate: false
+
+slack.slack_post_message:
+  mode: mutate
+  success_examples:
+    - args:
+        channel: "#general"
+        text: "Hello from IO sampler"
+        markdown_text: ""
+        blocks: null
+        attachments: null
+        thread_ts: null
+        reply_broadcast: null
+        as_user: null
+        username: null
+        icon_emoji: null
+        icon_url: null
+        link_names: null
+        parse: null
+        mrkdwn: null
+        unfurl_links: null
+        unfurl_media: null
+  error_examples:
+    - args:
+        channel: "INVALID_CHANNEL"
+        text: "This should fail in Slack"
+        markdown_text: ""
+        blocks: null
+        attachments: null
+        thread_ts: null
+        reply_broadcast: null
+        as_user: null
+        username: null
+        icon_emoji: null
+        icon_url: null
+        link_names: null
+        parse: null
+        mrkdwn: null
+        unfurl_links: null
+        unfurl_media: null

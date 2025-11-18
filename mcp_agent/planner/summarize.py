@@ -18,8 +18,13 @@ def summarize_payload(
     sample_limit: int = 3,
     storage_dir: Path | None = None,
     persist_payload: bool = False,
-) -> Dict[str, Any]:
-    """Summarize arbitrary payloads into a planner-friendly structure."""
+    ) -> Dict[str, Any]:
+    """
+    Summarize arbitrary payloads into a planner-friendly structure.
+
+    This is a pure utility: it never calls an LLM and only derives schema,
+    samples, aggregates, and optional storage references for large payloads.
+    """
     redacted_payload = redact_payload(payload)
     serialized = _safe_json(redacted_payload)
     size_bytes = len(serialized.encode("utf-8"))

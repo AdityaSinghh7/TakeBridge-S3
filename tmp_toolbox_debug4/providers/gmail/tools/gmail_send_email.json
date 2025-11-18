@@ -1,0 +1,124 @@
+{
+  "availability_reason": "unauthorized",
+  "available": false,
+  "description": "Sends an email via Gmail API using the authenticated user's Google profile display name. At least one of recipient_email, cc, or bcc must be provided. Atleast one of subject or body must be provided. Requires `is_html=True` if the body contains HTML and valid `s3key`, `mimetype`, `name` for any attachment.",
+  "docstring": "Description:\n    Sends an email via Gmail API using the authenticated user's Google profile display name. At least one of recipient_email, cc, or bcc must be provided. Atleast one of subject or body must be provided. Requires `is_html=True` if the body contains HTML and valid `s3key`, `mimetype`, `name` for any attachment.\nArgs:\n    to: Comma-separated recipients.\n    subject: Subject line text.\n    body: Plain text or simple HTML body.\n    cc: Optional comma-separated CC recipients.\n    bcc: Optional comma-separated BCC recipients.\n    thread_id: Optional Gmail thread to reply into.\n    is_html: Optional boolean indicating if the body contains HTML.",
+  "list_params": {
+    "bcc": "recipient_list",
+    "cc": "recipient_list"
+  },
+  "manifest_generated_at": "2025-11-17T22:24:21.074557+00:00",
+  "mcp_tool_name": "GMAIL_SEND_EMAIL",
+  "name": "gmail_send_email",
+  "oauth_provider": "gmail",
+  "oauth_required": true,
+  "output_schema": {
+    "data": {
+      "messageId": "str | None",
+      "messageText": "str | None",
+      "messageTimestamp": "str | None",
+      "subject": "str | None",
+      "threadId": "str | None",
+      "to": "list[str] | None"
+    }
+  },
+  "output_schema_pretty": [
+    "Canonical wrapper: { success: bool, data: dict, error: str | null }",
+    "",
+    "data: {",
+    "  messageId: str | null,",
+    "  threadId: str | null,",
+    "  to: list[str] | null,",
+    "  subject: str | null,",
+    "  messageText: str | null,",
+    "  messageTimestamp: str | null,",
+    "}",
+    "",
+    "Note: This gmail_send_email schema is a placeholder and should be aligned with",
+    "the actual Composio GMAIL_SEND_EMAIL response contract."
+  ],
+  "parameters": [
+    {
+      "annotation": "str",
+      "description": "Comma-separated recipients.",
+      "has_default": false,
+      "kind": "positional_or_keyword",
+      "name": "to",
+      "required": true
+    },
+    {
+      "annotation": "str",
+      "description": "Subject line text.",
+      "has_default": false,
+      "kind": "positional_or_keyword",
+      "name": "subject",
+      "required": true
+    },
+    {
+      "annotation": "str",
+      "description": "Plain text or simple HTML body.",
+      "has_default": false,
+      "kind": "positional_or_keyword",
+      "name": "body",
+      "required": true
+    },
+    {
+      "annotation": "str",
+      "default": "",
+      "description": "Optional comma-separated CC recipients.",
+      "has_default": true,
+      "kind": "positional_or_keyword",
+      "name": "cc",
+      "required": false
+    },
+    {
+      "annotation": "str",
+      "default": "",
+      "description": "Optional comma-separated BCC recipients.",
+      "has_default": true,
+      "kind": "positional_or_keyword",
+      "name": "bcc",
+      "required": false
+    },
+    {
+      "annotation": "str",
+      "default": "",
+      "description": "Optional Gmail thread to reply into.",
+      "has_default": true,
+      "kind": "positional_or_keyword",
+      "name": "thread_id",
+      "required": false
+    },
+    {
+      "annotation": "bool",
+      "default": false,
+      "description": "Optional boolean indicating if the body contains HTML.",
+      "has_default": true,
+      "kind": "positional_or_keyword",
+      "name": "is_html",
+      "required": false
+    }
+  ],
+  "path": "providers/gmail/tools/gmail_send_email.json",
+  "primary_param": "to",
+  "provider": "gmail",
+  "provider_status": {
+    "all_actions": [
+      "gmail_send_email",
+      "gmail_search"
+    ],
+    "authorized": false,
+    "available_tools": [],
+    "configured": true,
+    "display_name": "Gmail",
+    "mcp_url": null,
+    "provider": "gmail",
+    "registered": true,
+    "tool_count": 2
+  },
+  "python_name": "gmail_send_email",
+  "python_signature": "gmail_send_email(self, to: str, subject: str, body: str, cc: str = '', bcc: str = '', thread_id: str = '', is_html: bool = False)",
+  "short_description": "Sends an email via Gmail API using the authenticated user's Google profile display name",
+  "source_line": 434,
+  "source_path": "mcp_agent/actions.py"
+}

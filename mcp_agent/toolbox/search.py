@@ -5,10 +5,11 @@ from typing import Any, Dict, List, Literal
 
 from mcp_agent.user_identity import normalize_user_id
 
-from .builder import get_index
+from .builder import get_index, get_manifest
 from .index import ToolboxIndex
-from .models import ProviderSpec, ToolSpec
-from .utils import safe_filename
+from .models import LLMToolDescriptor, ProviderSpec, ToolSpec
+from .registry import get_tool_spec
+from .load_io_specs import ensure_io_specs_loaded
 
 DetailLevel = Literal["names", "summary", "full"]
 
@@ -31,7 +32,24 @@ def search_tools(
     detail_level: DetailLevel = "summary",
     limit: int = 20,
     user_id: str,
-    ) -> List[Dict[str, Any]]:
+) -> List[Dict[str, Any]]:
+    """
+    Search the toolbox index for tools matching a natural-language query.
+
+    Args:
+        query: Optional free-text query; when empty, returns high-signal tools.
+        provider: Optional provider filter (e.g. "gmail").
+        detail_level: Label for logging only; descriptor shape is unchanged.
+        limit: Maximum number of tools to return.
+        user_id: Current user id used to scope the toolbox index.
+
+    Returns:
+        A list of dicts produced by LLMToolDescriptor.as_dict(), augmented with
+        a few compatibility fields used by existing planner/UI code.
+    """
+    # Ensure IoToolSpecs are registered and enriched with any generated output
+    # schemas before building descriptors for search results.
+    ensure_io_specs_loaded()
     normalized_user = normalize_user_id(user_id)
     norm_query = _normalize_query(query)
     provider_filter = provider.lower().strip() if provider else None
@@ -56,8 +74,46 @@ def search_tools(
     if limit and limit > 0:
         matches = matches[:limit]
 
-    formatter = _result_formatter(detail_level)
-    return [formatter(score, prov, tool) for score, prov, tool in matches]
+    results: List[Dict[str, Any]] = []
+    for score, prov, tool in matches:
+        descriptor: LLMToolDescriptor = tool.to_llm_descriptor(score=float(score))
+        entry = descriptor.as_dict()
+
+        # Optional IO spec overrides (manual, higher-fidelity docs).
+        io_spec = get_tool_spec(prov.provider, tool.name)
+        if io_spec is not None:
+            try:
+                input_pretty = io_spec.input_spec.pretty()
+                if input_pretty:
+                    entry["input_params_pretty"] = input_pretty.splitlines()
+            except Exception:
+                # Best-effort only; fall back to introspected metadata on error.
+                pass
+            try:
+                if io_spec.output_spec.pretty_success:
+                    entry["output_schema_pretty"] = io_spec.output_spec.pretty_success.splitlines()
+                if io_spec.output_spec.data_schema_success:
+                    entry["output_schema"] = io_spec.output_spec.data_schema_success
+            except Exception:
+                pass
+
+        # Compatibility fields expected by existing planner and API code.
+        entry.setdefault("provider", prov.provider)
+        entry.setdefault("tool", tool.name)
+        entry.setdefault("short_description", tool.short_description)
+        entry.setdefault("qualified_name", f"{prov.provider}.{tool.name}")
+        entry.setdefault("available", tool.available)
+        entry.setdefault("server", tool.server)
+        entry.setdefault("module", tool.py_module)
+        entry.setdefault("function", tool.py_name)
+        # Legacy aliases used by existing planner prompts.
+        entry.setdefault("py_module", entry["module"])
+        entry.setdefault("py_name", entry["function"])
+        return_path = f"sandbox_py/servers/{prov.provider}/{tool.name}.py"
+        entry.setdefault("path", return_path)
+        results.append(entry)
+
+    return results
 
 
 class _Query:
@@ -99,71 +155,3 @@ def _score_tool(tool: ToolSpec, query: _Query) -> int:
     if score > 0 and tool.available:
         score += 1
     return score
-
-
-def _result_formatter(detail_level: DetailLevel):
-    if detail_level == "names":
-        return _format_names
-    if detail_level == "summary":
-        return _format_for_planner
-    if detail_level == "full":
-        return _format_full
-    raise ValueError(f"Unsupported detail level '{detail_level}'.")
-
-
-def _format_names(score: int, provider: ProviderSpec, tool: ToolSpec) -> Dict[str, Any]:
-    return {
-        "provider": provider.provider,
-        "tool": tool.name,
-        "qualified_name": f"{provider.provider}.{tool.name}",
-        "available": tool.available,
-        "score": score,
-        "mcp_tool_name": tool.mcp_tool_name or tool.name.upper(),
-    }
-
-
-def _format_summary(score: int, provider: ProviderSpec, tool: ToolSpec) -> Dict[str, Any]:
-    return {
-        "provider": provider.provider,
-        "tool": tool.name,
-        "qualified_name": f"{provider.provider}.{tool.name}",
-        "short_description": tool.short_description,
-        "available": tool.available,
-        "path": f"sandbox_py/servers/{provider.provider}/{tool.name}.py",
-        "score": score,
-        "mcp_tool_name": tool.mcp_tool_name or tool.name.upper(),
-    }
-
-
-def _format_full(score: int, provider: ProviderSpec, tool: ToolSpec) -> Dict[str, Any]:
-    payload = tool.to_dict()
-    payload["provider_status"] = provider.summary()
-    payload["score"] = score
-    payload["path"] = f"providers/{provider.provider}/tools/{safe_filename(tool.name)}.json"
-    payload["mcp_tool_name"] = tool.mcp_tool_name or tool.name.upper()
-    return payload
-
-
-def _format_for_planner(score: int, provider: ProviderSpec, tool: ToolSpec) -> Dict[str, Any]:
-    """
-    Standardized search result shape consumed by the planner.
-
-    Includes richer metadata while preserving legacy keys used elsewhere.
-    """
-    return {
-        "tool_id": tool.tool_id,
-        "server": tool.server,
-        "py_module": tool.py_module,
-        "py_name": tool.py_name,
-        "description": tool.short_description or tool.description,
-        "params": tool.params,
-        "score": score,
-        # Compatibility fields expected by existing planner code:
-        "provider": provider.provider,
-        "tool": tool.name,
-        "short_description": tool.short_description,
-        "qualified_name": f"{provider.provider}.{tool.name}",
-        "available": tool.available,
-        "path": f"sandbox_py/servers/{provider.provider}/{tool.name}.py",
-        "mcp_tool_name": tool.mcp_tool_name or tool.name.upper(),
-    }

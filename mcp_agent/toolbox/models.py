@@ -36,6 +36,48 @@ class ParameterSpec:
 
 
 @dataclass
+class LLMToolDescriptor:
+    """
+    Compact, LLM-facing view of a toolbox tool.
+
+    This is the only shape the planner should consume from `search_tools(...)`.
+    """
+
+    provider: str
+    server: str
+    module: str
+    function: str
+    tool_id: str
+
+    call_signature: str
+    description: str
+
+    input_params_pretty: List[str]
+    output_schema_pretty: List[str]
+
+    input_params: Dict[str, Any]
+    output_schema: Dict[str, Any]
+
+    score: float = 0.0
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "provider": self.provider,
+            "server": self.server,
+            "module": self.module,
+            "function": self.function,
+            "tool_id": self.tool_id,
+            "call_signature": self.call_signature,
+            "description": self.description,
+            "input_params_pretty": self.input_params_pretty,
+            "output_schema_pretty": self.output_schema_pretty,
+            "input_params": self.input_params,
+            "output_schema": self.output_schema,
+            "score": self.score,
+        }
+
+
+@dataclass
 class ToolSpec:
     """Metadata describing a single MCP action wrapper."""
 
@@ -60,6 +102,8 @@ class ToolSpec:
     list_params: Dict[str, str] = field(default_factory=dict)
     primary_param: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    output_schema: Dict[str, Any] = field(default_factory=dict)
+    output_schema_pretty: List[str] = field(default_factory=list)
 
     @property
     def tool_id(self) -> str:
@@ -90,6 +134,97 @@ class ToolSpec:
             target = required if param.required else optional
             target[param.name] = param.annotation or "Any"
         return {"required": required, "optional": optional}
+
+    def to_llm_descriptor(self, *, score: float = 0.0) -> LLMToolDescriptor:
+        """
+        Convert this ToolSpec into an LLMToolDescriptor.
+
+        Keeps internal richness on ToolSpec while exposing a clean, single-level
+        view for the planner and sandbox validation.
+        """
+        required_params: List[Dict[str, Any]] = []
+        optional_params: List[Dict[str, Any]] = []
+        for param in self.parameters:
+            info: Dict[str, Any] = {
+                "name": param.name,
+                "type": param.annotation or "Any",
+            }
+            if param.has_default:
+                default_value: Any
+                if param.default_repr is not None:
+                    default_value = param.default_repr
+                else:
+                    default_value = param.default
+                info["default"] = default_value
+            if param.required:
+                required_params.append(info)
+            else:
+                optional_params.append(info)
+
+        input_params = {
+            "required": required_params,
+            "optional": optional_params,
+        }
+
+        param_segments: List[str] = []
+        for param in self.parameters:
+            kind = param.kind
+            prefix = ""
+            if kind == "var_keyword":
+                prefix = "**"
+            elif kind == "var_positional":
+                prefix = "*"
+            annotation = param.annotation or "Any"
+            segment = f"{prefix}{param.name}: {annotation}"
+            if param.has_default:
+                if param.default_repr is not None:
+                    default_str = param.default_repr
+                else:
+                    default_str = repr(param.default)
+                segment = f"{segment} = {default_str}"
+            param_segments.append(segment)
+
+        call_signature = f"{self.server}.{self.py_name}({', '.join(param_segments)})"
+
+        input_lines: List[str] = [f"Call: {call_signature}"]
+        if required_params:
+            input_lines.append("")
+            input_lines.append("Required params:")
+            for rp in required_params:
+                line = f"  - {rp['name']}: {rp['type']}"
+                input_lines.append(line)
+        if optional_params:
+            input_lines.append("")
+            input_lines.append("Optional params:")
+            for op in optional_params:
+                line = f"  - {op['name']}: {op['type']}"
+                if "default" in op:
+                    line = f"{line} = {op['default']}"
+                input_lines.append(line)
+
+        if self.output_schema_pretty:
+            output_lines = list(self.output_schema_pretty)
+        else:
+            output_lines = [
+                "Canonical wrapper: { success: bool, data: dict, error: str | null }",
+                "",
+                "data: <schema not documented; TODO: replace with real Composio-compatible payload schema>",
+            ]
+
+        return LLMToolDescriptor(
+            provider=self.provider,
+            server=self.server,
+            module=self.py_module,
+            function=self.py_name,
+            tool_id=self.tool_id,
+            call_signature=call_signature,
+            description=self.short_description or self.description or "",
+            input_params_pretty=input_lines,
+            output_schema_pretty=output_lines,
+            input_params=input_params,
+            output_schema=self.output_schema or {},
+            score=score,
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {
@@ -126,6 +261,10 @@ class ToolSpec:
             data["primary_param"] = self.primary_param
         if self.metadata:
             data["metadata"] = self.metadata
+        if self.output_schema:
+            data["output_schema"] = self.output_schema
+        if self.output_schema_pretty:
+            data["output_schema_pretty"] = self.output_schema_pretty
         return data
 
 

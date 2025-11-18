@@ -129,5 +129,5 @@ return {"sandbox": result}
     assert sandbox_entries
     sandbox_output = sandbox_entries[-1]
     assert sandbox_output["success"] is True
-    sandbox_payload = sandbox_output["result"]["sandbox"]["data"]["data"]
+    sandbox_payload = sandbox_output["result"]["sandbox"]["data"]
     assert sandbox_payload["provider"] == "gmail"
