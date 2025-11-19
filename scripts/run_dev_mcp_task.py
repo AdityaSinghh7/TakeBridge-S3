@@ -11,7 +11,7 @@ from mcp_agent.dev import resolve_dev_user, run_dev_task
 from mcp_agent.planner.llm import PlannerLLM
 from mcp_agent.env_sync import ensure_env_for_provider
 
-DEFAULT_RECIPIENT = "adityadevsings@gmail.com"
+DEFAULT_RECIPIENT = "adityadevsinghs@gmail.com"
 DEFAULT_TASK_TEMPLATE = (
     "Retrieve the three most recent emails in my Gmail inbox, produce a concise explanation "
     "for each (including any follow-up required), then send one email to {recipient} summarizing "

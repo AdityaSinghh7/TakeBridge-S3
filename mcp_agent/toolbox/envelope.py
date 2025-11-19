@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Dict
 
 from .types import ActionResponse
@@ -37,6 +38,40 @@ def unwrap_nested_data(value: Any) -> Any:
     return value
 
 
+def unwrap_composio_content(data: Any) -> Any:
+    """
+    Detect and unwrap Composio's double-encoded response format.
+    
+    Composio returns: {"content": [{"text": "{\"actual\": \"data\"}"}], ...}
+    This function parses the stringified JSON in content[0].text and returns
+    the actual data dictionary.
+    
+    Args:
+        data: Potentially double-encoded data from Composio
+        
+    Returns:
+        Clean parsed dictionary if pattern detected, otherwise data unchanged
+    """
+    if not isinstance(data, dict):
+        return data
+    
+    # Check for the specific Composio pattern
+    content = data.get("content")
+    if isinstance(content, list) and len(content) > 0:
+        item = content[0]
+        if isinstance(item, dict) and "text" in item:
+            text = item["text"]
+            if isinstance(text, str) and (text.startswith("{") or text.startswith("[")):
+                try:
+                    # Parse the stringified JSON
+                    return json.loads(text)
+                except (ValueError, TypeError, json.JSONDecodeError):
+                    # If parsing fails, return data unchanged
+                    pass
+    
+    return data
+
+
 def normalize_action_response(raw: Dict[str, Any] | None) -> ActionResponse:
     """
     Normalize a raw MCP/tool response into a canonical ActionResponse envelope.
@@ -65,6 +100,8 @@ def normalize_action_response(raw: Dict[str, Any] | None) -> ActionResponse:
     data_value = source.get("data")
     if data_value is not None:
         data_value = unwrap_nested_data(data_value)
+        # Apply Composio content unwrapping to handle double-encoded JSON
+        data_value = unwrap_composio_content(data_value)
     if data_value is None:
         normalized_data: Dict[str, Any] = {}
     elif isinstance(data_value, dict):

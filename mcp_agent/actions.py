@@ -492,9 +492,9 @@ def gmail_send_email(
     Description:
         Sends an email via Gmail API using the authenticated user's Google profile display name. At least one of recipient_email, cc, or bcc must be provided. Atleast one of subject or body must be provided. Requires `is_html=True` if the body contains HTML and valid `s3key`, `mimetype`, `name` for any attachment.
     Args:
-        to: Comma-separated recipients.
-        subject: Subject line text.
-        body: Plain text or simple HTML body.
+        recipient_email: Required Comma-separated recipients.
+        subject: Required Subject line text.
+        body: Required Plain text or simple HTML body.
         cc: Optional comma-separated CC recipients.
         bcc: Optional comma-separated BCC recipients.
         thread_id: Optional Gmail thread to reply into.

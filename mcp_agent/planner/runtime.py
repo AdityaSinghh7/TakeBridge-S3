@@ -21,6 +21,9 @@ from .actions import call_direct_tool
 from .sandbox import run_sandbox_plan
 from .summarize import summarize_payload
 
+# Import for Phase 2: routing through Python wrappers
+from mcp_agent.actions import get_provider_action_map
+
 
 # Planner result contract returned from execute_mcp_task and PlannerRuntime.run.
 # Fields:
@@ -494,8 +497,23 @@ class PlannerRuntime:
         set_step = getattr(agent, "set_step", None)
         if callable(set_step):
             set_step(len(self.context.steps))
+        
+        # Phase 2: Route through Python wrapper if available (handles parameter mapping)
         try:
-            response = call_direct_tool(self.context, provider=provider, tool=resolved_tool, payload=payload)
+            action_map = get_provider_action_map()
+            wrapper_funcs = action_map.get(provider, ())
+            wrapper = next((f for f in wrapper_funcs if f.__name__ == tool_name), None)
+            
+            if wrapper:
+                # Call wrapper function (handles parameter mapping like to -> recipient_email)
+                # Create a simple dummy object for 'self' parameter
+                class DummySelf:
+                    _validation_only = False
+                
+                response = wrapper(DummySelf(), **payload)
+            else:
+                # Fall back to direct MCP call if no wrapper exists
+                response = call_direct_tool(self.context, provider=provider, tool=resolved_tool, payload=payload)
         except Exception as exc:
             error_message = str(exc)
             trace = "".join(traceback.format_exception(exc))
