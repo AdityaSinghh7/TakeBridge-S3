@@ -99,7 +99,7 @@ def test_planner_state_includes_gmail_search_schema(monkeypatch, tmp_path):
     context = PlannerContext(task="Search Gmail for emails", user_id="tester", budget=Budget())
     context.summary_root = tmp_path
 
-    # Add a search result entry that would come from search_tools
+    # Add a search result entry that would come from search_tools (full descriptor)
     gmail_search_entry = {
         "provider": "gmail",
         "tool": "gmail_search",
@@ -107,18 +107,37 @@ def test_planner_state_includes_gmail_search_schema(monkeypatch, tmp_path):
         "server": "gmail",
         "module": "sandbox_py.servers.gmail",
         "function": "gmail_search",
+        "py_module": "sandbox_py.servers.gmail",
+        "py_name": "gmail_search",
+        "call_signature": "gmail.gmail_search(query: str, ...)",
         "description": "Search Gmail inbox",
         "short_description": "Search Gmail",
         "available": True,
-        "output_schema": {
-            "type": "object",
-            "properties": {
-                "messages": {"type": "array"},
-                "nextPageToken": {"type": "string"},
-                "resultSizeEstimate": {"type": "integer"},
-            },
-            "required": [],
+        "score": 5.0,
+        "path": "sandbox_py/servers/gmail/gmail_search.py",
+        "qualified_name": "gmail.gmail_search",
+        "input_params": {
+            "required": [{"name": "query", "type": "str"}],
+            "optional": [],
         },
+            "output_schema": {
+                "type": "object",
+                "properties": {
+                    "messages": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "messageId": {"type": "string"},
+                                "sender": {"type": "string"},
+                            },
+                        },
+                    },
+                    "nextPageToken": {"type": "string"},
+                    "resultSizeEstimate": {"type": "integer"},
+                },
+                "required": [],
+            },
         "output_schema_pretty": ["- messages: array", "- nextPageToken: string", "- resultSizeEstimate: integer"],
     }
 
@@ -138,10 +157,47 @@ def test_planner_state_includes_gmail_search_schema(monkeypatch, tmp_path):
     gmail_entry = next((r for r in search_results if r.get("tool_id") == "gmail.gmail_search"), None)
     assert gmail_entry is not None, "search_results should include gmail.gmail_search"
 
-    # Verify output_schema is present and correct
-    assert "output_schema" in gmail_entry, "gmail_search entry should have output_schema"
-    output_schema = gmail_entry["output_schema"]
-    assert "properties" in output_schema, "output_schema should have properties"
-    assert "messages" in output_schema["properties"], "output_schema should have messages property"
-    assert "nextPageToken" in output_schema["properties"], "output_schema should have nextPageToken property"
-    assert "resultSizeEstimate" in output_schema["properties"], "output_schema should have resultSizeEstimate property"
+    # Verify slim view: essential fields present
+    assert "tool_id" in gmail_entry, "slim view should have tool_id"
+    assert "provider" in gmail_entry, "slim view should have provider"
+    assert "server" in gmail_entry, "slim view should have server"
+    assert "py_module" in gmail_entry, "slim view should have py_module"
+    assert "py_name" in gmail_entry, "slim view should have py_name"
+    assert "call_signature" in gmail_entry, "slim view should have call_signature"
+    assert "description" in gmail_entry, "slim view should have description"
+    
+    # Verify slim view: redundant fields dropped
+    assert "path" not in gmail_entry, "slim view should not have path"
+    assert "qualified_name" not in gmail_entry, "slim view should not have qualified_name"
+    assert "short_description" not in gmail_entry, "slim view should not have short_description"
+    assert "available" not in gmail_entry, "slim view should not have available"
+    assert "score" not in gmail_entry, "slim view should not have score"
+    assert "tool" not in gmail_entry, "slim view should not have tool"
+    assert "module" not in gmail_entry, "slim view should not have module (use py_module)"
+    assert "function" not in gmail_entry, "slim view should not have function (use py_name)"
+
+    # Verify input_params_pretty is NOT present
+    assert "input_params_pretty" not in gmail_entry, "slim view should not have input_params_pretty"
+    # Verify input_params IS present
+    assert "input_params" in gmail_entry, "slim view should have input_params"
+    # Verify input_params is passed through correctly
+    assert gmail_entry["input_params"]["required"][0]["name"] == "query"
+
+    # Verify output_fields is present instead of output_schema
+    assert "output_fields" in gmail_entry, "gmail_search entry should have output_fields"
+    assert "output_schema" not in gmail_entry, "slim view should not have output_schema"
+    assert "output_schema_pretty" not in gmail_entry, "slim view should not have output_schema_pretty"
+    
+    # Verify output_fields contains expected entries (leaf-level fields only)
+    output_fields = gmail_entry["output_fields"]
+    assert isinstance(output_fields, list), "output_fields should be a list"
+    # Should have leaf-level fields, not intermediate objects
+    assert any("messages" in f for f in output_fields), "output_fields should include messages fields"
+    assert any("nextPageToken" in f for f in output_fields), "output_fields should include nextPageToken"
+    assert any("resultSizeEstimate" in f for f in output_fields), "output_fields should include resultSizeEstimate"
+    
+    # Verify full descriptor still available internally
+    full_entry = next((r for r in context.search_results if r.get("tool_id") == "gmail.gmail_search"), None)
+    assert full_entry is not None, "Full descriptor should still be in context.search_results"
+    assert "path" in full_entry, "Full descriptor should have path"
+    assert "score" in full_entry, "Full descriptor should have score"

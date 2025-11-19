@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, TypedDict
 import traceback
 import ast
+import json
 
 from mcp_agent.mcp_agent import MCPAgent
 from mcp_agent.user_identity import normalize_user_id
@@ -12,12 +13,13 @@ from mcp_agent.env_sync import ensure_env_for_provider
 from mcp_agent.toolbox.builder import get_index
 
 from .budget import Budget, BudgetSnapshot
-from .context import PlannerContext
-from .discovery import perform_initial_discovery, perform_refined_discovery
+from .context import PlannerContext, _slim_tool_for_planner
+from .discovery import load_provider_topology, perform_refined_discovery
 from .llm import PlannerLLM
 from .parser import parse_planner_command
 from .actions import call_direct_tool
 from .sandbox import run_sandbox_plan
+from .summarize import summarize_payload
 
 
 # Planner result contract returned from execute_mcp_task and PlannerRuntime.run.
@@ -95,6 +97,45 @@ def analyze_sandbox(code: str) -> tuple[set[str], Dict[str, set[str]]]:
     return used_servers, calls_by_server
 
 
+def _smart_format_observation(payload: Any, max_chars: int = 15000) -> Any:
+    """
+    Return raw data if it fits in context, otherwise summarize.
+    
+    This allows the model to see actual data for small payloads (e.g., a few emails)
+    while automatically summarizing large payloads (e.g., 100 emails).
+    
+    Args:
+        payload: The data to format (may be an MCP envelope or raw data)
+        max_chars: Maximum character length before summarization triggers
+    
+    Returns:
+        Either the raw data (if small enough) or a summary dict
+    """
+    # 1. Unwrap MCP envelope if present
+    data = payload
+    if isinstance(payload, dict):
+        if "successful" in payload:
+            # This is an MCP envelope
+            if not payload["successful"]:
+                # Return error immediately for failed calls
+                return {"error": payload.get("error", "Unknown failure")}
+            # Extract the data field
+            data = payload.get("data", {})
+    
+    # 2. Check size of the data
+    try:
+        text = json.dumps(data, default=str, ensure_ascii=False)
+        if len(text) <= max_chars:
+            # Small enough - return raw data
+            return data
+    except Exception:
+        # If serialization fails, fall through to summary
+        pass
+    
+    # 3. Too large - return summary
+    return summarize_payload("tool_output", data, purpose="planner_observation")
+
+
 class PlannerRuntime:
     """Coordinator for the high-level planner loop."""
 
@@ -108,7 +149,7 @@ class PlannerRuntime:
 
         Flow:
           1. Ensure the planner LLM is enabled.
-          2. Perform initial tool discovery.
+          2. Load provider topology (high-level overview only).
           3. Repeatedly:
              - Check budget limits.
              - Ask the LLM for the next command and parse it.
@@ -118,7 +159,7 @@ class PlannerRuntime:
             self._ensure_llm_enabled()
         except _PlannerAbort as exc:
             return exc.result
-        perform_initial_discovery(self.context)
+        load_provider_topology(self.context)
         while True:
             exceeded = self._budget_exceeded()
             if exceeded:
@@ -483,13 +524,13 @@ class PlannerRuntime:
                 preview=str(command),
                 recorded_step=True,
             )
-        entries = self.context.get_raw_output_entries(result_key)
-        raw_entry = entries[-1] if entries else {}
-        summary = raw_entry.get("summary")
-        response_payload = raw_entry.get("response", response)
+        
+        # Use smart observation formatting - show raw data if it fits, summary if too large
+        observation = _smart_format_observation(response)
+        
         response_success = True
-        if isinstance(response_payload, dict):
-            response_success = response_payload.get("successful", True)
+        if isinstance(response, dict):
+            response_success = response.get("successful", True)
         reasoning = command.get("reasoning") or ""
         self.context.record_step(
             type="tool",
@@ -497,8 +538,8 @@ class PlannerRuntime:
             success=True,
             preview=reasoning or f"{provider}.{resolved_tool} (successful={response_success})",
             result_key=result_key,
-            output=summary or response_payload,
-            is_summary=bool(summary),
+            output=observation,
+            is_summary=False,
         )
         self.context.record_event(
             "mcp.action.completed",
@@ -601,12 +642,11 @@ class PlannerRuntime:
             set_step(len(self.context.steps))
         execution = run_sandbox_plan(self.context, code_body, label=label)
         sandbox_result = execution.result
+        result_key = f"sandbox.{label}"
+        
         if sandbox_result.success:
-            result_key = f"sandbox.{label}"
-            entries = self.context.get_raw_output_entries(result_key)
-            raw_entry = entries[-1] if entries else {}
-            summary = raw_entry.get("summary")
-            output_payload = summary or raw_entry.get("result")
+            # Use smart observation formatting - show raw result if it fits, summary if too large
+            observation = _smart_format_observation(sandbox_result.result)
             reasoning = command.get("reasoning") or ""
             self.context.record_step(
                 type="sandbox",
@@ -614,18 +654,16 @@ class PlannerRuntime:
                 success=True,
                 preview=reasoning or f"Sandbox '{label}' success",
                 result_key=result_key,
-                output=output_payload,
-                is_summary=bool(summary),
+                output=observation,
+                is_summary=False,
             )
             return None
-        result_key = f"sandbox.{label}"
-        entries = self.context.get_raw_output_entries(result_key)
-        raw_entry = entries[-1] if entries else {}
-        summary = raw_entry.get("summary")
-        output_payload = summary or {
-            "result": raw_entry.get("result"),
+        
+        # Failure case - format the error observation
+        error_payload = {
             "error": sandbox_result.error or "sandbox_execution_failed",
         }
+        observation = _smart_format_observation(error_payload)
         reasoning = command.get("reasoning") or ""
         self.context.record_step(
             type="sandbox",
@@ -634,8 +672,8 @@ class PlannerRuntime:
             preview=reasoning or f"Sandbox '{label}' failed",
             result_key=result_key,
             error=sandbox_result.error or "sandbox_execution_failed",
-            output=output_payload,
-            is_summary=bool(summary),
+            output=observation,
+            is_summary=False,
         )
         return self._failure(
             "sandbox_runtime_error",
@@ -660,6 +698,9 @@ class PlannerRuntime:
             detail_level=detail_level,
             limit=limit_value,
         )
+        # Slim the results for the trajectory observation
+        slim_results = [_slim_tool_for_planner(r) for r in results]
+        
         self.context.record_event(
             "mcp.search.completed",
             {
@@ -677,7 +718,7 @@ class PlannerRuntime:
             command=command,
             success=True,
             preview=reasoning or f"Search '{query}' returned {len(results)} results",
-            output=results,
+            output={"found_tools": slim_results},
             is_summary=False,
         )
         return None

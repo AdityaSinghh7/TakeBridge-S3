@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+import sys
 from typing import Any, Dict, List
 
 from shared.oai_client import OAIClient, extract_assistant_text
@@ -114,4 +115,11 @@ class PlannerLLM:
     ) -> str:
         state = context.planner_state(snapshot)
         state_json = json.dumps(state, ensure_ascii=False, sort_keys=True, indent=2)
+        
+        # DEBUG: optionally dump PLANNER_STATE_JSON to stderr
+        if os.getenv("MCP_PLANNER_DUMP_STATE_JSON") == "1":
+            print("\n================ PLANNER_STATE_JSON DUMP ================", file=sys.stderr)
+            print(state_json, file=sys.stderr)
+            print("=========================================================\n", file=sys.stderr)
+        
         return f"PLANNER_STATE_JSON\n{state_json}"

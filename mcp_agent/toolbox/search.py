@@ -130,7 +130,27 @@ def _normalize_query(query: str | None) -> _Query:
 def _score_tool(tool: ToolSpec, query: _Query) -> int:
     if not query.terms:
         return 2 if tool.available else 1
-    score = 0
+    
+    # Provider alignment check - prevent cross-provider contamination
+    # Known providers (can be expanded as needed)
+    known_providers = ["gmail", "slack", "github", "google", "microsoft", "composio"]
+    query_lower = query.raw.lower()
+    
+    # Check if query mentions any specific provider
+    mentioned_providers = [p for p in known_providers if p in query_lower]
+    
+    if mentioned_providers:
+        # Query explicitly mentions a provider
+        tool_provider = tool.provider.lower()
+        if tool_provider not in mentioned_providers:
+            # Hard filter - query asks for "gmail" but this is a "slack" tool
+            return 0
+        # Provider match - boost the score significantly
+        score = 10
+    else:
+        # No specific provider mentioned - start with neutral score
+        score = 0
+    
     haystacks = {
         "name": tool.name.lower(),
         "provider": tool.provider.lower(),

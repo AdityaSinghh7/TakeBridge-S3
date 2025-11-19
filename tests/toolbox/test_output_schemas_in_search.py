@@ -170,6 +170,8 @@ def test_gmail_schemas_have_expected_shapes(monkeypatch, tmp_path):
 
     # Ensure IoToolSpecs are registered and schemas are loaded
     ensure_io_specs_loaded()
+    # Explicitly reload schemas from the (potentially new) path after setting env var
+    output_schema_loader.load_output_schemas()
 
     # Test gmail_search schema
     spec = get_tool_spec("gmail", "gmail_search")

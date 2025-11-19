@@ -2,10 +2,22 @@ from __future__ import annotations
 
 from typing import List, Dict
 
-from mcp_agent.toolbox.search import search_tools
+from mcp_agent.toolbox.search import search_tools, list_providers
 from mcp_agent.registry import registry_version
 
 from .context import PlannerContext
+
+
+def load_provider_topology(context: PlannerContext) -> None:
+    """
+    Load high-level provider tree (Provider -> Tool Names) without details.
+    
+    This is fast and token-cheap, providing only the overview of what's available.
+    The planner must use explicit search commands to discover tool schemas.
+    """
+    tree = list_providers(context.user_id)
+    context.provider_tree = tree
+    context.discovery_completed = True
 
 
 def perform_initial_discovery(
@@ -15,8 +27,10 @@ def perform_initial_discovery(
     detail_level: str = "summary",
 ) -> List[Dict[str, object]]:
     """
-    Ensure the planner has up-to-date tool metadata for the task.
-    Always routes through `search_tools(...)`, keeping discovery logic centralized.
+    Deprecated: Use load_provider_topology() instead.
+    
+    This function is kept for backwards compatibility but should not be used
+    in the ReAct planner flow.
     """
     current_version = registry_version(context.user_id)
     needs_refresh = (

@@ -22,6 +22,284 @@ from .prompt import PLANNER_PROMPT
 
 StepType = Literal["tool", "sandbox", "search", "finish"]
 
+# Essential tool keys to keep in slim LLM-facing view
+ESSENTIAL_TOOL_KEYS = (
+    "tool_id",
+    "provider",
+    "server",
+    "call_signature",
+    "description",
+)
+
+
+def _shallow_schema(schema: Dict[str, Any], *, max_depth: int = 2) -> Dict[str, Any]:
+    """
+    Return a shallow copy of a JSON-schema-like dict, truncating nested
+    'properties' beyond max_depth. This keeps high-level keys and their types
+    but avoids huge nested trees (Slack blocks, bot_profile, etc.).
+
+    Args:
+        schema: Full JSON schema dict (typically from output_schema)
+        max_depth: Maximum depth to preserve nested properties (default: 2)
+
+    Returns:
+        Shallow schema dict with top-level keys + limited nesting
+    """
+    def _shallow(node: Any, depth: int) -> Any:
+        if not isinstance(node, dict):
+            return node
+        result: Dict[str, Any] = {}
+        for key, value in node.items():
+            if key == "properties" and isinstance(value, dict):
+                if depth >= max_depth:
+                    # Keep only the property names and types, drop nested properties
+                    props_summary = {}
+                    for prop_name, prop_schema in value.items():
+                        if isinstance(prop_schema, dict):
+                            # Preserve type and basic structure, drop nested properties
+                            summary = {}
+                            if "type" in prop_schema:
+                                summary["type"] = prop_schema["type"]
+                            if "items" in prop_schema:
+                                # For arrays, keep items but truncate nested properties
+                                items_val = prop_schema["items"]
+                                if isinstance(items_val, dict) and "type" in items_val:
+                                    summary["items"] = {"type": items_val["type"]}
+                                else:
+                                    summary["items"] = {}
+                            props_summary[prop_name] = summary
+                        else:
+                            props_summary[prop_name] = {}
+                    result[key] = props_summary
+                else:
+                    result[key] = {
+                        prop_name: _shallow(prop_schema, depth + 1)
+                        for prop_name, prop_schema in value.items()
+                    }
+            elif key == "items" and isinstance(value, dict):
+                # Handle array items - recurse but don't increment depth for items
+                result[key] = _shallow(value, depth)
+            elif key == "required" and isinstance(value, list):
+                # Preserve required fields list
+                result[key] = value
+            else:
+                result[key] = _shallow(value, depth)
+        return result
+
+    return _shallow(schema, depth=0)
+
+
+def _flatten_schema_fields(
+    schema: Dict[str, Any],
+    *,
+    prefix: str = "",
+    depth: int = 0,
+    max_depth: Optional[int] = None,
+    max_fields: int = 40,
+    out: Optional[List[str]] = None,
+) -> List[str]:
+    """
+    Flatten a JSON-schema-like `schema` into a list of 'path: type' strings.
+
+    - Traverses deeply (no depth limit by default) but stops at `max_fields` entries.
+    - Uses '[]' for array elements.
+    - Uses dot notation for nested objects.
+
+    Args:
+        schema: Full JSON schema dict (typically from output_schema)
+        prefix: Current path prefix (used internally for recursion)
+        depth: Current depth (used internally for recursion)
+        max_depth: Maximum depth to traverse (None = unlimited, default: None)
+        max_fields: Maximum number of fields to include (default: 40)
+        out: Output list (used internally for recursion)
+
+    Returns:
+        List of flattened field descriptions like ["messages[]: object", "messages[].messageId: string"]
+    """
+    if out is None:
+        out = []
+    
+    if max_fields is not None and len(out) >= max_fields:
+        return out
+    
+    # If we've hit depth limit, bail
+    if max_depth is not None and depth > max_depth:
+        return out
+    
+    # Only handle dict/object schemas
+    if not isinstance(schema, dict):
+        return out
+    
+    schema_type = schema.get("type")
+    props = schema.get("properties", {})
+    
+    # Simple leaf: we've got a type and no child properties
+    if schema_type and not props:
+        if prefix:
+            out.append(f"{prefix}: {schema_type}")
+        return out
+    
+    # Traverse properties
+    for name, subschema in props.items():
+        if max_fields is not None and len(out) >= max_fields:
+            break
+        
+        # Arrays: handle items as "name[]" etc
+        if subschema.get("type") == "array":
+            item = subschema.get("items", {})
+            child_prefix = f"{prefix}.{name}[]" if prefix else f"{name}[]"
+            _flatten_schema_fields(
+                item,
+                prefix=child_prefix,
+                depth=depth + 1,
+                max_depth=max_depth,
+                max_fields=max_fields,
+                out=out,
+            )
+        else:
+            child_prefix = f"{prefix}.{name}" if prefix else name
+            _flatten_schema_fields(
+                subschema,
+                prefix=child_prefix,
+                depth=depth + 1,
+                max_depth=max_depth,
+                max_fields=max_fields,
+                out=out,
+            )
+    
+    return out
+
+
+def _build_minimal_signature(entry: Dict[str, Any]) -> str:
+    """
+    Build a compact signature for the planner with only required arguments.
+
+    Example:
+      Entry with tool_id="gmail.gmail_search" and input_params.required=[{"name": "query"}]
+      becomes: "gmail.gmail_search(query)"
+
+    Args:
+        entry: Full tool descriptor from search_tools()
+
+    Returns:
+        Minimal signature with only required arguments
+    """
+    tool_id = entry.get("tool_id")
+    if not tool_id:
+        # Fallback: provider.py_name
+        provider = entry.get("provider", "tool")
+        py_name = entry.get("py_name") or entry.get("function") or "call"
+        tool_id = f"{provider}.{py_name}"
+
+    params: Dict[str, Any] = entry.get("input_params") or {}
+    required: List[Dict[str, Any]] = params.get("required") or []
+    names = [p.get("name", "arg") for p in required]
+
+    if names:
+        joined = ", ".join(names)
+        return f"{tool_id}({joined})"
+    return f"{tool_id}()"
+
+
+def _simplify_signature(sig: str) -> str:
+    """
+    Strip Python type annotations from a signature string to reduce tokens.
+
+    Example:
+      'gmail.gmail_search(query: str, max_results: int = 20, ...)'
+    becomes:
+      'gmail.gmail_search(query, max_results=20, ...)'
+
+    Args:
+        sig: Function signature string with type annotations
+
+    Returns:
+        Simplified signature without type annotations
+    """
+    if not sig:
+        return sig
+
+    # Remove ": <type>" patterns, preserving everything else
+    result = re.sub(r":\s*[^,)=]+", "", sig)
+    
+    # Normalize spaces around = signs (remove spaces around =)
+    # This handles cases like "param = value" -> "param=value"
+    result = re.sub(r"\s*=\s*", "=", result)
+    
+    return result
+
+
+def _slim_tool_for_planner(entry: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Project a rich LLMToolDescriptor dict into a slimmer, LLM-facing view
+    suitable for PLANNER_STATE_JSON. Keeps only fields that the planner
+    prompt relies on, with flattened output fields.
+
+    Args:
+        entry: Full tool descriptor from search_tools()
+
+    Returns:
+        Slim tool descriptor with essential fields only
+    """
+    slim: Dict[str, Any] = {}
+
+    # Core identity / selection
+    for key in ESSENTIAL_TOOL_KEYS:
+        if key in entry:
+            slim[key] = entry[key]
+
+    # Canonical sandbox import path (prefer explicit py_* when present)
+    slim["py_module"] = entry.get("py_module") or entry.get("module")
+    slim["py_name"] = entry.get("py_name") or entry.get("function")
+
+    # Build minimal signature with only required arguments
+    if "input_params" in entry:
+        slim["call_signature"] = _build_minimal_signature(entry)
+    else:
+        # No structured params? Fall back to original signature or tool_id
+        slim["call_signature"] = entry.get("call_signature") or entry.get("tool_id", "")
+
+    # Inputs: structured params only (drop input_params_pretty)
+    if "input_params" in entry:
+        slim["input_params"] = entry["input_params"]
+
+    # Outputs: flattened fields list (drop output_schema and output_schema_pretty)
+    schema = entry.get("output_schema")
+    if isinstance(schema, dict):
+        slim["output_fields"] = _flatten_schema_fields(
+            schema,
+            max_depth=None,  # Unlimited depth
+            max_fields=40,   # But capped at 40 fields
+        )
+    else:
+        # Always include output_fields, even if empty
+        slim["output_fields"] = []
+
+    return slim
+
+
+def _slim_provider_tree(tree: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Strip internal metadata from provider tree for LLM consumption.
+    
+    Only keeps provider name and list of available tool names.
+    Discards: mcp_url, path, authorized, registered, configured, 
+              tool_count, display_name, all_actions
+    
+    Args:
+        tree: Full provider tree from list_providers()
+    
+    Returns:
+        Minimal provider tree with only provider and tools fields
+    """
+    slim = []
+    for node in tree:
+        slim.append({
+            "provider": node.get("provider"),
+            "tools": node.get("available_tools", [])
+        })
+    return slim
+
 
 @dataclass
 class PlannerStep:
@@ -47,6 +325,7 @@ class PlannerContext:
     task_id: Optional[str] = None
     planner_prompt: str = PLANNER_PROMPT
     extra_context: Dict[str, Any] = field(default_factory=dict)
+    provider_tree: List[Dict[str, Any]] = field(default_factory=list)
     search_results: List[Dict[str, Any]] = field(default_factory=list)
     tool_menu: List[Dict[str, Any]] = field(default_factory=list)
     tool_summaries: List[Dict[str, Any]] = field(default_factory=list)
@@ -303,54 +582,32 @@ class PlannerContext:
         """
         Build the planner_state JSON consumed by PlannerLLM; no side effects.
         """
-        recent_count = 3
-        recent_steps = self.steps[-recent_count:]
-        history_summary = self._history_summary(len(recent_steps))
-        tools_root = str((self.toolbox_root / "sandbox_py" / "servers").resolve())
-        available_servers = sorted(
-            {
-                (entry.get("server") or entry.get("provider", "")).strip()
-                for entry in self.search_results
-                if (entry.get("server") or entry.get("provider"))
-            }
-        )
-        recent_entries: List[Dict[str, Any]] = []
-        for step in recent_steps:
+        # Build trajectory from all steps (Action -> Observation pattern)
+        trajectory: List[Dict[str, Any]] = []
+        for step in self.steps:
             entry: Dict[str, Any] = {
-                "index": step.index,
+                "step": step.index,
                 "type": step.type,
-                "status": "success" if step.success else "error",
-                "summary": step.preview,
+                "reasoning": step.command.get("reasoning", "") if step.command else "",
+                "action": step.command,  # The request
+                "observation": step.output,  # The response
+                "status": "success" if step.success else "failed",
             }
-            command = step.command or {}
-            if step.type == "search":
-                entry["query"] = command.get("query")
-                entry["detail_level"] = command.get("detail_level")
-                if isinstance(step.output, list):
-                    entry["result_count"] = len(step.output)
-            elif step.type == "sandbox":
-                entry["label"] = command.get("label") or step.result_key
-            elif step.type == "tool":
-                entry["provider"] = command.get("provider")
-                entry["tool"] = command.get("tool")
-            if step.result_key:
-                entry["result_key"] = step.result_key
-            if step.error:
-                entry["error"] = step.error
-            if step.output is not None:
-                entry["output"] = step.output
-                entry["is_summary"] = step.is_summary
-            recent_entries.append(entry)
+            trajectory.append(entry)
+        
+        # Slim search results for available_tools (detailed specs of discovered tools)
+        available_tools = [_slim_tool_for_planner(e) for e in self.search_results]
+        
+        # Slim provider tree to remove internal metadata
+        slim_tree = _slim_provider_tree(self.provider_tree)
+        
         return {
             "task": self.task,
             "user_id": self.user_id,
             "run_id": self.run_id,
-            "tools_root": tools_root,
-            "available_servers": available_servers,
-            "history_summary": history_summary,
-            "recent_steps": recent_entries,
-            # Full, de-duplicated catalog of tools discovered via search so far.
-            "search_results": list(self.search_results),
+            "provider_tree": slim_tree,           # Cleaned provider tree (just names + tool lists)
+            "available_tools": available_tools,   # Detailed specs of discovered tools
+            "trajectory": trajectory              # History of Action -> Observation
         }
 
     def planner_state(self, snapshot: BudgetSnapshot) -> Dict[str, Any]:
