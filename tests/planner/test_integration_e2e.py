@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any, List
 
 import pytest
 
 from mcp_agent.agent import execute_mcp_task
-from mcp_agent.knowledge.builder import ToolboxBuilder
 
 from mcp_agent import registry
 
@@ -112,11 +110,6 @@ def test_execute_task_with_gmail_sandbox(monkeypatch, tmp_path):
 
     monkeypatch.setattr("mcp_agent.knowledge.search.search_tools", fake_search_tools)
 
-    toolbox_root = tmp_path / "toolbox"
-    builder = ToolboxBuilder(user_id=TEST_USER, base_dir=toolbox_root)
-    manifest = builder.build()
-    builder.persist(manifest)
-
     code_body = """from sandbox_py.servers.gmail import gmail_search
 result = await gmail_search(query="from:boss")
 return {"sandbox": result}
@@ -128,7 +121,7 @@ return {"sandbox": result}
         ]
     )
 
-    result = execute_mcp_task("Process Gmail data", user_id=TEST_USER, llm=llm, toolbox_root=toolbox_root)
+    result = execute_mcp_task("Process Gmail data", user_id=TEST_USER, llm=llm)
     assert result["success"] is True, result
     sandbox_entries = result["raw_outputs"].get("sandbox.sandbox", [])
     assert sandbox_entries

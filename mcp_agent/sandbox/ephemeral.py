@@ -1,0 +1,165 @@
+"""Ephemeral sandbox toolbox generator.
+
+Creates a temporary ``sandbox_py`` package for each planner run so that
+sandbox code can import provider helpers (``from sandbox_py.servers import gmail``)
+without relying on a persisted toolbox directory on disk.
+"""
+
+from __future__ import annotations
+
+import inspect
+import shutil
+from pathlib import Path
+from typing import Any, Callable, Iterable, Sequence
+
+from mcp_agent.actions import get_provider_action_map
+from mcp_agent.core.context import AgentContext
+from mcp_agent.knowledge.utils import extract_call_tool_metadata
+from mcp_agent.registry.manager import RegistryManager
+
+
+def generate_ephemeral_toolbox(context: AgentContext, destination_dir: Path) -> None:
+    """Generate a per-request ``sandbox_py`` package under ``destination_dir``.
+
+    The stub modules mirror the available providers for the given user and proxy
+    calls back through :mod:`mcp_agent.sandbox.runtime` so each sandbox plan can
+    import helpers exactly as before (``from sandbox_py.servers import gmail``).
+    """
+
+    dest = destination_dir.resolve()
+    base = dest / "sandbox_py"
+    servers_dir = base / "servers"
+
+    # Start from a clean slate each time.
+    if base.exists():
+        shutil.rmtree(base)
+    servers_dir.mkdir(parents=True, exist_ok=True)
+
+    # Always provide thin compatibility shims for sandbox_py.__init__ and client.
+    _write_base_init(base)
+    _write_client_module(base / "client.py")
+
+    registry = RegistryManager(context)
+    provider_infos = registry.get_available_providers()
+    action_map = get_provider_action_map()
+
+    generated: list[str] = []
+    for info in sorted(provider_infos, key=lambda item: item.provider):
+        if not info.authorized:
+            continue
+        funcs = action_map.get(info.provider, ())
+        if not funcs:
+            continue
+
+        available_funcs = [
+            func
+            for func in funcs
+            if _is_tool_available(registry, info.provider, func.__name__)
+        ]
+        if not available_funcs:
+            continue
+
+        module_path = servers_dir / f"{info.provider}.py"
+        _write_provider_module(module_path, info.provider, available_funcs)
+        generated.append(info.provider)
+
+    _write_servers_init(servers_dir, generated)
+
+
+def _is_tool_available(registry: RegistryManager, provider: str, tool: str) -> bool:
+    available, _reason = registry.check_availability(provider, tool)
+    return available
+
+
+def _write_base_init(base: Path) -> None:
+    content = """from . import client, servers\n\n__all__ = [\"client\", \"servers\"]\n"""
+    (base / "__init__.py").write_text(content, encoding="utf-8")
+
+
+def _write_servers_init(servers_dir: Path, providers: Sequence[str]) -> None:
+    lines = ["from __future__ import annotations", ""]
+    for provider in sorted(providers):
+        lines.append(f"from . import {provider}")
+    lines.append("")
+    exports = ", ".join(f'\"{name}\"' for name in sorted(providers))
+    lines.append(f"__all__ = [{exports}]" if exports else "__all__ = []")
+    (servers_dir / "__init__.py").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_client_module(path: Path) -> None:
+    content = """from __future__ import annotations\n\nimport json\nfrom typing import Any, Sequence\n\nfrom mcp_agent.sandbox.runtime import (\n    ToolCallResult,\n    ToolCaller,\n    call_tool,\n    normalize_string_list,\n    redact_payload,\n    register_tool_caller,\n    sanitize_payload,\n)\n\nStructuredData = Any\nStringListInput = Any\n\n\n__all__ = [\n    \"ToolCallResult\",\n    \"ToolCaller\",\n    \"call_tool\",\n    \"register_tool_caller\",\n    \"sanitize_payload\",\n    \"normalize_string_list\",\n    \"redact_payload\",\n    \"serialize_structured_param\",\n    \"merge_recipient_lists\",\n]\n\n\n# Backwards compatible helpers extracted from the legacy sandbox_py package.\ndef serialize_structured_param(value: StructuredData) -> str | None:\n    if value in (None, \"\"):\n        return None\n    if isinstance(value, str):\n        return value\n    try:\n        return json.dumps(value)\n    except Exception as exc:\n        raise ValueError(f\"Failed to serialize structured payload: {exc}\") from exc\n\n\nStringList = list[str]\n\n\ndef merge_recipient_lists(base: StringListInput, extras: Sequence[str] | None = None) -> StringList:\n    combined = normalize_string_list(base) or []\n    if extras:\n        combined.extend(extra for extra in extras if extra)\n    deduped: StringList = []\n    seen = set()\n    for entry in combined:\n        lowered = entry.lower()\n        if lowered not in seen:\n            deduped.append(entry)\n            seen.add(lowered)\n    return deduped\n"""
+    path.write_text(content, encoding="utf-8")
+
+
+def _write_provider_module(path: Path, provider: str, funcs: Iterable[Callable[..., Any]]) -> None:
+    lines: list[str] = [
+        "from __future__ import annotations",
+        "",
+        "from typing import Any",
+        "",
+        "from mcp_agent.sandbox.runtime import ToolCallResult, call_tool, sanitize_payload",
+        "",
+        f"# Ephemeral stubs for provider '{provider}'.",
+        "",
+    ]
+
+    for func in sorted(funcs, key=lambda f: f.__name__):
+        lines.extend(_render_tool_function(provider, func))
+        alias = _camel_case_alias(func.__name__)
+        if alias:
+            lines.append(f"{alias} = {func.__name__}")
+            lines.append("")
+
+    path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+
+
+def _render_tool_function(provider: str, func: Callable[..., Any]) -> list[str]:
+    signature = inspect.signature(func)
+    params = list(signature.parameters.values())
+    # Drop the AgentContext parameter when present.
+    body_params = params[1:] if params and params[0].name == "context" else params
+    stub_signature = inspect.Signature(parameters=body_params)
+    params_source = str(stub_signature)[1:-1].strip()
+    param_text = params_source if params_source else ""
+
+    _, mcp_tool_name = extract_call_tool_metadata(func)
+    comment = f"    # Underlying MCP tool: {mcp_tool_name}" if mcp_tool_name else None
+
+    lines = [f"async def {func.__name__}({param_text}) -> ToolCallResult:"]
+    if comment:
+        lines.append(comment)
+    lines.append("    payload: dict[str, Any] = {}")
+
+    for param in body_params:
+        assignment = _payload_assignment(param)
+        if assignment:
+            lines.extend(assignment)
+
+    lines.append("    sanitize_payload(payload)")
+    lines.append(f"    return await call_tool('{provider}', '{func.__name__}', payload)")
+    lines.append("")
+    return lines
+
+
+def _payload_assignment(param: inspect.Parameter) -> list[str] | None:
+    name = param.name
+    kind = param.kind
+
+    if kind is inspect.Parameter.VAR_POSITIONAL:
+        return [f"    if {name}:", f"        payload['{name}'] = list({name})"]
+    if kind is inspect.Parameter.VAR_KEYWORD:
+        return [f"    payload.update({name})"]
+
+    if param.default is inspect.Signature.empty:
+        return [f"    payload['{name}'] = {name}"]
+    return [f"    if {name} is not None:", f"        payload['{name}'] = {name}"]
+
+
+def _camel_case_alias(name: str) -> str | None:
+    parts = name.split("_")
+    if len(parts) <= 1:
+        return None
+    alias = parts[0] + "".join(part.capitalize() for part in parts[1:])
+    if alias == name:
+        return None
+    return alias

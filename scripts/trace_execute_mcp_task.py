@@ -5,7 +5,6 @@ import argparse
 import json
 import sys
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from mcp_agent.mcp_agent import MCPAgent
@@ -80,12 +79,6 @@ def parse_args() -> argparse.Namespace:
         help="Provider to ensure OAuth is refreshed for (default: gmail).",
     )
     parser.add_argument(
-        "--toolbox-root",
-        type=Path,
-        default=None,
-        help="Optional toolbox root path. Defaults to ./toolbox.",
-    )
-    parser.add_argument(
         "--extra-context",
         default=None,
         help="Optional JSON string with extra context passed to execute_mcp_task.",
@@ -117,7 +110,6 @@ def main() -> None:
             args.task,
             user_id=user_id,
             extra_context=extra_context,
-            toolbox_root=args.toolbox_root,
         )
 
     print("\n=== Planner Result ===")

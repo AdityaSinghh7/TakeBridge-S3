@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 import hashlib
 import json
 import os
@@ -85,65 +85,6 @@ def _shallow_schema(schema: Dict[str, Any], *, max_depth: int = 2) -> Dict[str, 
     return _shallow(schema, depth=0)
 
 
-def _flatten_schema_fields(
-    schema: Dict[str, Any],
-    *,
-    prefix: str = "",
-    depth: int = 0,
-    max_depth: Optional[int] = None,
-    max_fields: int = 40,
-    out: Optional[List[str]] = None,
-) -> List[str]:
-    """Flatten a JSON-schema-like dict into a list of 'path: type' strings."""
-    if out is None:
-        out = []
-
-    if max_fields is not None and len(out) >= max_fields:
-        return out
-
-    if max_depth is not None and depth > max_depth:
-        return out
-
-    if not isinstance(schema, dict):
-        return out
-
-    schema_type = schema.get("type")
-    props = schema.get("properties", {})
-
-    if schema_type and not props:
-        if prefix:
-            out.append(f"{prefix}: {schema_type}")
-        return out
-
-    for name, subschema in props.items():
-        if max_fields is not None and len(out) >= max_fields:
-            break
-
-        if isinstance(subschema, dict) and subschema.get("type") == "array":
-            item = subschema.get("items", {})
-            child_prefix = f"{prefix}.{name}[]" if prefix else f"{name}[]"
-            _flatten_schema_fields(
-                item,
-                prefix=child_prefix,
-                depth=depth + 1,
-                max_depth=max_depth,
-                max_fields=max_fields,
-                out=out,
-            )
-        else:
-            child_prefix = f"{prefix}.{name}" if prefix else name
-            _flatten_schema_fields(
-                subschema,
-                prefix=child_prefix,
-                depth=depth + 1,
-                max_depth=max_depth,
-                max_fields=max_fields,
-                out=out,
-            )
-
-    return out
-
-
 def _build_minimal_signature(entry: Dict[str, Any]) -> str:
     """Build a compact signature for the planner with only required arguments."""
     tool_id = entry.get("tool_id")
@@ -171,62 +112,6 @@ def _simplify_signature(sig: str) -> str:
     return result
 
 
-def _slim_provider_tree(tree: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Remove heavy fields from provider tree for prompt payloads."""
-    slim: List[Dict[str, Any]] = []
-    for entry in tree:
-        provider = {
-            "provider": entry.get("provider"),
-            "display_name": entry.get("display_name"),
-            "authorized": entry.get("authorized"),
-            "registered": entry.get("registered"),
-            "configured": entry.get("configured"),
-            "mcp_url": entry.get("mcp_url"),
-            "tool_count": len(entry.get("tools", [])),
-        }
-        tool_names = []
-        for tool in entry.get("tools", []):
-            minimal = {
-                key: tool.get(key)
-                for key in ESSENTIAL_TOOL_KEYS
-                if key in tool
-            }
-            minimal["call_signature"] = tool.get("call_signature") or _build_minimal_signature(tool)
-            if "input_params" in tool:
-                minimal["input_params"] = {
-                    "required": tool["input_params"].get("required", []),
-                    "optional": tool["input_params"].get("optional", []),
-                }
-            slim_schema = tool.get("output_schema")
-            if slim_schema:
-                minimal["output_schema"] = _shallow_schema(slim_schema)
-            if "output_fields" in tool:
-                minimal["output_fields"] = tool["output_fields"]
-            elif "output_schema" in tool:
-                minimal["output_fields"] = _flatten_schema_fields(tool["output_schema"])
-            tool_names.append(minimal)
-        provider["tools"] = tool_names
-        slim.append(provider)
-    return slim
-
-
-def _slim_tool_for_planner(entry: Dict[str, Any]) -> Dict[str, Any]:
-    """Return a slimmed-down tool descriptor for the planner prompt."""
-    result = {key: entry.get(key) for key in ESSENTIAL_TOOL_KEYS if key in entry}
-    result["qualified_name"] = entry.get("qualified_name") or entry.get("tool_id")
-    result["server"] = entry.get("server") or entry.get("provider")
-    result["py_module"] = entry.get("py_module") or entry.get("module")
-    result["py_name"] = entry.get("py_name") or entry.get("function")
-    result["call_signature"] = entry.get("call_signature") or _build_minimal_signature(entry)
-    if "input_params" in entry:
-        result["input_params"] = entry["input_params"]
-    if "output_fields" in entry:
-        result["output_fields"] = entry["output_fields"]
-    elif "output_schema" in entry:
-        result["output_fields"] = _flatten_schema_fields(entry["output_schema"])
-    return result
-
-
 @dataclass
 class AgentStep:
     """Single step in agent execution history."""
@@ -240,6 +125,7 @@ class AgentStep:
     error: Optional[str] = None
     output: Any = None
     is_summary: bool = False
+    is_smart_summary: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict for serialization."""
@@ -253,6 +139,7 @@ class AgentStep:
             "error": self.error,
             "output": self.output,
             "is_summary": self.is_summary,
+            "is_smart_summary": self.is_smart_summary,
         }
 
 
@@ -297,10 +184,6 @@ class AgentState:
     # Discovery state
     provider_tree: List[Dict[str, Any]] = field(default_factory=list)
     search_results: List[Dict[str, Any]] = field(default_factory=list)
-    tool_menu: List[Dict[str, Any]] = field(default_factory=list)
-    tool_summaries: List[Dict[str, Any]] = field(default_factory=list)
-    sandbox_summaries: List[Dict[str, Any]] = field(default_factory=list)
-    discovered_tools: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # tool_id -> deep_view
     discovery_completed: bool = False
 
     # Execution history
@@ -353,6 +236,7 @@ class AgentState:
         error: Optional[str] = None,
         output: Any = None,
         is_summary: bool = False,
+        is_smart_summary: bool = False,
     ) -> AgentStep:
         """Add a step to execution history."""
         step = AgentStep(
@@ -365,6 +249,7 @@ class AgentState:
             error=error,
             output=output,
             is_summary=is_summary,
+            is_smart_summary=is_smart_summary,
         )
         self.history.append(step)
         return step
@@ -427,7 +312,6 @@ class AgentState:
             self.search_results.append(entry)
             self._search_index[key] = entry
         self._trim_context_for_llm()
-        self._update_tool_menu()
         if self.search_results:
             self.discovery_completed = True
 
@@ -443,25 +327,6 @@ class AgentState:
         """Deprecated alias for set_search_results; preserved for compatibility."""
         self.set_search_results(results)
 
-    def cache_tool_deep_view(self, tool_id: str, view: Dict[str, Any]) -> None:
-        """Cache detailed tool specification after discovery."""
-        self.discovered_tools[tool_id] = view
-
-    def get_tool_deep_view(self, tool_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieve cached tool specification."""
-        return self.discovered_tools.get(tool_id)
-
-    def has_discovered_tool(self, tool_id: str) -> bool:
-        """Check if tool has been discovered."""
-        return tool_id in self.discovered_tools
-
-    def add_tool_summary(self, summary: Dict[str, Any]) -> None:
-        self.tool_summaries.append(summary)
-        self._trim_context_for_llm()
-
-    def add_sandbox_summary(self, summary: Dict[str, Any]) -> None:
-        self.sandbox_summaries.append(summary)
-        self._trim_context_for_llm()
 
     def resolve_mcp_tool_name(self, provider: str, tool_name: str) -> str:
         """Resolve provider/tool pair to the underlying MCP tool name."""
@@ -503,12 +368,12 @@ class AgentState:
         purpose: str = "for_planning",
         force: bool = False,
     ) -> Dict[str, Any]:
+        """Summarize tool output for logging/storage purposes."""
         return self._summarize_and_record(
             label,
             payload,
             purpose=purpose,
             storage_subdir="tools",
-            add_summary_fn=self.add_tool_summary,
             force=force,
         )
 
@@ -520,12 +385,12 @@ class AgentState:
         purpose: str = "for_planning",
         force: bool = False,
     ) -> Dict[str, Any]:
+        """Summarize sandbox output for logging/storage purposes."""
         return self._summarize_and_record(
             label,
             payload,
             purpose=purpose,
             storage_subdir="sandbox",
-            add_summary_fn=self.add_sandbox_summary,
             force=force,
         )
 
@@ -546,9 +411,9 @@ class AgentState:
         *,
         purpose: str,
         storage_subdir: str,
-        add_summary_fn: Callable[[Dict[str, Any]], None],
         force: bool = False,
     ) -> Dict[str, Any]:
+        """Summarize payload and log the event (no longer stores in separate lists)."""
         if not force and not self.should_summarize(payload):
             return {}
         storage_dir = self.summary_root / storage_subdir
@@ -559,7 +424,8 @@ class AgentState:
             storage_dir=storage_dir,
             persist_payload=self._persist_summaries,
         )
-        add_summary_fn(summary)
+        # Note: We no longer store summaries in separate lists (tool_summaries, sandbox_summaries)
+        # as they were redundant. Summaries are logged via events and stored in files if needed.
         self.record_event(
             "mcp.summary.created",
             {
@@ -587,46 +453,36 @@ class AgentState:
         return len(serialized.encode("utf-8"))
 
     def _trim_context_for_llm(self, max_items: int = 50) -> None:
-        """Keep only the most recent summaries to enforce deterministic caps."""
-        if len(self.tool_summaries) > max_items:
-            self.tool_summaries[:] = self.tool_summaries[-max_items:]
-        if len(self.sandbox_summaries) > max_items:
-            self.sandbox_summaries[:] = self.sandbox_summaries[-max_items:]
+        """Keep only the most recent search results to enforce deterministic caps."""
         if len(self.search_results) > max_items:
             self.search_results[:] = self.search_results[-max_items:]
+            # Rebuild search index after trimming
             new_index: Dict[str, Dict[str, Any]] = {}
             for entry in self.search_results:
                 key = self._search_key(entry)
                 if key:
                     new_index[key] = entry
             self._search_index = new_index
-        self._update_tool_menu()
-
-    def _update_tool_menu(self, limit: int = 8) -> None:
-        available_items = [entry for entry in self.search_results if entry.get("available")]
-        menu: List[Dict[str, Any]] = []
-        for entry in available_items[:limit]:
-            provider = (entry.get("provider") or "").strip().lower()
-            tool = (entry.get("tool") or "").strip().lower()
-            if not provider or not tool:
-                continue
-            menu.append(
-                {
-                    "qualified_name": f"{provider}.{tool}",
-                    "provider": provider,
-                    "provider_path": f"sandbox_py/servers/{provider}",
-                    "tool": tool,
-                    "path": f"sandbox_py/servers/{provider}/{tool}.py",
-                }
-            )
-        self.tool_menu = menu
 
     def _search_key(self, entry: Dict[str, Any]) -> Optional[str]:
+        """Extract unique key for deduplication (supports both legacy and compact formats)."""
+        # Prefer tool_id (compact format)
+        tool_id = entry.get("tool_id")
+        if tool_id:
+            return tool_id
+
+        # Fall back to qualified_name (legacy format)
+        qualified_name = entry.get("qualified_name")
+        if qualified_name:
+            return qualified_name
+
+        # Last resort: construct from provider.tool (legacy format)
         provider = (entry.get("provider") or "").strip().lower()
         tool = (entry.get("tool") or "").strip().lower()
-        if not provider or not tool:
-            return None
-        return f"{provider}.{tool}"
+        if provider and tool:
+            return f"{provider}.{tool}"
+
+        return None
 
     def _find_search_index(self, key: str) -> Optional[int]:
         for idx, entry in enumerate(self.search_results):
@@ -705,22 +561,217 @@ class AgentState:
 
     # --- Prompt state ---
 
+    def _summarize_search_observation(self, observation: Dict[str, Any]) -> str:
+        """
+        Summarize search results: store tool_ids only, not full descriptors.
+
+        This prevents duplication - the full tool specs are in available_tools.
+        """
+        if not observation:
+            return "Search returned no results"
+
+        found_tools = observation.get("found_tools", [])
+        if not found_tools:
+            return "Search returned no results"
+
+        tool_ids = [t.get("tool_id", "unknown") for t in found_tools]
+        count = len(tool_ids)
+
+        if count <= 3:
+            return f"Found {count} tools: {', '.join(tool_ids)}"
+        else:
+            return f"Found {count} tools: {', '.join(tool_ids[:3])}, ..."
+
+    def _summarize_tool_observation(self, observation: Dict[str, Any]) -> str:
+        """
+        Summarize tool execution results: key fields only.
+
+        Full results are stored in raw_outputs if needed for reference.
+        """
+        if not observation:
+            return "No output"
+
+        # Check if it's a successful result
+        if isinstance(observation, dict):
+            if observation.get("error"):
+                error_msg = str(observation.get("error", "Unknown error"))
+                return f"Error: {error_msg[:100]}"
+
+            if "successful" in observation:
+                if not observation["successful"]:
+                    error_msg = observation.get("error", "Unknown failure")
+                    return f"Failed: {error_msg[:100]}"
+
+                # Summarize successful data
+                data = observation.get("data", {})
+                return self._summarize_data_payload(data)
+
+        # Fall back to generic summarization
+        return self._summarize_data_payload(observation)
+
+    def _summarize_sandbox_observation(self, observation: Dict[str, Any]) -> str:
+        """
+        Format sandbox execution results for trajectory.
+
+        Unlike tool calls, sandbox code is expected to return compact summaries,
+        so we show the full return value (up to reasonable limit) rather than
+        summarizing further.
+        """
+        if not observation:
+            return "No output"
+
+        # Check for errors
+        if isinstance(observation, dict):
+            if observation.get("error"):
+                error_msg = str(observation.get("error", "Unknown error"))
+                return f"Error: {error_msg[:200]}"
+
+            # Show the full result/return value from sandbox code
+            # The code should already be returning compact summaries
+            if "result" in observation:
+                result = observation["result"]
+                # Return full result up to 1000 chars (sandbox should keep it compact)
+                result_str = str(result) if not isinstance(result, str) else result
+                if len(result_str) <= 1000:
+                    return result_str
+                else:
+                    return result_str[:997] + "..."
+
+            # If no result field, show success status
+            if observation.get("successful"):
+                return "Execution completed successfully"
+
+        # Fallback to string representation
+        obs_str = str(observation)
+        return obs_str[:1000] if len(obs_str) <= 1000 else obs_str[:997] + "..."
+
+    def _summarize_data_payload(self, data: Any, max_chars: int = 500) -> str:
+        """
+        Smart data summarization showing actual values, not just structure.
+
+        For tool call results, we want the model to see:
+        - Array lengths (e.g., "messages: 0 items")
+        - Numeric values (e.g., "resultSizeEstimate: 0")
+        - Short strings (e.g., "status: active")
+        - Text previews (e.g., "body: Hello world...")
+
+        This allows the model to understand what actually happened without
+        seeing full payloads.
+        """
+        if data is None:
+            return "null"
+
+        if isinstance(data, bool):
+            return str(data)
+
+        if isinstance(data, (int, float)):
+            return str(data)
+
+        if isinstance(data, str):
+            if len(data) == 0:
+                return '""'
+            elif len(data) <= 100:
+                return f'"{data}"'
+            else:
+                return f'"{data[:97]}..."'
+
+        if isinstance(data, list):
+            count = len(data)
+            if count == 0:
+                return "[]"
+            elif count == 1:
+                item_summary = self._summarize_data_payload(data[0], max_chars=100)
+                return f"[{item_summary}]"
+            else:
+                first_summary = self._summarize_data_payload(data[0], max_chars=80)
+                return f"[{count} items, first: {first_summary}]"
+
+        if isinstance(data, dict):
+            if not data:
+                return "{}"
+
+            # Build smart key-value summaries
+            parts = []
+            chars_used = 0
+
+            for key, value in data.items():
+                # Summarize the value intelligently
+                if isinstance(value, list):
+                    val_str = f"{len(value)} items" if value else "[]"
+                elif isinstance(value, dict):
+                    val_str = f"{len(value)} keys" if value else "{}"
+                elif isinstance(value, str):
+                    if len(value) == 0:
+                        val_str = '""'
+                    elif len(value) <= 50:
+                        val_str = f'"{value}"'
+                    else:
+                        val_str = f'"{value[:47]}..."'
+                elif isinstance(value, (int, float, bool)):
+                    val_str = str(value)
+                elif value is None:
+                    val_str = "null"
+                else:
+                    val_str = f"{type(value).__name__}"
+
+                part = f"{key}: {val_str}"
+                if chars_used + len(part) + 2 > max_chars:
+                    parts.append("...")
+                    break
+
+                parts.append(part)
+                chars_used += len(part) + 2  # +2 for ", "
+
+            return "{" + ", ".join(parts) + "}"
+
+        return f"{type(data).__name__} object"
+
     def build_planner_state(self, _snapshot: BudgetSnapshot | None = None) -> Dict[str, Any]:
-        """Build the planner_state JSON consumed by PlannerLLM."""
+        """
+        Build the planner_state JSON consumed by PlannerLLM.
+
+        This is the ONLY place where tool specifications appear in full.
+        Trajectory entries contain only summaries to minimize context usage.
+        """
         trajectory: List[Dict[str, Any]] = []
         for step in self.history:
             entry: Dict[str, Any] = {
                 "step": step.index,
                 "type": step.type,
                 "reasoning": step.command.get("reasoning", "") if step.command else "",
-                "action": step.command,
-                "observation": step.output,
                 "status": "success" if step.success else "failed",
             }
+
+            # Add summarized observation instead of full output
+            if step.type == "search":
+                entry["summary"] = self._summarize_search_observation(step.output)
+            elif step.type == "tool":
+                tool_id = step.command.get("tool_id", "unknown") if step.command else "unknown"
+                entry["tool_id"] = tool_id
+                if step.is_smart_summary and step.output is not None:
+                    entry["summary"] = step.output
+                else:
+                    entry["summary"] = self._summarize_tool_observation(step.output)
+            elif step.type == "sandbox":
+                if step.is_smart_summary and step.output is not None:
+                    entry["summary"] = step.output
+                else:
+                    entry["summary"] = self._summarize_sandbox_observation(step.output)
+            elif step.type in ("finish", "fail"):
+                # For finish/fail steps, include minimal info
+                entry["summary"] = step.preview or "Step completed"
+            else:
+                # Generic fallback
+                entry["summary"] = step.preview or "No summary"
+
             trajectory.append(entry)
 
-        available_tools = [_slim_tool_for_planner(e) for e in self.search_results]
-        slim_tree = _slim_provider_tree(self.provider_tree)
+        # available_tools is the SINGLE SOURCE OF TRUTH for tool specs
+        # Compact descriptors are already minimal, just pass through
+        available_tools = self.search_results
+
+        # provider_tree is already slim from inventory view
+        slim_tree = self.provider_tree
 
         return {
             "task": self.task,
@@ -748,11 +799,8 @@ class AgentState:
             "budget": self.get_budget_snapshot(),
             "provider_tree": self.provider_tree,
             "search_results": self.search_results,
-            "discovered_tools": self.discovered_tools,
             "history": [step.to_dict() for step in self.history],
             "raw_outputs": self.raw_outputs,
-            "tool_summaries": self.tool_summaries,
-            "sandbox_summaries": self.sandbox_summaries,
             "logs": self.logs,
             "finished": self.finished,
             "failed": self.failed,

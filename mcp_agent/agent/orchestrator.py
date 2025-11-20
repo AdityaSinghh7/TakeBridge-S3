@@ -1,16 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, Optional
 
 from .llm import PlannerLLM
 from .parser import parse_planner_command
-from .state import AgentState, _slim_tool_for_planner
-from .types import StepResult
+from .state import AgentState
+from .types import MCPTaskResult, StepResult
 from .executor import ActionExecutor
-
-if TYPE_CHECKING:
-    from .planner import MCPTaskResult
 
 
 class AgentOrchestrator:
@@ -74,7 +71,9 @@ class AgentOrchestrator:
     def _load_inventory(self) -> None:
         from mcp_agent.knowledge.views import get_inventory_view
 
-        self.agent_state.provider_tree = get_inventory_view(self.agent_context)
+        inventory = get_inventory_view(self.agent_context)
+        providers = inventory.get("providers", []) if isinstance(inventory, dict) else inventory
+        self.agent_state.provider_tree = providers
         self.agent_state.discovery_completed = True
 
     def _next_command(self) -> tuple[Dict[str, Any] | None, MCPTaskResult | None]:
@@ -116,12 +115,11 @@ class AgentOrchestrator:
         """
         cmd_type = command["type"]
         if cmd_type in {"search", "tool", "sandbox"}:
-            executor = self._get_executor()
-            result = executor.execute_step(command)
+            result = self._executor.execute_step(command)
             return self._handle_action_result(command, result)
 
         if cmd_type == "finish":
-            self._get_executor().execute_step(command)
+            self._executor.execute_step(command)
             summary = command.get("summary") or "Task completed."
             reasoning = command.get("reasoning") or ""
             self.agent_state.record_step(
@@ -135,7 +133,7 @@ class AgentOrchestrator:
             return self._success_result(summary)
 
         if cmd_type == "fail":
-            self._get_executor().execute_step(command)
+            self._executor.execute_step(command)
             reason_text = command.get("reason") or "Planner reported a failure."
             self.agent_state.record_step(
                 type="fail",
@@ -166,7 +164,7 @@ class AgentOrchestrator:
             query = (command.get("query") or "").strip()
             found_tools = observation.get("found_tools", [])
             self.agent_state.merge_search_results(found_tools, replace=False)
-            slim_results = [_slim_tool_for_planner(r) for r in found_tools]
+            # found_tools are already compact - no need to slim further
             self.agent_state.record_event(
                 "mcp.search.completed",
                 {
@@ -182,7 +180,7 @@ class AgentOrchestrator:
                 command=command,
                 success=True,
                 preview=reasoning or f"Search '{query}' returned {len(found_tools)} results",
-                output={"found_tools": slim_results},
+                output={"found_tools": found_tools},
                 is_summary=False,
             )
             return None
@@ -214,6 +212,7 @@ class AgentOrchestrator:
                 result_key=result.raw_output_key,
                 output=result.observation,
                 is_summary=False,
+                is_smart_summary=result.is_smart_summary,
             )
             return None
 
@@ -257,6 +256,7 @@ class AgentOrchestrator:
                 result_key=result.raw_output_key,
                 output=result.observation,
                 is_summary=False,
+                is_smart_summary=result.is_smart_summary,
             )
             return None
 

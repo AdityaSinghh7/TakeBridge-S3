@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Literal
 from mcp_agent.user_identity import normalize_user_id
 from mcp_agent.knowledge.builder import get_index, get_manifest
 from mcp_agent.knowledge.index import ToolboxIndex
-from mcp_agent.knowledge.models import LLMToolDescriptor, ProviderSpec, ToolSpec
+from mcp_agent.knowledge.models import CompactToolDescriptor, LLMToolDescriptor, ProviderSpec, ToolSpec
 from mcp_agent.knowledge.registry import get_tool_spec
 from mcp_agent.knowledge.load_io_specs import ensure_io_specs_loaded
 
@@ -49,11 +49,11 @@ def search_tools(
         user_id: Current user id used to scope the toolbox index.
 
     Returns:
-        A list of dicts produced by LLMToolDescriptor.as_dict(), augmented with
-        a few compatibility fields used by existing planner/UI code.
+        A list of dicts produced by CompactToolDescriptor.to_dict().
+        These are ultra-compact representations containing only essential
+        information for sandbox code generation and tool invocation.
     """
-    # Ensure IoToolSpecs are registered and enriched with any generated output
-    # schemas before building descriptors for search results.
+    # Ensure IoToolSpecs are registered for schema enrichment
     ensure_io_specs_loaded()
     normalized_user = normalize_user_id(user_id)
     norm_query = _normalize_query(query)
@@ -81,41 +81,20 @@ def search_tools(
 
     results: List[Dict[str, Any]] = []
     for score, prov, tool in matches:
-        descriptor: LLMToolDescriptor = tool.to_llm_descriptor(score=float(score))
-        entry = descriptor.as_dict()
-
-        # Optional IO spec overrides (manual, higher-fidelity docs).
+        # Enrich with IoToolSpec output schema if available
+        # This populates output_fields with structured field paths
         io_spec = get_tool_spec(prov.provider, tool.name)
-        if io_spec is not None:
-            try:
-                input_pretty = io_spec.input_spec.pretty()
-                if input_pretty:
-                    entry["input_params_pretty"] = input_pretty.splitlines()
-            except Exception:
-                # Best-effort only; fall back to introspected metadata on error.
-                pass
-            try:
-                if io_spec.output_spec.pretty_success:
-                    entry["output_schema_pretty"] = io_spec.output_spec.pretty_success.splitlines()
-                if io_spec.output_spec.data_schema_success:
-                    entry["output_schema"] = io_spec.output_spec.data_schema_success
-            except Exception:
-                pass
+        if io_spec is not None and io_spec.output_spec.data_schema_success:
+            # Update tool's output_schema before conversion to compact descriptor
+            tool.output_schema = io_spec.output_spec.data_schema_success
 
-        # Compatibility fields expected by existing planner and API code.
-        entry.setdefault("provider", prov.provider)
-        entry.setdefault("tool", tool.name)
-        entry.setdefault("short_description", tool.short_description)
-        entry.setdefault("qualified_name", f"{prov.provider}.{tool.name}")
-        entry.setdefault("available", tool.available)
-        entry.setdefault("server", tool.server)
-        entry.setdefault("module", tool.py_module)
-        entry.setdefault("function", tool.py_name)
-        # Legacy aliases used by existing planner prompts.
-        entry.setdefault("py_module", entry["module"])
-        entry.setdefault("py_name", entry["function"])
-        return_path = f"sandbox_py/servers/{prov.provider}/{tool.name}.py"
-        entry.setdefault("path", return_path)
+        # Use compact descriptor - much smaller, optimized for LLM context
+        descriptor: CompactToolDescriptor = tool.to_compact_descriptor()
+        entry = descriptor.to_dict()
+
+        # Add score for ranking (not part of the descriptor itself)
+        entry["score"] = float(score)
+
         results.append(entry)
 
     return results

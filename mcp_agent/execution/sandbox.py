@@ -75,10 +75,14 @@ def run_python_plan(
 
         env = os.environ.copy()
         existing_pythonpath = env.get("PYTHONPATH", "")
-        path_entries = [repo_root]
+        path_entries = []
+        toolbox_root = (context.extra or {}).get("toolbox_root")
+        if toolbox_root:
+            path_entries.append(str(toolbox_root))
+        path_entries.append(str(repo_root))
         if existing_pythonpath:
             path_entries.append(existing_pythonpath)
-        env["PYTHONPATH"] = os.pathsep.join(str(value) for value in path_entries if value)
+        env["PYTHONPATH"] = os.pathsep.join(value for value in path_entries if value)
         env["TB_USER_ID"] = context.user_id
         env["TB_REQUEST_ID"] = context.request_id
         
@@ -156,8 +160,17 @@ async def main():
 
 
 if __name__ == "__main__":
-    result = asyncio.run(main())
-    print("{SENTINEL}" + json.dumps(result or {{}}))
+    try:
+        result = asyncio.run(main())
+    except Exception as exc:
+        error_payload = {{
+            "successful": False,
+            "error": f"Sandbox error: {exc}",
+            "data": {{}}
+        }}
+        print("{SENTINEL}" + json.dumps(error_payload))
+    else:
+        print("{SENTINEL}" + json.dumps(result or {{}}))
 """
     return textwrap.dedent(template)
 
@@ -188,4 +201,3 @@ def _collect_logs(stdout: Optional[str], stderr: Optional[str]) -> List[str]:
     if stderr:
         logs.extend(stderr.splitlines())
     return logs
-

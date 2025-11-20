@@ -36,11 +36,40 @@ class ParameterSpec:
 
 
 @dataclass
+class CompactToolDescriptor:
+    """
+    Ultra-compact, LLM-facing view of a toolbox tool.
+
+    Designed to minimize context usage while providing exactly what the
+    planner needs to write sandbox code and make tool calls.
+    """
+
+    tool_id: str                        # e.g., "gmail.gmail_search"
+    server: str                         # e.g., "gmail" (needed for sandbox validation)
+    description: str                    # Brief description of what the tool does
+    signature: str                      # e.g., "gmail.gmail_search(query, max_results=20)"
+    input_params: Dict[str, str]        # {"query": "str (required)", "max_results": "int (optional, default=20)"}
+    output_fields: List[str]            # ["messages[].id", "messages[].subject", ...]
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "tool_id": self.tool_id,
+            "server": self.server,
+            "description": self.description,
+            "signature": self.signature,
+            "input_params": self.input_params,
+            "output_fields": self.output_fields,
+        }
+
+
+@dataclass
 class LLMToolDescriptor:
     """
-    Compact, LLM-facing view of a toolbox tool.
+    Legacy LLM-facing view of a toolbox tool.
 
-    This is the only shape the planner should consume from `search_tools(...)`.
+    DEPRECATED: Use CompactToolDescriptor instead for new code.
+    This is kept for backwards compatibility with existing search code.
     """
 
     provider: str
@@ -134,6 +163,55 @@ class ToolSpec:
             target = required if param.required else optional
             target[param.name] = param.annotation or "Any"
         return {"required": required, "optional": optional}
+
+    def to_compact_descriptor(self) -> CompactToolDescriptor:
+        """
+        Convert this ToolSpec into an ultra-compact CompactToolDescriptor.
+
+        This method generates a minimal representation optimized for LLM context,
+        containing only essential information needed for sandbox code generation
+        and tool invocation.
+        """
+        # Build compact signature with minimal formatting
+        param_parts: List[str] = []
+        for param in self.parameters:
+            if param.has_default:
+                if param.default_repr is not None:
+                    param_parts.append(f"{param.name}={param.default_repr}")
+                else:
+                    param_parts.append(f"{param.name}={repr(param.default)}")
+            else:
+                param_parts.append(param.name)
+
+        signature = f"{self.server}.{self.py_name}({', '.join(param_parts)})"
+
+        # Build readable input_params dict
+        input_params: Dict[str, str] = {}
+        for param in self.parameters:
+            param_type = param.annotation or "Any"
+            if param.required:
+                input_params[param.name] = f"{param_type} (required)"
+            else:
+                default_val = param.default_repr if param.default_repr is not None else repr(param.default)
+                input_params[param.name] = f"{param_type} (optional, default={default_val})"
+
+        # Get output_fields from schema
+        from mcp_agent.knowledge.utils import flatten_schema_fields
+
+        output_fields = flatten_schema_fields(
+            self.output_schema,
+            max_depth=3,
+            max_fields=30
+        ) if self.output_schema else []
+
+        return CompactToolDescriptor(
+            tool_id=self.tool_id,
+            server=self.server,
+            description=self.short_description or self.description or "",
+            signature=signature,
+            input_params=input_params,
+            output_fields=output_fields,
+        )
 
     def to_llm_descriptor(self, *, score: float = 0.0) -> LLMToolDescriptor:
         """

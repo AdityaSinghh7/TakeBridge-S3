@@ -21,7 +21,7 @@ To add another provider in this architecture:
 
 ### Sandbox + testing hooks
 
-- `execute_mcp_task(...)` accepts `toolbox_root: Path | None` so tests and bespoke deployments can point the planner at a generated toolbox living outside of `./toolbox`.
+- Every call to `execute_mcp_task(...)` now builds an ephemeral `sandbox_py` package inside a temporary directory, so sandbox code always runs against a clean, per-request toolbox without touching the repo’s `toolbox/` tree.
 - The sandbox runner automatically calls `mcp_agent.sandbox.glue.register_default_tool_caller()`, which wires generated wrappers to the active MCP registry. Set `TB_DISABLE_SANDBOX_CALLER=1` when you need to opt out and register your own caller.
 - Tests (and local demos) can supply fake MCP clients by exporting `MCP_FAKE_CLIENT_FACTORY="tests.fakes.fake_mcp:build_fake_clients"`. The factory is invoked inside both the planner process and sandbox subprocesses, keeping tool calls offline and deterministic.
 
@@ -39,25 +39,10 @@ Refer to `Standalone_MCP_Plan.md` for the end-to-end architecture and the checkl
 
 ## Sandbox Runner
 
-Generated sandbox code lives under `toolbox/sandbox_py/` and can be executed via `mcp_agent.sandbox.runner.run_python_plan(...)`. The runner:
+Sandbox plans run via `mcp_agent.execution.sandbox.run_python_plan(...)`, which wires up the temporary `sandbox_py` package created for the current request. The runner:
 
 - Writes a temporary `plan.py` populated with the model-authored async function body.
-- Sets `PYTHONPATH` to include `sandbox_py` only, restricting imports to the generated wrappers (plus stdlib).
+- Sets `PYTHONPATH` to include the ephemeral toolbox first (so `from sandbox_py.servers import ...` succeeds) plus the repo root and original `PYTHONPATH` entries.
 - Launches a subprocess using the same Python interpreter, with a configurable timeout (`timeout_sec`).
 - Captures stdout/stderr, separates logs from the `___TB_RESULT___{json}` sentinel, and returns a structured `SandboxResult`.
 - Emits no additional network access beyond the tool calls routed through the registered sandbox client; arbitrary outbound requests are unsupported in this MVP.
-
-Usage example:
-
-```python
-from pathlib import Path
-from mcp_agent.sandbox.runner import run_python_plan
-
-result = run_python_plan(
-    "return {'status': 'ok'}",
-    user_id="tester",
-    toolbox_root=Path('toolbox'),
-    timeout_sec=30,
-)
-assert result.success
-```

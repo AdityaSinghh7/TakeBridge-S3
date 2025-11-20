@@ -9,7 +9,7 @@ import re
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -257,4 +257,98 @@ def to_snake_case(value: str) -> str:
     if not parts:
         return value
     return "_".join(part.lower() for part in parts)
+
+
+def flatten_schema_fields(
+    schema: Dict[str, Any],
+    *,
+    prefix: str = "",
+    depth: int = 0,
+    max_depth: Optional[int] = None,
+    max_fields: int = 40,
+    out: Optional[List[str]] = None,
+) -> List[str]:
+    """
+    Flatten a JSON-schema-like dict into a list of 'path: type' strings.
+
+    This utility extracts field paths from nested JSON schemas to provide
+    a compact representation of data structures for LLM context.
+
+    Args:
+        schema: JSON schema dict to flatten
+        prefix: Current path prefix (for recursion)
+        depth: Current recursion depth
+        max_depth: Maximum depth to traverse (None = unlimited)
+        max_fields: Maximum number of fields to extract
+        out: Output list to append to (for recursion)
+
+    Returns:
+        List of field paths like ["messages[].id", "messages[].subject", ...]
+
+    Examples:
+        >>> schema = {
+        ...     "type": "object",
+        ...     "properties": {
+        ...         "name": {"type": "string"},
+        ...         "items": {
+        ...             "type": "array",
+        ...             "items": {
+        ...                 "type": "object",
+        ...                 "properties": {
+        ...                     "id": {"type": "number"}
+        ...                 }
+        ...             }
+        ...         }
+        ...     }
+        ... }
+        >>> flatten_schema_fields(schema)
+        ['name: string', 'items[]: object', 'items[].id: number']
+    """
+    if out is None:
+        out = []
+
+    if max_fields is not None and len(out) >= max_fields:
+        return out
+
+    if max_depth is not None and depth > max_depth:
+        return out
+
+    if not isinstance(schema, dict):
+        return out
+
+    schema_type = schema.get("type")
+    props = schema.get("properties", {})
+
+    if schema_type and not props:
+        if prefix:
+            out.append(f"{prefix}: {schema_type}")
+        return out
+
+    for name, subschema in props.items():
+        if max_fields is not None and len(out) >= max_fields:
+            break
+
+        if isinstance(subschema, dict) and subschema.get("type") == "array":
+            item = subschema.get("items", {})
+            child_prefix = f"{prefix}.{name}[]" if prefix else f"{name}[]"
+            flatten_schema_fields(
+                item,
+                prefix=child_prefix,
+                depth=depth + 1,
+                max_depth=max_depth,
+                max_fields=max_fields,
+                out=out,
+            )
+        else:
+            child_prefix = f"{prefix}.{name}" if prefix else name
+            flatten_schema_fields(
+                subschema,
+                prefix=child_prefix,
+                depth=depth + 1,
+                max_depth=max_depth,
+                max_fields=max_fields,
+                out=out,
+            )
+
+    return out
 

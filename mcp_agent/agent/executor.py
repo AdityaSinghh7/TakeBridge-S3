@@ -12,9 +12,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Set
 from mcp_agent.execution.envelope import process_observation, unwrap_nested_data
 from mcp_agent.execution.sandbox import run_python_plan
 from mcp_agent.knowledge.search import search_tools
-from mcp_agent.knowledge.views import get_deep_view
 from mcp_agent.knowledge.builder import get_index
 from mcp_agent.actions.dispatcher import dispatch_tool
+from mcp_agent.utils.token_counter import count_json_tokens
+from mcp_agent.agent.summarizer import summarize_with_llm
 from .summarize import summarize_payload
 
 if TYPE_CHECKING:
@@ -138,7 +139,7 @@ class ActionExecutor:
             )
 
         try:
-            # Search for tools
+            # Search for tools - now returns compact descriptors
             results = search_tools(
                 query=query,
                 provider=provider,
@@ -147,26 +148,17 @@ class ActionExecutor:
                 user_id=self.agent_context.user_id,
             )
 
-            # Extract tool IDs and get deep views
-            tool_ids = [r.get("tool_id") or f"{r.get('provider')}.{r.get('tool')}" for r in results]
-
-            # Get deep views for discovered tools
-            deep_views = get_deep_view(self.agent_context, tool_ids)
-
-            # Cache in state
-            for view in deep_views:
-                tool_id = view.get("tool_id")
-                if tool_id:
-                    self.agent_state.cache_tool_deep_view(tool_id, view)
+            # Store compact results directly in state (no need for deep views)
+            self.agent_state.merge_search_results(results)
 
             # Budget tracking
-            self.agent_state.budget_tracker.steps += 1
+            self.agent_state.budget_tracker.steps_taken += 1
 
             return StepResult(
                 type="search",
                 success=True,
-                observation={"found_tools": deep_views, "count": len(deep_views)},
-                preview=f"Found {len(deep_views)} tools matching '{query}'",
+                observation={"found_tools": results, "count": len(results)},
+                preview=f"Found {len(results)} tools matching '{query}'",
                 raw_output_key=None,
             )
 
@@ -179,6 +171,130 @@ class ActionExecutor:
                 error=str(exc),
                 error_code="search_failed",
             )
+
+    # --- Observation processing with intelligent summarization ---
+
+    def _process_tool_observation(self, result: Dict[str, Any]) -> tuple[Any, bool]:
+        """
+        Process tool execution result with intelligent summarization.
+
+        Strategy:
+        1. Check successful/error envelope
+        2. Count tokens in data payload
+        3. If < 8000 tokens: return raw data
+        4. If >= 8000 tokens: LLM-summarize maintaining structure
+
+        Args:
+            result: Raw tool execution response envelope
+
+        Returns:
+            Processed observation (raw or summarized)
+        """
+        # Handle unsuccessful results - just return error
+        if isinstance(result, dict):
+            if "successful" in result and not result["successful"]:
+                error_msg = result.get("error", "Unknown failure")
+                return {"successful": False, "error": error_msg}, False
+
+        # Extract data payload
+        if isinstance(result, dict) and "data" in result:
+            data = result["data"]
+        else:
+            data = result
+
+        # Count tokens in data payload
+        try:
+            token_count = count_json_tokens(data)
+        except Exception as e:
+            self.agent_state.record_event(
+                "mcp.observation.token_count_failed",
+                {"error": str(e), "type": "tool"}
+            )
+            # Fallback to raw if counting fails
+            return data, False
+
+        # Log token count for monitoring
+        self.agent_state.record_event(
+            "mcp.observation.tool_tokens",
+            {"token_count": token_count, "threshold": 8000}
+        )
+
+        # Decision: raw or summarize
+        if token_count < 8000:
+            return data, False
+
+        # Summarize using LLM
+        try:
+            summarized = summarize_with_llm(
+                payload=data,
+                payload_type="tool_result",
+                original_tokens=token_count,
+                context=self.agent_state,
+            )
+            return summarized, True
+        except Exception as e:
+            # Fallback: return truncated raw data if summarization fails
+            self.agent_state.record_event(
+                "mcp.summarizer.fallback_to_truncation",
+                {"error": str(e), "type": "tool"}
+            )
+            # Use old truncation logic as emergency fallback
+            return _smart_format_observation(result, max_chars=15000), False
+
+    def _process_sandbox_observation(self, result: Any) -> tuple[Any, bool]:
+        """
+        Process sandbox execution result with intelligent summarization.
+
+        Strategy:
+        1. Take full result object (no envelope unwrapping needed)
+        2. Count tokens in result
+        3. If < 10000 tokens: return raw result
+        4. If >= 10000 tokens: LLM-summarize maintaining structure
+
+        Args:
+            result: Raw sandbox execution result (any shape)
+
+        Returns:
+            Processed observation (raw or summarized)
+        """
+        # Count tokens in full result
+        try:
+            token_count = count_json_tokens(result)
+        except Exception as e:
+            self.agent_state.record_event(
+                "mcp.observation.token_count_failed",
+                {"error": str(e), "type": "sandbox"}
+            )
+            # Fallback to raw if counting fails
+            return result, False
+
+        # Log token count for monitoring
+        self.agent_state.record_event(
+            "mcp.observation.sandbox_tokens",
+            {"token_count": token_count, "threshold": 10000}
+        )
+
+        # Decision: raw or summarize
+        if token_count < 10000:
+            return result, False
+
+        # Summarize using LLM
+        try:
+            summarized = summarize_with_llm(
+                payload=result,
+                payload_type="sandbox_result",
+                original_tokens=token_count,
+                context=self.agent_state,
+            )
+            return summarized, True
+        except Exception as e:
+            # Fallback: return truncated raw result if summarization fails
+            self.agent_state.record_event(
+                "mcp.summarizer.fallback_to_truncation",
+                {"error": str(e), "type": "sandbox"}
+            )
+            # Use old truncation logic as emergency fallback
+            return _smart_format_observation(result, max_chars=15000), False
 
     # --- Tool execution ---
 
@@ -300,7 +416,7 @@ class ActionExecutor:
                 error_code="tool_execution_failed",
             )
 
-        observation = _smart_format_observation(result)
+        observation, is_smart_summary = self._process_tool_observation(result)
         self.agent_state.append_raw_output(
             result_key,
             {
@@ -312,7 +428,7 @@ class ActionExecutor:
             },
         )
         self.agent_state.budget_tracker.tool_calls += 1
-        self.agent_state.budget_tracker.steps += 1
+        self.agent_state.budget_tracker.steps_taken += 1
 
         success_flag = True
         if isinstance(result, dict):
@@ -330,6 +446,7 @@ class ActionExecutor:
             observation=observation,
             preview=preview,
             raw_output_key=result_key,
+            is_smart_summary=is_smart_summary,
         )
 
     # --- Sandbox execution ---
@@ -440,7 +557,7 @@ class ActionExecutor:
             )
 
         self.agent_state.budget_tracker.code_runs += 1
-        self.agent_state.budget_tracker.steps += 1
+        self.agent_state.budget_tracker.steps_taken += 1
         self.agent_state.record_event(
             "mcp.sandbox.run",
             {
@@ -472,7 +589,7 @@ class ActionExecutor:
                 entry["summary"] = summary
 
         if sandbox_result.success:
-            observation = _smart_format_observation(sandbox_result.result)
+            observation, is_smart_summary = self._process_sandbox_observation(sandbox_result.result)
             preview = command.get("reasoning") or f"Sandbox '{label}' success"
             return StepResult(
                 type="sandbox",
@@ -480,6 +597,7 @@ class ActionExecutor:
                 observation=observation,
                 preview=preview,
                 raw_output_key=result_key,
+                is_smart_summary=is_smart_summary,
             )
 
         error_payload = {
