@@ -145,6 +145,34 @@ class PlannerRuntime:
     def __init__(self, context: PlannerContext, llm: PlannerLLM | None = None) -> None:
         self.context = context
         self.llm = llm or PlannerLLM()
+        self._executor = None  # Lazy-initialized ActionExecutor
+
+    def _get_executor(self):
+        """Get or create ActionExecutor for new architecture paths.
+
+        This lazily creates an ActionExecutor and AgentContext when needed,
+        providing a bridge between the legacy PlannerContext and new architecture.
+        """
+        if self._executor is None:
+            from mcp_agent.core.context import AgentContext
+            from .executor import ActionExecutor
+            from .state import AgentState
+
+            # Create AgentContext from PlannerContext data
+            agent_context = AgentContext.create(user_id=self.context.user_id)
+
+            # Create AgentState (minimal bridge - we'll sync back to PlannerContext)
+            agent_state = AgentState(
+                task=self.context.task,
+                user_id=self.context.user_id,
+                request_id=self.context.run_id,
+                budget=self.context.budget,
+            )
+
+            # Create executor
+            self._executor = ActionExecutor(agent_context, agent_state)
+
+        return self._executor
 
     def run(self) -> MCPTaskResult:
         """
@@ -538,9 +566,12 @@ class PlannerRuntime:
                 recorded_step=True,
             )
         
+        # Track tool call in budget
+        self.context.budget_tracker.tool_calls += 1
+
         # Use smart observation formatting - show raw data if it fits, summary if too large
         observation = _smart_format_observation(response)
-        
+
         response_success = True
         if isinstance(response, dict):
             response_success = response.get("successful", True)
@@ -653,7 +684,10 @@ class PlannerRuntime:
         execution = run_sandbox_plan(self.context, code_body, label=label)
         sandbox_result = execution.result
         result_key = f"sandbox.{label}"
-        
+
+        # Track sandbox execution in budget
+        self.context.budget_tracker.code_runs += 1
+
         if sandbox_result.success:
             # Use smart observation formatting - show raw result if it fits, summary if too large
             observation = _smart_format_observation(sandbox_result.result)
@@ -693,41 +727,55 @@ class PlannerRuntime:
         )
 
     def _execute_search(self, command: Dict[str, Any]) -> MCPTaskResult | None:
+        """Execute search command using ActionExecutor."""
         query = (command.get("query") or "").strip()
         if not query:
             return self._failure("search_missing_query", "Search command missing query.", preview=str(command))
-        detail_level = command.get("detail_level") or "summary"
-        try:
-            limit_value = int(command.get("limit") or 10)
-        except (TypeError, ValueError):
-            limit_value = 10
-        limit_value = max(1, min(limit_value, 50))
-        results = perform_refined_discovery(
-            self.context,
-            query=query,
-            detail_level=detail_level,
-            limit=limit_value,
+
+        # Use ActionExecutor for new architecture
+        executor = self._get_executor()
+        observation = executor.execute_action(
+            action_type="search",
+            action_input={"query": query, "provider": command.get("provider")}
         )
+
+        # Sync budget tracking back to PlannerContext
+        self.context.budget_tracker.steps = executor.agent_state.budget_tracker.steps
+
+        if not observation["success"]:
+            return self._failure(
+                "search_failed",
+                observation.get("error", "Search failed"),
+                preview=str(command)
+            )
+
+        # Extract results from observation
+        data = observation.get("data", {})
+        found_tools = data.get("found_tools", [])
+
+        # Sync discovered tools back to PlannerContext for backward compatibility
+        self.context.merge_search_results(found_tools, replace=False)
+
         # Slim the results for the trajectory observation
-        slim_results = [_slim_tool_for_planner(r) for r in results]
-        
+        slim_results = [_slim_tool_for_planner(r) for r in found_tools]
+
+        # Record events (maintain backward compatibility)
         self.context.record_event(
             "mcp.search.completed",
             {
                 "query": query[:200],
-                "detail_level": detail_level,
-                "result_count": len(results),
-                "tool_ids": [
-                    entry.get("tool_id") or entry.get("qualified_name") for entry in results
-                ],
+                "detail_level": "full",
+                "result_count": len(found_tools),
+                "tool_ids": [r.get("tool_id") for r in found_tools if r.get("tool_id")],
             },
         )
+
         reasoning = command.get("reasoning") or ""
         self.context.record_step(
             type="search",
             command=command,
             success=True,
-            preview=reasoning or f"Search '{query}' returned {len(results)} results",
+            preview=reasoning or f"Search '{query}' returned {len(found_tools)} results",
             output={"found_tools": slim_results},
             is_summary=False,
         )
