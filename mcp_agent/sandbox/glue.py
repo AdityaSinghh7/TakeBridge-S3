@@ -9,7 +9,7 @@ from mcp_agent.user_identity import normalize_user_id, DEV_USER_ENV_VAR, DEV_DEF
 from mcp_agent.env_sync import ensure_env_for_provider
 
 if TYPE_CHECKING:  # pragma: no cover - type checking only
-    from sandbox_py.client import ToolCallResult
+    from mcp_agent.sandbox.runtime import ToolCallResult
 
 
 def _resolve_user_id() -> str:
@@ -28,10 +28,7 @@ def register_default_tool_caller() -> None:
     if os.getenv("TB_DISABLE_SANDBOX_CALLER") == "1":
         return
 
-    try:
-        from sandbox_py.client import register_tool_caller
-    except ModuleNotFoundError as exc:  # pragma: no cover - misconfigured toolbox
-        raise RuntimeError("sandbox_py package is missing. Run ToolboxBuilder.persist() first.") from exc
+    from mcp_agent.sandbox.runtime import register_tool_caller
 
     try:
         from mcp_agent.testing.stubs import ensure_test_stubs

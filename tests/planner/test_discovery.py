@@ -1,127 +1,55 @@
 from __future__ import annotations
 
-from mcp_agent.planner.budget import Budget
-from mcp_agent.planner.context import PlannerContext
-from mcp_agent.planner.discovery import perform_initial_discovery, perform_refined_discovery
+from mcp_agent.agent.budget import Budget
+from mcp_agent.agent.state import AgentState
 
 
-def test_perform_initial_discovery_calls_search_tools_once(monkeypatch):
-    context = PlannerContext(task="Send a Slack reminder", user_id="tester", budget=Budget())
-    call_count = {"value": 0}
-    fake_results = [
-        {
-            "provider": "slack",
-            "tool": "SLACK_SEND_MESSAGE",
-            "available": True,
-            "short_description": "Post a message",
-        }
+def make_state(task: str = "demo") -> AgentState:
+    return AgentState(task=task, user_id="tester", request_id="test", budget=Budget())
+
+
+def test_merge_search_results_appends_once():
+    state = make_state()
+    results = [
+        {"provider": "slack", "tool": "send", "available": True, "score": 10},
     ]
+    state.merge_search_results(results)
+    assert state.search_results == results
+    assert state.discovery_completed is True
 
-    def fake_registry_version(user_id):
-        return 1
-
-    def fake_search_tools(*, query, detail_level, limit, user_id):
-        call_count["value"] += 1
-        assert query == context.task
-        assert detail_level == "summary"
-        assert limit == 5
-        assert user_id == context.user_id
-        return fake_results
-
-    monkeypatch.setattr("mcp_agent.planner.discovery.registry_version", fake_registry_version)
-    monkeypatch.setattr("mcp_agent.planner.discovery.search_tools", fake_search_tools)
-
-    results_first = perform_initial_discovery(context, limit=5)
-    assert call_count["value"] == 1
-    assert results_first == fake_results
-    assert context.search_results == fake_results
-    assert context.discovery_completed is True
-
-    results_second = perform_initial_discovery(context, limit=5)
-    assert call_count["value"] == 1, "Discovery should not re-run once completed."
-    assert results_second == fake_results
+    # second call with same data should not duplicate entries
+    state.merge_search_results(results)
+    assert len(state.search_results) == 1
 
 
-def test_discovery_refreshes_when_registry_version_changes(monkeypatch):
-    context = PlannerContext(task="Send a Slack reminder", user_id="tester", budget=Budget())
-    search_calls = []
-
-    versions = {"value": 1}
-
-    def fake_registry_version(user_id):
-        return versions["value"]
-
-    def fake_search_tools(*, query, detail_level, limit, user_id):
-        search_calls.append(versions["value"])
-        return [
-            {
-                "provider": "slack",
-                "tool": f"TOOL_{versions['value']}",
-                "available": True,
-                "short_description": "desc",
-                "score": versions["value"],
-            }
-        ]
-
-    monkeypatch.setattr("mcp_agent.planner.discovery.registry_version", fake_registry_version)
-    monkeypatch.setattr("mcp_agent.planner.discovery.search_tools", fake_search_tools)
-
-    perform_initial_discovery(context, limit=5)
-    assert context.search_results[0]["tool"] == "TOOL_1"
-
-    versions["value"] = 2
-    perform_initial_discovery(context, limit=5)
-    assert context.search_results[0]["tool"] == "TOOL_2"
-    assert search_calls == [1, 2]
+def test_merge_search_results_replace_on_refresh():
+    state = make_state()
+    state.merge_search_results([
+        {"provider": "slack", "tool": "old", "available": True, "score": 1},
+    ])
+    state.merge_search_results([
+        {"provider": "slack", "tool": "new", "available": True, "score": 5},
+    ], replace=True)
+    assert len(state.search_results) == 1
+    assert state.search_results[0]["tool"] == "new"
 
 
-def test_refined_discovery_appends_and_deduplicates(monkeypatch):
-    context = PlannerContext(task="demo", user_id="tester", budget=Budget())
-
-    def fake_registry_version(user_id):
-        return 1
-
-    def fake_search_tools(*, query, detail_level, limit, user_id):
-        return [
-            {
-                "provider": "gmail",
-                "tool": "GMAIL_SEARCH",
-                "available": True,
-                "short_description": f"{query}",
-                "score": len(query),
-            }
-        ]
-
-    monkeypatch.setattr("mcp_agent.planner.discovery.registry_version", fake_registry_version)
-    monkeypatch.setattr("mcp_agent.planner.discovery.search_tools", fake_search_tools)
-
-    perform_initial_discovery(context, limit=5)
-    assert len(context.search_results) == 1
-
-    perform_refined_discovery(context, query="gmail attachments", detail_level="full", limit=3)
-    assert len(context.search_results) == 1, "Duplicate tool entries should be deduplicated."
-    assert context.tool_menu[0]["qualified_name"] == "gmail.gmail_search"
+def test_merge_search_results_keeps_highest_score_duplicate():
+    state = make_state()
+    state.merge_search_results(
+        [{"provider": "gmail", "tool": "search", "available": True, "score": 1}]
+    )
+    state.merge_search_results(
+        [{"provider": "gmail", "tool": "search", "available": True, "score": 5}]
+    )
+    assert state.search_results[0]["score"] == 5
 
 
-def test_discovery_allows_unknown_providers(monkeypatch):
-    context = PlannerContext(task="notion work", user_id="tester", budget=Budget())
-
-    def fake_registry_version(user_id):
-        return 1
-
-    def fake_search_tools(*, query, detail_level, limit, user_id):
-        return [
-            {
-                "provider": "notion",
-                "tool": "NOTION_QUERY",
-                "available": False,
-                "short_description": "Notion placeholder",
-                "score": 5,
-            }
-        ]
-
-    monkeypatch.setattr("mcp_agent.planner.discovery.registry_version", fake_registry_version)
-    monkeypatch.setattr("mcp_agent.planner.discovery.search_tools", fake_search_tools)
-
-    perform_initial_discovery(context, limit=5)
-    assert context.search_results[0]["provider"] == "notion"
+def test_merge_search_results_allows_unknown_provider():
+    state = make_state("notion work")
+    results = [
+        {"provider": "notion", "tool": "query", "available": True, "score": 3},
+    ]
+    state.merge_search_results(results)
+    assert state.search_results[0]["provider"] == "notion"
+    assert any(item["qualified_name"].startswith("notion") for item in state.tool_menu)

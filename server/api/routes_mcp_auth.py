@@ -131,7 +131,7 @@ def available_tools(request: Request, provider: Optional[str] = None):
     """Surface detailed action metadata per provider for UI presentation."""
     user_id = _require_user_id(request)
     requested = _normalize_provider(provider) if provider else None
-    manifest = get_toolbox_manifest(user_id=user_id, persist=False)
+    manifest = get_toolbox_manifest(user_id=user_id)
     providers_out: list[dict[str, Any]] = []
     for prov in manifest.providers:
         if requested and prov.provider != requested:

@@ -7,11 +7,9 @@ Run this in a Python REPL or as a script:
 
 from pprint import pprint
 
-from mcp_agent.toolbox.load_io_specs import ensure_io_specs_loaded
-from mcp_agent.toolbox.search import search_tools
-from mcp_agent.planner.context import _slim_tool_for_planner
-from mcp_agent.planner.budget import Budget
-from mcp_agent.planner.context import PlannerContext
+from mcp_agent.knowledge.load_io_specs import ensure_io_specs_loaded
+from mcp_agent.knowledge.search import search_tools
+from mcp_agent.agent.state import _slim_tool_for_planner
 
 
 def _count_max_depth(obj, depth=0):
@@ -180,4 +178,3 @@ if slack_search_entry:
 
 if slack_post_entry:
     print_slimmed_tool(slack_post_entry, "slack.slack_post_message")
-

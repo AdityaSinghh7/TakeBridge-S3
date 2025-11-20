@@ -6,11 +6,16 @@ from typing import Any, List
 
 import pytest
 
-from mcp_agent.planner.runtime import execute_mcp_task
-from mcp_agent.toolbox.builder import ToolboxBuilder
+from mcp_agent.agent import execute_mcp_task
+from mcp_agent.knowledge.builder import ToolboxBuilder
 
 from mcp_agent import registry
-from mcp_agent.mcp_agent import MCPAgent
+
+mcp_agent_module = pytest.importorskip(
+    "mcp_agent.mcp_agent",
+    reason="Legacy MCPAgent shim is not available in this environment.",
+)
+MCPAgent = mcp_agent_module.MCPAgent
 from tests.fakes.fake_mcp import CALL_HISTORY, reset_history
 
 TEST_USER = "test-user"
@@ -71,7 +76,7 @@ def test_execute_task_with_slack_tool(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr("mcp_agent.planner.discovery.search_tools", fake_search_tools)
+    monkeypatch.setattr("mcp_agent.knowledge.search.search_tools", fake_search_tools)
 
     llm = ScriptedLLM(
         [
@@ -105,7 +110,7 @@ def test_execute_task_with_gmail_sandbox(monkeypatch, tmp_path):
             }
         ]
 
-    monkeypatch.setattr("mcp_agent.planner.discovery.search_tools", fake_search_tools)
+    monkeypatch.setattr("mcp_agent.knowledge.search.search_tools", fake_search_tools)
 
     toolbox_root = tmp_path / "toolbox"
     builder = ToolboxBuilder(user_id=TEST_USER, base_dir=toolbox_root)

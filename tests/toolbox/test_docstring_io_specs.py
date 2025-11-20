@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from mcp_agent.toolbox.registry import get_tool_spec
-from mcp_agent.toolbox.load_io_specs import ensure_io_specs_loaded
-from mcp_agent.toolbox.search import search_tools
-from mcp_agent.toolbox.models import ParameterSpec, ProviderSpec, ToolSpec, ToolboxManifest
-from mcp_agent.toolbox.index import ToolboxIndex
+from mcp_agent.knowledge.registry import get_tool_spec
+from mcp_agent.knowledge.load_io_specs import ensure_io_specs_loaded
+from mcp_agent.knowledge.search import search_tools
+from mcp_agent.knowledge.models import ParameterSpec, ProviderSpec, ToolSpec, ToolboxManifest
+from mcp_agent.knowledge.index import ToolboxIndex
 
 
 def test_gmail_send_email_iospec_from_docstring():
@@ -69,7 +69,7 @@ def test_search_tools_uses_iospec_for_input_params(monkeypatch):
         providers=[provider],
     )
     index = ToolboxIndex.from_manifest(manifest)
-    monkeypatch.setattr("mcp_agent.toolbox.search.get_index", lambda *args, **kwargs: index)
+    monkeypatch.setattr("mcp_agent.knowledge.search.get_index", lambda *args, **kwargs: index)
 
     results = search_tools(query="gmail_send_email", user_id="tester")
     assert results

@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from mcp_agent.planner.summarize import redact_payload, summarize_payload
-from mcp_agent.planner.context import PlannerContext
-from mcp_agent.planner.budget import Budget
+from mcp_agent.agent.summarize import redact_payload, summarize_payload
+from mcp_agent.agent.state import AgentState
+from mcp_agent.agent.budget import Budget
 
 
 def test_summarize_payload_truncates_and_persists(tmp_path: Path):
@@ -36,8 +36,8 @@ def test_redact_payload_masks_nested_keys():
     assert redacted["nested"]["value"] == 1
 
 
-def test_context_should_summarize_threshold(tmp_path: Path):
-    context = PlannerContext(task="demo", user_id="tester", budget=Budget())
+def test_state_should_summarize_threshold(tmp_path: Path):
+    context = AgentState(task="demo", user_id="tester", request_id="test", budget=Budget())
     big_payload = [{"value": i} for i in range(200)]
     assert context.should_summarize(big_payload) is True
     small_payload = {"value": 1}

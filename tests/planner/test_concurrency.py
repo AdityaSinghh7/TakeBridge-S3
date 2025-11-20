@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from mcp_agent.planner.runtime import execute_mcp_task
+from mcp_agent.agent import execute_mcp_task
 
 
 def test_execute_mcp_task_runs_concurrently_without_leak(monkeypatch):
-    monkeypatch.setattr("mcp_agent.planner.runtime.perform_initial_discovery", lambda context: None)
+    monkeypatch.setattr("mcp_agent.agent.orchestrator.AgentOrchestrator._load_inventory", lambda self: None)
 
     def fake_call_direct_tool(context, provider, tool, payload):
         context.append_raw_output(
@@ -23,7 +23,7 @@ def test_execute_mcp_task_runs_concurrently_without_leak(monkeypatch):
         )
         return {"successful": True}
 
-    monkeypatch.setattr("mcp_agent.planner.runtime.call_direct_tool", fake_call_direct_tool)
+    monkeypatch.setattr("mcp_agent.actions.dispatcher.dispatch_tool", fake_call_direct_tool)
 
     class ToolThenFinishLLM:
         def __init__(self, user_id: str) -> None:
@@ -55,8 +55,8 @@ def test_execute_mcp_task_runs_concurrently_without_leak(monkeypatch):
             }
 
     # Provide a minimal index so tool validation passes.
-    from mcp_agent.toolbox.models import ParameterSpec, ToolSpec
-    from mcp_agent.toolbox.index import ToolboxIndex
+    from mcp_agent.knowledge.models import ParameterSpec, ToolSpec
+    from mcp_agent.knowledge.index import ToolboxIndex
 
     parameter = ParameterSpec(
         name="user",
@@ -81,7 +81,7 @@ def test_execute_mcp_task_runs_concurrently_without_leak(monkeypatch):
         available=True,
     )
     index = ToolboxIndex(providers={}, tools_by_id={tool_spec.tool_id: tool_spec})
-    monkeypatch.setattr("mcp_agent.planner.runtime.get_index", lambda *args, **kwargs: index)
+    monkeypatch.setattr("mcp_agent.knowledge.builder.get_index", lambda *args, **kwargs: index)
 
     def run_user(user_id: str):
         return execute_mcp_task("Concurrent task", user_id=user_id, llm=ToolThenFinishLLM(user_id))

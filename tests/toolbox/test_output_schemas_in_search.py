@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from mcp_agent.toolbox.load_io_specs import ensure_io_specs_loaded
-from mcp_agent.toolbox.registry import get_tool_spec
-from mcp_agent.toolbox.search import search_tools
-from mcp_agent.toolbox import output_schema_loader
-from mcp_agent.toolbox.models import ParameterSpec, ProviderSpec, ToolSpec, ToolboxManifest
-from mcp_agent.toolbox.index import ToolboxIndex
+from mcp_agent.knowledge.load_io_specs import ensure_io_specs_loaded
+from mcp_agent.knowledge.registry import get_tool_spec
+from mcp_agent.knowledge import output_schema_loader
+from mcp_agent.knowledge.search import search_tools
+from mcp_agent.knowledge.models import ParameterSpec, ProviderSpec, ToolSpec, ToolboxManifest
+from mcp_agent.knowledge.index import ToolboxIndex
 
 
 def _install_minimal_gmail_search_index(monkeypatch):
@@ -53,7 +53,7 @@ def _install_minimal_gmail_search_index(monkeypatch):
         providers=[provider],
     )
     index = ToolboxIndex.from_manifest(manifest)
-    monkeypatch.setattr("mcp_agent.toolbox.search.get_index", lambda *args, **kwargs: index)
+    monkeypatch.setattr("mcp_agent.knowledge.search.get_index", lambda *args, **kwargs: index)
 
 
 def test_gmail_search_output_schema_loaded(monkeypatch, tmp_path):

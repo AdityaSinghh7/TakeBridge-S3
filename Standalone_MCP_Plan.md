@@ -74,7 +74,7 @@ Standalone MCP Agent Plan (Detailed, Python-Only)
 
 **Layer 4 – Planner & Context**
 
-* New `mcp_agent.planner` module:
+* New `mcp_agent.agent` module:
 
   * Owns prompts, conversation state, budgets, summarization, sandbox orchestration.
   * Uses the shared `shared/oai_client.py` and `shared/token_cost_tracker.py`.
@@ -559,7 +559,7 @@ We **deprecate a separate “system prompt”** and standardize on a single **pl
 
 * v1 interface is **library-only**:
 
-  * Consumers call `mcp_agent.planner.execute_mcp_task(...)` directly.
+  * Consumers call `mcp_agent.agent.execute_mcp_task(...)` directly.
   * Primary consumers:
 
     * Computer-use agent (desktop/GUI worker).
@@ -605,7 +605,7 @@ We **deprecate a separate “system prompt”** and standardize on a single **pl
 
 5. **Planner**
 
-   * Implement `mcp_agent.planner` with:
+   * Implement `mcp_agent.agent` orchestrator with:
 
      * Canonical **planner prompt** (developer-as-system).
      * Context manager & trimming.

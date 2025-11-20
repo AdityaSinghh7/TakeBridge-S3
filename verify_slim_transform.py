@@ -4,7 +4,7 @@ Quick verification script to test the slim transform implementation.
 Run with: python verify_slim_transform.py
 """
 
-from mcp_agent.planner.context import _shallow_schema, _slim_tool_for_planner
+from mcp_agent.agent.state import _shallow_schema, _slim_tool_for_planner
 
 # Test 1: Shallow schema truncates deep nesting
 print("Test 1: Shallow schema truncation")
@@ -81,4 +81,3 @@ for key in ["path", "qualified_name", "short_description", "available", "score",
 print(f"  ✓ Output schema is shallow: {len(str(slim['output_schema'])) < len(str(deep_schema))}")
 
 print("\n✅ All tests passed! Slim transform working correctly.")
-

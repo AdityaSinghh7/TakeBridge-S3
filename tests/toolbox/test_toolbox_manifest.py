@@ -5,10 +5,10 @@ from typing import Any
 
 import pytest
 
-from mcp_agent.toolbox import builder as builder_module
-from mcp_agent.toolbox.builder import ToolboxBuilder, invalidate_manifest_cache
-from mcp_agent.toolbox.models import ParameterSpec, ProviderSpec, ToolSpec, ToolboxManifest
-from mcp_agent.toolbox import search as search_module
+from mcp_agent.knowledge import builder as builder_module
+from mcp_agent.knowledge.builder import ToolboxBuilder, invalidate_manifest_cache
+from mcp_agent.knowledge.models import ParameterSpec, ProviderSpec, ToolSpec, ToolboxManifest
+from mcp_agent.knowledge import search as search_module
 
 
 @pytest.fixture(autouse=True)
@@ -155,7 +155,7 @@ def test_search_tools_respects_detail_levels(monkeypatch: pytest.MonkeyPatch):
         providers=[provider],
     )
 
-    from mcp_agent.toolbox.index import ToolboxIndex
+    from mcp_agent.knowledge.index import ToolboxIndex
 
     monkeypatch.setattr(
         search_module,

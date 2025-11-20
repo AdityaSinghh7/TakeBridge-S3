@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import pytest
-from mcp_agent.planner.context import (
+from mcp_agent.agent.state import (
+    AgentState,
     _build_minimal_signature,
     _flatten_schema_fields,
     _shallow_schema,
     _simplify_signature,
     _slim_tool_for_planner,
 )
-from mcp_agent.planner.budget import Budget
-from mcp_agent.planner.context import PlannerContext
+from mcp_agent.agent.budget import Budget
+
+
+def make_state(task="Test task", budget: Budget | None = None) -> AgentState:
+    return AgentState(task=task, user_id="tester", request_id="test", budget=budget or Budget())
 
 
 def test_shallow_schema_truncates_deep_nesting():
@@ -220,7 +224,7 @@ def test_slim_tool_for_planner_flattens_output_fields():
 
 def test_build_planner_state_returns_slim_search_results():
     """Test that build_planner_state returns slim search_results."""
-    context = PlannerContext(task="Test task", user_id="tester", budget=Budget())
+    context = make_state()
 
     full_entry = {
         "tool_id": "gmail.gmail_search",
@@ -417,4 +421,3 @@ def test_simplify_signature():
     # Empty or None should return as-is
     assert _simplify_signature("") == ""
     assert _simplify_signature(None) is None
-

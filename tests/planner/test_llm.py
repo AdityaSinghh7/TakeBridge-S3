@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from mcp_agent.planner.budget import Budget
-from mcp_agent.planner.context import PlannerContext
-from mcp_agent.planner.llm import PlannerLLM
+from mcp_agent.agent.budget import Budget
+from mcp_agent.agent.llm import PlannerLLM
+from mcp_agent.agent.state import AgentState
+
+
+def make_state(task: str = "demo task", budget: Budget | None = None) -> AgentState:
+    return AgentState(task=task, user_id="tester", request_id="test", budget=budget or Budget())
 
 
 class FakeResponse:
@@ -30,8 +34,8 @@ class FakeClient:
 
 
 def test_planner_llm_calls_openai_and_records_cost(monkeypatch):
-    context = PlannerContext(task="demo task", user_id="tester", budget=Budget())
-    context.add_search_results(
+    state = make_state()
+    state.add_search_results(
         [{"provider": "slack", "tool": "send_message", "short_description": "post", "available": True}]
     )
     recorded = {}
@@ -40,30 +44,30 @@ def test_planner_llm_calls_openai_and_records_cost(monkeypatch):
         recorded["model"] = model
         recorded["source"] = source
 
-    context.token_tracker = SimpleNamespace(record_response=fake_record, total_cost_usd=0.0)
+    state.token_tracker = SimpleNamespace(record_response=fake_record, total_cost_usd=0.0)
     client = FakeClient(FakeResponse("Plan actions now."))
     llm = PlannerLLM(client=client, enabled=True)
 
-    result = llm.generate_plan(context)
+    result = llm.generate_plan(state)
 
     assert client.calls, "expected OpenAI client to be invoked"
     assert recorded["model"] == "o4-mini"
     assert "Plan actions now." in result["text"]
-    assert "mcp.llm.completed" in [log["event"] for log in context.logs]
+    assert "mcp.llm.completed" in [log["event"] for log in state.logs]
 
 
 def test_planner_llm_respects_disabled_flag(monkeypatch):
-    context = PlannerContext(task="demo task", user_id="tester", budget=Budget())
+    state = make_state()
     llm = PlannerLLM(enabled=False)
-    result = llm.generate_plan(context)
+    result = llm.generate_plan(state)
     assert result["response"] is None
-    assert "mcp.llm.skipped" in [log["event"] for log in context.logs]
+    assert "mcp.llm.skipped" in [log["event"] for log in state.logs]
 
 
 def test_planner_state_includes_gmail_search_schema(monkeypatch, tmp_path):
     """Test that PLANNER_STATE_JSON includes gmail.gmail_search with correct output_schema."""
-    from mcp_agent.toolbox.load_io_specs import ensure_io_specs_loaded
-    from mcp_agent.toolbox import output_schema_loader
+    from mcp_agent.knowledge.load_io_specs import ensure_io_specs_loaded
+    from mcp_agent.knowledge import output_schema_loader
     import json
     from pathlib import Path
 
@@ -96,8 +100,8 @@ def test_planner_state_includes_gmail_search_schema(monkeypatch, tmp_path):
     output_schema_loader.load_output_schemas()
 
     # Create PlannerContext and add search results with gmail_search
-    context = PlannerContext(task="Search Gmail for emails", user_id="tester", budget=Budget())
-    context.summary_root = tmp_path
+    state = make_state(task="Search Gmail for emails")
+    state.summary_root = tmp_path
 
     # Add a search result entry that would come from search_tools (full descriptor)
     gmail_search_entry = {
@@ -141,18 +145,14 @@ def test_planner_state_includes_gmail_search_schema(monkeypatch, tmp_path):
         "output_schema_pretty": ["- messages: array", "- nextPageToken: string", "- resultSizeEstimate: integer"],
     }
 
-    context.add_search_results([gmail_search_entry])
+    state.add_search_results([gmail_search_entry])
 
     # Build planner state
-    from mcp_agent.planner.budget import BudgetSnapshot
+    snapshot = state.budget_tracker.snapshot()
+    planner_state = state.build_planner_state(snapshot)
 
-    snapshot = context.budget_tracker.snapshot()
-    state = context.build_planner_state(snapshot)
-
-    # Verify search_results includes gmail.gmail_search with correct schema
-    assert "search_results" in state, "planner state should have search_results"
-    search_results = state["search_results"]
-    assert isinstance(search_results, list), "search_results should be a list"
+    assert "available_tools" in planner_state
+    search_results = planner_state["available_tools"]
 
     gmail_entry = next((r for r in search_results if r.get("tool_id") == "gmail.gmail_search"), None)
     assert gmail_entry is not None, "search_results should include gmail.gmail_search"
@@ -197,7 +197,7 @@ def test_planner_state_includes_gmail_search_schema(monkeypatch, tmp_path):
     assert any("resultSizeEstimate" in f for f in output_fields), "output_fields should include resultSizeEstimate"
     
     # Verify full descriptor still available internally
-    full_entry = next((r for r in context.search_results if r.get("tool_id") == "gmail.gmail_search"), None)
+    full_entry = next((r for r in state.search_results if r.get("tool_id") == "gmail.gmail_search"), None)
     assert full_entry is not None, "Full descriptor should still be in context.search_results"
     assert "path" in full_entry, "Full descriptor should have path"
     assert "score" in full_entry, "Full descriptor should have score"

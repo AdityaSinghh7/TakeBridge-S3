@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from mcp_agent.planner.parser import parse_planner_command
+from mcp_agent.agent.parser import parse_planner_command
 
 
 def test_parse_planner_command_valid_finish():

@@ -9,7 +9,6 @@ import ast
 import inspect
 import textwrap
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Callable, Dict, List, Tuple, TYPE_CHECKING
 import threading
 
@@ -24,40 +23,29 @@ from mcp_agent.core.context import AgentContext
 from mcp_agent.user_identity import normalize_user_id
 from mcp_agent.knowledge.models import ParameterSpec, ProviderSpec, ToolSpec, ToolboxManifest
 from mcp_agent.knowledge.index import ToolboxIndex
-from mcp_agent.knowledge.python_generator import PythonGenerator
 from mcp_agent.knowledge.utils import (
     action_signature,
-    default_toolbox_root,
     extract_call_tool_metadata,
     fingerprint_manifest,
     format_annotation,
     parse_action_docstring,
     relative_source_path,
     serialize_default,
-    safe_filename,
     short_description,
     utcnow_iso,
-    write_json_if_changed,
-    write_text_if_changed,
 )
 
-CacheKey = tuple[str, str]
+CacheKey = str
 
 
 @dataclass
 class CacheEntry:
     manifest: ToolboxManifest
     registry_version: int
-    base_dir: str
-    persisted: bool = False
 
 
 _MANIFEST_CACHE: Dict[CacheKey, CacheEntry] = {}
 _MANIFEST_CACHE_LOCK = threading.RLock()
-
-
-def _cache_key(user_id: str, base_dir: Path) -> CacheKey:
-    return (user_id, str(base_dir))
 
 
 def _function_ast(func: Callable[..., object]) -> ast.AST | None:
@@ -105,11 +93,10 @@ def _detect_helper_params(
 
 
 class ToolboxBuilder:
-    """Build and persist tool metadata derived from MCP action wrappers."""
+    """Build tool metadata derived from MCP action wrappers (in-memory only)."""
 
-    def __init__(self, *, user_id: str, base_dir: Path | None = None):
+    def __init__(self, *, user_id: str):
         self.user_id = normalize_user_id(user_id)
-        self.base_dir = (base_dir or default_toolbox_root()).resolve()
         self.generated_at = utcnow_iso()
 
     def build(self) -> ToolboxManifest:
@@ -134,75 +121,6 @@ class ToolboxBuilder:
             fingerprint=fingerprint,
             providers=providers,
         )
-
-    def persist(self, manifest: ToolboxManifest) -> Dict[str, int]:
-        stats = {
-            "manifest": 0,
-            "index": 0,
-            "providers": 0,
-            "provider_details": 0,
-            "tools": 0,
-            "py_files": 0,
-        }
-        base = self.base_dir
-        base.mkdir(parents=True, exist_ok=True)
-
-        manifest_payload = manifest.to_dict()
-        if write_json_if_changed(base / "manifest.json", manifest_payload):
-            stats["manifest"] += 1
-
-        index_payload = {
-            "user_id": manifest.user_id,
-            "generated_at": manifest.generated_at,
-            "registry_version": manifest.registry_version,
-            "fingerprint": manifest.fingerprint,
-            "provider_count": len(manifest.providers),
-            "providers_index": "providers.json",
-        }
-        if write_json_if_changed(base / "index.json", index_payload):
-            stats["index"] += 1
-
-        providers_summary: List[Dict[str, str | int | bool | None]] = []
-        for provider in manifest.providers:
-            provider_dir = base / "providers" / provider.provider
-            provider_summary = provider.summary()
-            provider_summary["path"] = f"providers/{provider.provider}/provider.json"
-            provider_summary["tools_path"] = f"providers/{provider.provider}/tools"
-            providers_summary.append(provider_summary)
-
-            provider_payload = provider.to_dict(include_tools=False)
-            provider_payload["tools"] = [
-                {
-                    "name": tool.name,
-                    "path": f"providers/{provider.provider}/tools/{safe_filename(tool.name)}.json",
-                    "available": tool.available,
-                    "short_description": tool.short_description,
-                }
-                for tool in provider.actions
-            ]
-            if write_json_if_changed(provider_dir / "provider.json", provider_payload):
-                stats["provider_details"] += 1
-
-            tools_dir = provider_dir / "tools"
-            for tool in provider.actions:
-                tool_payload = tool.to_dict()
-                tool_payload["provider_status"] = provider.summary()
-                tool_payload["path"] = (
-                    f"providers/{provider.provider}/tools/{safe_filename(tool.name)}.json"
-                )
-                tool_payload["manifest_generated_at"] = manifest.generated_at
-                if write_json_if_changed(
-                    tools_dir / f"{safe_filename(tool.name)}.json", tool_payload
-                ):
-                    stats["tools"] += 1
-
-        providers_payload = {"providers": providers_summary}
-        if write_json_if_changed(base / "providers.json", providers_payload):
-            stats["providers"] += 1
-        py_generator = PythonGenerator(manifest, base)
-        py_stats = py_generator.write()
-        stats["py_files"] = py_stats.get("py_files", 0)
-        return stats
 
     def _build_provider(
         self, provider: str, funcs: Tuple[Callable[..., object], ...]
@@ -330,23 +248,14 @@ class ToolboxBuilder:
         )
 
 
-def _write_existing_manifest(entry: CacheEntry) -> None:
-    builder = ToolboxBuilder(user_id=entry.manifest.user_id, base_dir=Path(entry.base_dir))
-    builder.persist(entry.manifest)
-    entry.persisted = True
-
-
 def get_manifest(
     user_id: str,
     *,
     refresh: bool = False,
-    persist: bool = True,
-    base_dir: Path | None = None,
 ) -> ToolboxManifest:
+    """Return (and cache) the toolbox manifest for a user."""
     user = normalize_user_id(user_id)
-    root = (base_dir or default_toolbox_root()).resolve()
-    key = _cache_key(user, root)
-    # Registry versioning removed - always version 0
+    key = user
     with _MANIFEST_CACHE_LOCK:
         entry = _MANIFEST_CACHE.get(key)
         needs_refresh = (
@@ -356,14 +265,11 @@ def get_manifest(
         )
 
     if needs_refresh:
-        builder = ToolboxBuilder(user_id=user, base_dir=root)
+        builder = ToolboxBuilder(user_id=user)
         manifest = builder.build()
-        stats = builder.persist(manifest) if persist else {"manifest": 0}
         entry = CacheEntry(
             manifest=manifest,
             registry_version=manifest.registry_version,
-            base_dir=str(root),
-            persisted=persist,
         )
         with _MANIFEST_CACHE_LOCK:
             _MANIFEST_CACHE[key] = entry
@@ -372,23 +278,13 @@ def get_manifest(
             {
                 "user_id": user,
                 "providers": len(manifest.providers),
-                "persisted": persist,
-                "stats": stats,
+                "persisted": False,
+                "fingerprint": manifest.fingerprint,
             },
         )
         return manifest
 
-    if persist and entry and not entry.persisted:
-        _write_existing_manifest(entry)
     return entry.manifest
-
-
-def refresh_manifest(
-    user_id: str,
-    *,
-    base_dir: Path | None = None,
-) -> ToolboxManifest:
-    return get_manifest(user_id=user_id, refresh=True, persist=True, base_dir=base_dir)
 
 
 def invalidate_manifest_cache(user_id: str | None = None) -> None:
@@ -399,21 +295,16 @@ def invalidate_manifest_cache(user_id: str | None = None) -> None:
         if normalized is None:
             _MANIFEST_CACHE.clear()
             return
-        keys_to_remove = [key for key in _MANIFEST_CACHE if key[0] == normalized]
-        for key in keys_to_remove:
-            _MANIFEST_CACHE.pop(key, None)
+        _MANIFEST_CACHE.pop(normalized, None)
 
 
 def get_index(
     user_id: str,
-    *,
-    base_dir: Path | None = None,
 ) -> ToolboxIndex:
     """
     Convenience helper to construct a ToolboxIndex for the given user.
 
     This reuses the manifest cache and does not persist any new files.
     """
-    manifest = get_manifest(user_id=user_id, base_dir=base_dir, persist=False)
+    manifest = get_manifest(user_id=user_id)
     return ToolboxIndex.from_manifest(manifest)
-

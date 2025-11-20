@@ -21,7 +21,7 @@ DetailLevel = Literal["names", "summary", "full"]
 def list_providers(user_id: str) -> List[Dict[str, Any]]:
     """List all configured providers for a user."""
     normalized = normalize_user_id(user_id)
-    manifest = get_manifest(user_id=normalized, persist=False)
+    manifest = get_manifest(user_id=normalized)
     providers = []
     for provider in manifest.providers:
         entry = provider.summary()
@@ -58,7 +58,7 @@ def search_tools(
     normalized_user = normalize_user_id(user_id)
     norm_query = _normalize_query(query)
     provider_filter = provider.lower().strip() if provider else None
-    index: ToolboxIndex = get_index(user_id=normalized_user, base_dir=None)
+    index: ToolboxIndex = get_index(user_id=normalized_user)
     matches: List[tuple[int, ProviderSpec, ToolSpec]] = []
 
     for prov in index.providers.values():
@@ -185,4 +185,3 @@ def _score_tool(tool: ToolSpec, query: _Query) -> int:
     if score > 0 and tool.available:
         score += 1
     return score
-

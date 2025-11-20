@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from mcp_agent.planner import Budget, BudgetSnapshot, execute_mcp_task
+from mcp_agent.agent import Budget, BudgetSnapshot, execute_mcp_task
 
 
 TEST_USER = "test-user"
@@ -37,7 +37,7 @@ def test_budget_defaults_and_snapshot():
 
 
 def test_execute_mcp_task_returns_structured_result(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("mcp_agent.planner.discovery.search_tools", lambda **kwargs: [])
+    monkeypatch.setattr("mcp_agent.knowledge.search.search_tools", lambda **kwargs: [])
     result = execute_mcp_task("noop task", user_id=TEST_USER, llm=FinishLLM("All done."))
     assert result["success"] is True
     assert result["final_summary"] == "All done."
@@ -45,7 +45,7 @@ def test_execute_mcp_task_returns_structured_result(monkeypatch: pytest.MonkeyPa
 
 
 def test_planner_module_exports_contract():
-    module = importlib.import_module("mcp_agent.planner")
+    module = importlib.import_module("mcp_agent.agent")
     assert hasattr(module, "execute_mcp_task")
     assert hasattr(module, "Budget")
     assert hasattr(module, "BudgetSnapshot")
@@ -58,7 +58,7 @@ def test_execute_mcp_task_runs_tool_search(monkeypatch: pytest.MonkeyPatch):
         captured.update(kwargs)
         return [{"provider": "slack", "tool": "send_message", "short_description": "foo", "available": True}]
 
-    monkeypatch.setattr("mcp_agent.planner.discovery.search_tools", fake_search)
+    monkeypatch.setattr("mcp_agent.knowledge.search.search_tools", fake_search)
     result = execute_mcp_task("send slack update", user_id=TEST_USER, llm=FinishLLM("done"))
     assert captured["query"] == "send slack update"
     assert result["logs"][0]["event"] == "mcp.planner.started"
@@ -72,13 +72,13 @@ def test_execute_mcp_task_accepts_custom_llm(monkeypatch: pytest.MonkeyPatch):
             context.record_event("custom.llm.called", {})
             return {"messages": [], "text": "done", "response": None}
 
-    monkeypatch.setattr("mcp_agent.planner.discovery.search_tools", lambda **kwargs: [])
+    monkeypatch.setattr("mcp_agent.knowledge.search.search_tools", lambda **kwargs: [])
     result = execute_mcp_task("task", user_id=TEST_USER, llm=StubLLM())
     assert "custom.llm.called" in [log["event"] for log in result["logs"]]
 
 
 def test_execute_mcp_task_without_llm_returns_parse_error(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr("mcp_agent.planner.discovery.search_tools", lambda **kwargs: [])
+    monkeypatch.setattr("mcp_agent.knowledge.search.search_tools", lambda **kwargs: [])
     result = execute_mcp_task("task without llm", user_id=TEST_USER)
     assert result["success"] is False
     assert result["error"] == "planner_llm_disabled"
@@ -116,18 +116,18 @@ def test_execute_tool_command(monkeypatch: pytest.MonkeyPatch):
 
     tool_llm = ToolLLM()
 
-    monkeypatch.setattr("mcp_agent.planner.discovery.search_tools", lambda **kwargs: [])
+    monkeypatch.setattr("mcp_agent.knowledge.search.search_tools", lambda **kwargs: [])
 
     def fake_call_direct_tool(context, provider, tool, payload):
         context.record_event("test.tool.called", {"payload": payload})
         context.summarize_tool_output(f"{provider}.{tool}", {"payload": payload}, force=True)
         return {"successful": True, "data": payload}
 
-    monkeypatch.setattr("mcp_agent.planner.runtime.call_direct_tool", fake_call_direct_tool)
+    monkeypatch.setattr("mcp_agent.agent.orchestrator.dispatch_tool", fake_call_direct_tool)
 
     # Provide minimal index so SLACK_SEND_MESSAGE passes validation.
-    from mcp_agent.toolbox.models import ParameterSpec, ToolSpec
-    from mcp_agent.toolbox.index import ToolboxIndex
+    from mcp_agent.knowledge.models import ParameterSpec, ToolSpec
+    from mcp_agent.knowledge.index import ToolboxIndex
 
     parameter = ParameterSpec(
         name="text",
@@ -152,7 +152,7 @@ def test_execute_tool_command(monkeypatch: pytest.MonkeyPatch):
         available=True,
     )
     index = ToolboxIndex(providers={}, tools_by_id={tool.tool_id: tool})
-    monkeypatch.setattr("mcp_agent.planner.runtime.get_index", lambda *args, **kwargs: index)
+    monkeypatch.setattr("mcp_agent.knowledge.builder.get_index", lambda *args, **kwargs: index)
 
     result = execute_mcp_task("tool command", user_id=TEST_USER, llm=tool_llm)
     assert result["success"] is True
@@ -187,7 +187,7 @@ def test_execute_sandbox_command(monkeypatch: pytest.MonkeyPatch):
                 )
             }
 
-    monkeypatch.setattr("mcp_agent.planner.discovery.search_tools", lambda **kwargs: [])
+    monkeypatch.setattr("mcp_agent.knowledge.search.search_tools", lambda **kwargs: [])
 
     def fake_run_sandbox_plan(context, code_body, label="sandbox"):
         context.record_event("test.sandbox.called", {})
@@ -223,7 +223,7 @@ def test_execute_sandbox_command(monkeypatch: pytest.MonkeyPatch):
         context.summarize_sandbox_output("sandbox_test", {"status": "ok"}, force=True)
         return result
 
-    monkeypatch.setattr("mcp_agent.planner.runtime.run_sandbox_plan", fake_run_sandbox_plan)
+    monkeypatch.setattr("mcp_agent.execution.sandbox.run_python_plan", fake_run_sandbox_plan)
 
     result = execute_mcp_task("sandbox command", user_id=TEST_USER, llm=SandboxLLM())
     assert result["success"] is True
@@ -246,15 +246,15 @@ def test_budget_exceeded_stops_loop(monkeypatch: pytest.MonkeyPatch):
                 )
             }
 
-    monkeypatch.setattr("mcp_agent.planner.discovery.search_tools", lambda **kwargs: [])
+    monkeypatch.setattr("mcp_agent.knowledge.search.search_tools", lambda **kwargs: [])
     monkeypatch.setattr(
-        "mcp_agent.planner.runtime.call_direct_tool",
-        lambda context, provider, tool, payload: {"successful": True},
+        "mcp_agent.actions.dispatcher.dispatch_tool",
+        lambda **kwargs: {"successful": True},
     )
 
     # Provide minimal index so SLACK_SEND_MESSAGE passes validation.
-    from mcp_agent.toolbox.models import ParameterSpec, ToolSpec
-    from mcp_agent.toolbox.index import ToolboxIndex
+    from mcp_agent.knowledge.models import ParameterSpec, ToolSpec
+    from mcp_agent.knowledge.index import ToolboxIndex
 
     parameter = ParameterSpec(
         name="text",
@@ -279,7 +279,7 @@ def test_budget_exceeded_stops_loop(monkeypatch: pytest.MonkeyPatch):
         available=True,
     )
     index = ToolboxIndex(providers={}, tools_by_id={tool.tool_id: tool})
-    monkeypatch.setattr("mcp_agent.planner.runtime.get_index", lambda *args, **kwargs: index)
+    monkeypatch.setattr("mcp_agent.knowledge.builder.get_index", lambda *args, **kwargs: index)
 
     result = execute_mcp_task("budget loop", user_id=TEST_USER, llm=LoopLLM(), budget=Budget(max_steps=1))
     assert result["success"] is False

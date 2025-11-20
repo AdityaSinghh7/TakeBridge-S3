@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 
-from mcp_agent.planner import Budget, execute_mcp_task
+from mcp_agent.agent import Budget, execute_mcp_task
 
 
 def _run_simple_task(user_id: str, task: str) -> dict:

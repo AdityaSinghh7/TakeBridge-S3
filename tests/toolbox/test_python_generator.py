@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mcp_agent.toolbox.models import ParameterSpec, ProviderSpec, ToolSpec, ToolboxManifest
-from mcp_agent.toolbox.python_generator import PythonGenerator
+from mcp_agent.knowledge.models import ParameterSpec, ProviderSpec, ToolSpec, ToolboxManifest
+from mcp_agent.knowledge.python_generator import PythonGenerator
 
 
 def _build_manifest() -> ToolboxManifest:

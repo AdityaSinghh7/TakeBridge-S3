@@ -3,7 +3,7 @@
 ## Standalone MCP Planner
 
 The repository now exposes a Python-only planner entrypoint at
-`mcp_agent.planner.execute_mcp_task(task: str, *, user_id: str, budget: Budget | None = None, extra_context: dict | None = None) -> MCPTaskResult`.
+`mcp_agent.agent.execute_mcp_task(task: str, *, user_id: str, budget: Budget | None = None, extra_context: dict | None = None) -> MCPTaskResult`.
 
 - Returns a structured result with `success`, `final_summary`, `raw_outputs`, `budget_usage`, `logs`, and optional `error`.
 - Budgets cover steps, tool calls, sandbox runs, and estimated LLM spend (tracked via `shared.token_cost_tracker`).
@@ -33,7 +33,7 @@ To add another provider in this architecture:
 
 ### Legacy scripts
 
-The orchestration helpers in `scripts/` remain for the FastAPI-based worker. Prefer calling `mcp_agent.planner.execute_mcp_task(...)` for all new automation. If you continue to use the scripts, treat them as legacy shims until they are fully re-wired to the standalone planner.
+The orchestration helpers in `scripts/` remain for the FastAPI-based worker. Prefer calling `mcp_agent.agent.execute_mcp_task(...)` for all new automation. If you continue to use the scripts, treat them as legacy shims until they are fully re-wired to the standalone planner.
 
 Refer to `Standalone_MCP_Plan.md` for the end-to-end architecture and the checklist for granular implementation status.
 

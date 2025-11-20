@@ -67,22 +67,15 @@ def run_python_plan(
     plan_source = _build_plan_source(code_body or "    pass")
     
     repo_root = Path(__file__).resolve().parents[2]
-    
-    # Use toolbox root if specified in context
-    toolbox_root = context.extra.get("toolbox_root")
-    if not toolbox_root:
-        toolbox_root = Path("toolbox").resolve()
-    else:
-        toolbox_root = Path(toolbox_root).resolve()
-    
+
     with tempfile.TemporaryDirectory(prefix=f"sandbox-{context.user_id}-") as tmpdir:
         tmp_path = Path(tmpdir)
         plan_path = tmp_path / "plan.py"
         plan_path.write_text(plan_source, encoding="utf-8")
-        
+
         env = os.environ.copy()
         existing_pythonpath = env.get("PYTHONPATH", "")
-        path_entries = [toolbox_root, repo_root]
+        path_entries = [repo_root]
         if existing_pythonpath:
             path_entries.append(existing_pythonpath)
         env["PYTHONPATH"] = os.pathsep.join(str(value) for value in path_entries if value)
@@ -145,7 +138,7 @@ def _build_plan_source(code_body: str) -> str:
 import asyncio
 import json
 import os
-from sandbox_py import servers  # noqa: F401
+from mcp_agent.sandbox.runtime import call_tool  # noqa: F401
 from mcp_agent.sandbox.glue import register_default_tool_caller
 from mcp_agent.core.context import AgentContext
 

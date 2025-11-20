@@ -11,10 +11,11 @@ import sys
 from typing import Any, Dict, List, TYPE_CHECKING
 
 from shared.oai_client import OAIClient, extract_assistant_text
+from .prompts import PLANNER_PROMPT
 
 if TYPE_CHECKING:
-    from .context import PlannerContext
     from .budget import BudgetSnapshot
+    from .state import AgentState
 
 
 class PlannerLLM:
@@ -31,7 +32,7 @@ class PlannerLLM:
         self.model = model
         self._enabled_override = enabled
 
-    def generate_plan(self, context: PlannerContext) -> Dict[str, Any]:
+    def generate_plan(self, context: "AgentState") -> Dict[str, Any]:
         snapshot = context.budget_tracker.snapshot()
         messages = self._build_messages(context, snapshot)
 
@@ -93,7 +94,7 @@ class PlannerLLM:
 
     def _build_messages(
         self,
-        context: PlannerContext,
+        context: "AgentState",
         snapshot: BudgetSnapshot,
     ) -> List[Dict[str, Any]]:
         """
@@ -108,15 +109,16 @@ class PlannerLLM:
             ensure_ascii=False,
             sort_keys=True,
         )
+        system_prompt = getattr(context, "planner_prompt", PLANNER_PROMPT)
         return [
-            {"role": "system", "content": context.planner_prompt},
+            {"role": "system", "content": system_prompt},
             {"role": "developer", "content": developer_content},
             {"role": "user", "content": user_payload},
         ]
 
     def _developer_message(
         self,
-        context: PlannerContext,
+        context: "AgentState",
         snapshot: BudgetSnapshot,
     ) -> str:
         state = context.planner_state(snapshot)
@@ -129,4 +131,3 @@ class PlannerLLM:
             print("=========================================================\n", file=sys.stderr)
         
         return f"PLANNER_STATE_JSON\n{state_json}"
-
