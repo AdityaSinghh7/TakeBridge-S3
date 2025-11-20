@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional
 
-from .types import ActionResponse
+from mcp_agent.types import ActionResponse
 
 """
 Manual IO specifications used by probing and documentation utilities.
@@ -86,3 +86,4 @@ class IoToolSpec:
 
 # Backwards-compat alias for older scripts; prefer IoToolSpec in new code.
 ToolSpec = IoToolSpec
+

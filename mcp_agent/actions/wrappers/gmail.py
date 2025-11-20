@@ -10,7 +10,7 @@ import os
 from typing import TYPE_CHECKING, Any, Dict
 
 from mcp_agent.core.exceptions import UnauthorizedError
-from mcp_agent.mcp_agent import MCPAgent
+from mcp_agent.registry.manager import RegistryManager
 from mcp_agent.types import ToolInvocationResult
 from mcp_agent.user_identity import normalize_user_id
 from shared.streaming import emit_event
@@ -104,7 +104,7 @@ def _normalize_tool_response(
     response: dict[str, Any] | None,
 ) -> ToolInvocationResult:
     """Normalize MCP response into standardized envelope."""
-    from mcp_agent.toolbox.envelope import normalize_action_response
+    from mcp_agent.execution.envelope import normalize_action_response
     
     normalized: dict[str, Any] = dict(response or {})
     envelope = normalize_action_response(normalized)
@@ -122,7 +122,7 @@ def _normalize_tool_response(
 def _invoke_mcp_tool(
     context: AgentContext, provider: str, tool: str, payload: dict[str, Any]
 ) -> ToolInvocationResult:
-    """Call MCP tool via MCPAgent and return normalized result."""
+    """Call MCP tool via RegistryManager and return normalized result."""
     payload_keys = sorted(payload.keys())
     user_id = normalize_user_id(context.user_id)
     
@@ -134,7 +134,11 @@ def _invoke_mcp_tool(
     })
     
     try:
-        response = MCPAgent.current(user_id).call_tool(provider, tool, payload)
+        registry = RegistryManager(context)
+        client = registry.get_mcp_client(provider)
+        if not client:
+            raise RuntimeError(f"MCP client not available for provider: {provider}")
+        response = client.call(tool, payload)
     except Exception as exc:
         error_message = str(exc)
         emit_event("mcp.action.failed", {

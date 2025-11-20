@@ -4,7 +4,7 @@ from typing import List, Tuple
 
 from computer_use_agent.grounding.grounding_agent import ACI
 from mcp_agent.actions import iter_available_action_functions
-from mcp_agent.toolbox import refresh_manifest
+from mcp_agent.knowledge.builder import refresh_manifest
 from mcp_agent.user_identity import normalize_user_id
 from shared.streaming import emit_event
 

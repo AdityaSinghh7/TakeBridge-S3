@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from mcp_agent.toolbox.envelope import normalize_action_response
-from mcp_agent.toolbox.types import ActionResponse
+from mcp_agent.execution.envelope import normalize_action_response
+from mcp_agent.types import ActionResponse
 
 
 def _infer_type(value: Any) -> str:
@@ -224,3 +224,4 @@ def sample_output_schema_for_wrapper(
     if error_payloads:
         schema["error"] = infer_json_schema_from_samples(error_payloads)
     return schema
+

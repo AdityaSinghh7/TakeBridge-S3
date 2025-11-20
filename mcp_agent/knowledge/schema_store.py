@@ -76,3 +76,4 @@ def load_output_schemas(path: Path | None = None) -> None:
             out_spec.pretty_error = _pretty_from_schema(error_schema)
 
         spec.output_spec = out_spec
+

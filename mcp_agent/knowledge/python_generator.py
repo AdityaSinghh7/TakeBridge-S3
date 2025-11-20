@@ -11,8 +11,8 @@ import textwrap
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Set
 
-from mcp_agent.toolbox.models import ParameterSpec, ProviderSpec, ToolSpec, ToolboxManifest
-from mcp_agent.toolbox.utils import ensure_dir, safe_filename, to_camel_case, write_text_if_changed
+from mcp_agent.knowledge.models import ParameterSpec, ProviderSpec, ToolSpec, ToolboxManifest
+from mcp_agent.knowledge.utils import ensure_dir, safe_filename, to_camel_case, write_text_if_changed
 
 
 class ToolWriteResult(NamedTuple):

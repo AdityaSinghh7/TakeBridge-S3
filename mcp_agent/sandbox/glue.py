@@ -99,7 +99,7 @@ def register_default_tool_caller() -> None:
 
                 response = await loop.run_in_executor(None, _call_sync)
 
-            from mcp_agent.toolbox.envelope import normalize_action_response, unwrap_nested_data
+            from mcp_agent.execution.envelope import normalize_action_response, unwrap_nested_data
 
             envelope = normalize_action_response(response)
             data = unwrap_nested_data(envelope["data"])
@@ -150,7 +150,7 @@ def register_default_tool_caller() -> None:
                 response = await loop.run_in_executor(None, _call_sync)
 
             # Normalize into a canonical envelope, then adapt to sandbox expectations.
-            from mcp_agent.toolbox.envelope import normalize_action_response, unwrap_nested_data
+            from mcp_agent.execution.envelope import normalize_action_response, unwrap_nested_data
 
             envelope = normalize_action_response(response)
             data = unwrap_nested_data(envelope["data"])

@@ -1,40 +1,68 @@
-"""Actions layer: Raw MCP tool wrappers.
+"""Actions layer - Tool wrappers and dispatching."""
 
-Provides standardized wrappers for all MCP tools across providers.
-"""
+from .dispatcher import dispatch_tool
 
-from .wrappers.gmail import gmail_search, gmail_send_email
-from .wrappers.slack import slack_post_message, slack_search_messages
-
-# Provider -> tools mapping
-SUPPORTED_PROVIDERS = ("slack", "gmail")
-
-PROVIDER_ACTIONS = {
-    "slack": (slack_post_message, slack_search_messages),
-    "gmail": (gmail_send_email, gmail_search),
-}
-
-
+# Keep the action map export for compatibility
 def get_provider_action_map():
-    """
-    Get mapping of provider -> action functions.
+    """Get mapping of provider -> action functions."""
+    from .wrappers import gmail, slack
+    import inspect
     
-    Returns:
-        Dict mapping provider name to tuple of action functions
-    """
-    return {
-        provider: tuple(funcs)
-        for provider, funcs in PROVIDER_ACTIONS.items()
-    }
+    result = {}
+    
+    # Collect gmail actions
+    gmail_funcs = []
+    for name, obj in inspect.getmembers(gmail):
+        if callable(obj) and not name.startswith('_') and hasattr(obj, '__module__'):
+            if 'gmail' in obj.__module__:
+                gmail_funcs.append(obj)
+    if gmail_funcs:
+        result['gmail'] = tuple(gmail_funcs)
+    
+    # Collect slack actions
+    slack_funcs = []
+    for name, obj in inspect.getmembers(slack):
+        if callable(obj) and not name.startswith('_') and hasattr(obj, '__module__'):
+            if 'slack' in obj.__module__:
+                slack_funcs.append(obj)
+    if slack_funcs:
+        result['slack'] = tuple(slack_funcs)
+    
+    return result
+
+
+def iter_available_action_functions():
+    """Iterate over all available action functions."""
+    action_map = get_provider_action_map()
+    for provider, funcs in action_map.items():
+        for func in funcs:
+            yield func
+
+
+# Legacy compatibility functions
+def configure_mcp_action_filters(*args, **kwargs):
+    """Legacy compatibility - no-op."""
+    pass
+
+
+def describe_available_actions(*args, **kwargs):
+    """Legacy compatibility."""
+    action_map = get_provider_action_map()
+    result = []
+    for provider, funcs in action_map.items():
+        for func in funcs:
+            result.append({
+                'provider': provider,
+                'name': func.__name__,
+                'description': (func.__doc__ or '').strip().split('\n')[0],
+            })
+    return result
 
 
 __all__ = [
-    "SUPPORTED_PROVIDERS",
-    "PROVIDER_ACTIONS",
+    "dispatch_tool",
     "get_provider_action_map",
-    "gmail_search",
-    "gmail_send_email",
-    "slack_post_message",
-    "slack_search_messages",
+    "iter_available_action_functions",
+    "configure_mcp_action_filters",
+    "describe_available_actions",
 ]
-

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from mcp_agent.toolbox.schema_inference import infer_schema_from_value
+from mcp_agent.knowledge.schema_inference import infer_schema_from_value
 
 
 def main() -> None:

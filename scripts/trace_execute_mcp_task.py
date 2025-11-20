@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from mcp_agent.mcp_agent import MCPAgent
-from mcp_agent.oauth import OAuthManager
-from mcp_agent.planner.runtime import execute_mcp_task
-from mcp_agent.registry import init_registry, refresh_registry_from_oauth
+from mcp_agent.registry.oauth import OAuthManager
+from mcp_agent.agent.planner import execute_mcp_task
+from mcp_agent.core.context import AgentContext
 from mcp_agent.dev import resolve_dev_user
 
 
@@ -30,15 +30,14 @@ def _deep_copy(value: Any) -> Any:
 
 
 def ensure_provider_ready(provider: str, user_id: str) -> None:
-    print(f"[setup] Syncing OAuth state for provider={provider!r}, user_id={user_id!r}...")
-    OAuthManager.sync(provider, user_id, force=True)
-    if not OAuthManager.is_authorized(provider, user_id):
+    print(f"[setup] Checking OAuth state for provider={provider!r}, user_id={user_id!r}...")
+    context = AgentContext.create(user_id)
+    if not OAuthManager.is_authorized(context, provider):
         raise RuntimeError(
             f"Provider '{provider}' is not authorized for user '{user_id}'. "
             "Complete the OAuth flow before running this script."
         )
-    refresh_registry_from_oauth(user_id)
-    init_registry(user_id)
+    # Registry is DB-backed, no manual refresh needed
 
 
 @contextmanager

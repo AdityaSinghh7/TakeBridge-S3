@@ -3,20 +3,16 @@ from typing import Any, Optional
 from fastapi.responses import JSONResponse, RedirectResponse
 from urllib.parse import quote_plus
 
-from mcp_agent.oauth import (
+from mcp_agent.registry.oauth import (
     OAuthManager,
     COMPOSIO_HOST as _COMPOSIO_API_BASE,
     COMPOSIO_KEY as _COMPOSIO_KEY,
     COMPOSIO_API_V3 as _COMPOSIO_API_V3,
 )
 from mcp_agent.user_identity import normalize_user_id
-from mcp_agent.toolbox import (
-    get_manifest as get_toolbox_manifest,
-    list_providers as toolbox_list_providers,
-    safe_filename,
-    search_tools as toolbox_search_tools,
-)
-from mcp_agent.registry import refresh_registry_from_oauth
+from mcp_agent.knowledge.builder import get_manifest as get_toolbox_manifest
+from mcp_agent.knowledge.search import search_tools as toolbox_search_tools, list_providers as toolbox_list_providers
+from mcp_agent.knowledge.utils import safe_filename
 from shared.settings import build_redirect, OAUTH_REDIRECT_BASE
 import os
 from shared.db.engine import session_scope
@@ -88,7 +84,7 @@ def callback(provider: str, request: Request, code: Optional[str] = None, state:
         # Pull latest connected account + MCP server details explicitly
         OAuthManager.sync(provider, user_id, force=True)
         # Make newly available clients & actions discoverable to Worker
-        refresh_registry_from_oauth(user_id)
+        # Registry is DB-backed, no manual refresh needed
         sync_registered_actions(user_id)
         # Redirect to preferred UI destination if provided
         redirect_url = OAuthManager.consume_redirect_hint(provider, user_id, success=True)
@@ -243,7 +239,7 @@ def finalize(provider: str, payload: dict, request: Request):
         summary = OAuthManager.finalize_connected_account(provider, user_id, ca_id)
         # Explicitly sync to fetch MCP connection details now that we know CA id
         OAuthManager.sync(provider, user_id, force=True)
-        refresh_registry_from_oauth(user_id)
+        # Registry is DB-backed, no manual refresh needed
         sync_registered_actions(user_id)
         return summary
     except Exception as e:
@@ -269,8 +265,8 @@ def disconnect(provider: str, request: Request, connected_account_id: str | None
         else:
             summary = crud.disconnect_provider(db, user_id, provider)
 
-    # Clear in-memory registry + re-register actions (removes tools from ACI)
-    refresh_registry_from_oauth(user_id)
+    # Re-register actions (removes tools from ACI)
+    # Registry is DB-backed, no manual refresh needed
     sync_registered_actions(user_id)
 
     return {"status": "disconnected", "provider": provider, **summary}

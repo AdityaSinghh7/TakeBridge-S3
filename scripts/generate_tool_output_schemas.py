@@ -8,10 +8,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import yaml  # type: ignore[import]
 
 from mcp_agent.dev import resolve_dev_user
-from mcp_agent.registry import get_configured_providers, init_registry
-from mcp_agent.toolbox.registry import get_tool_spec
-from mcp_agent.toolbox.output_schema_sampler import sample_output_schema_for_wrapper
-from mcp_agent.toolbox.load_io_specs import ensure_io_specs_loaded
+from mcp_agent.core.context import AgentContext
+from mcp_agent.registry.manager import RegistryManager
+from mcp_agent.knowledge.registry import get_tool_spec
+from mcp_agent.knowledge.output_schema_sampler import sample_output_schema_for_wrapper
+from mcp_agent.knowledge.load_io_specs import ensure_io_specs_loaded
 
 
 def _parse_examples_block(entry: Dict[str, Any], key: str) -> List[Dict[str, Any]]:

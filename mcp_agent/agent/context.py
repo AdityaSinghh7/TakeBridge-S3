@@ -13,12 +13,12 @@ import uuid
 from shared.streaming import emit_event
 from shared.token_cost_tracker import TokenCostTracker
 
-from mcp_agent.toolbox.builder import get_index
+from mcp_agent.knowledge.builder import get_index
 
 from .summarize import redact_payload, summarize_payload
 
 from .budget import Budget, BudgetSnapshot, BudgetTracker
-from .prompt import PLANNER_PROMPT
+from .prompts import PLANNER_PROMPT
 
 StepType = Literal["tool", "sandbox", "search", "finish"]
 
@@ -713,3 +713,4 @@ class PlannerContext:
                 }
             )
         self.tool_menu = menu
+

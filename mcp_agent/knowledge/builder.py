@@ -19,12 +19,13 @@ if TYPE_CHECKING:
     from mcp_agent.core.context import AgentContext
 
 from mcp_agent.actions import get_provider_action_map
-from mcp_agent.compat import OAuthManager, registry_version, is_registered
+from mcp_agent.registry.oauth import OAuthManager
+from mcp_agent.core.context import AgentContext
 from mcp_agent.user_identity import normalize_user_id
-from mcp_agent.toolbox.models import ParameterSpec, ProviderSpec, ToolSpec, ToolboxManifest
-from mcp_agent.toolbox.index import ToolboxIndex
-from mcp_agent.toolbox.python_generator import PythonGenerator
-from mcp_agent.toolbox.utils import (
+from mcp_agent.knowledge.models import ParameterSpec, ProviderSpec, ToolSpec, ToolboxManifest
+from mcp_agent.knowledge.index import ToolboxIndex
+from mcp_agent.knowledge.python_generator import PythonGenerator
+from mcp_agent.knowledge.utils import (
     action_signature,
     default_toolbox_root,
     extract_call_tool_metadata,
@@ -112,15 +113,13 @@ class ToolboxBuilder:
         self.generated_at = utcnow_iso()
 
     def build(self) -> ToolboxManifest:
-        # Use compat layer for now - will migrate fully later
-        from mcp_agent.compat import init_registry
-        init_registry(self.user_id)
+        # No initialization needed - registry is DB-backed
         
         providers: List[ProviderSpec] = []
         for provider, funcs in sorted(get_provider_action_map().items()):
             providers.append(self._build_provider(provider, funcs))
         
-        current_version = registry_version(self.user_id)
+        current_version = 0  # Registry versioning removed
         payload = {
             "user_id": self.user_id,
             "generated_at": self.generated_at,
@@ -208,11 +207,16 @@ class ToolboxBuilder:
     def _build_provider(
         self, provider: str, funcs: Tuple[Callable[..., object], ...]
     ) -> ProviderSpec:
-        # Use compat layer for OAuth checks
-        authorized = OAuthManager.is_authorized(provider, self.user_id)
-        registered = is_registered(provider, self.user_id)
+        # Use new context-based approach
+        context = AgentContext.create(self.user_id)
+        authorized = OAuthManager.is_authorized(context, provider)
+        
+        from mcp_agent.registry.manager import RegistryManager
+        registry = RegistryManager(context)
+        registered = registry.is_provider_available(provider)
+        
         try:
-            mcp_url = OAuthManager.get_mcp_url(self.user_id, provider)
+            mcp_url = OAuthManager.get_mcp_url(context, provider)
         except Exception:
             mcp_url = None
         configured = bool(mcp_url) or registered
@@ -342,13 +346,12 @@ def get_manifest(
     user = normalize_user_id(user_id)
     root = (base_dir or default_toolbox_root()).resolve()
     key = _cache_key(user, root)
-    current_version = registry_version(user)
+    # Registry versioning removed - always version 0
     with _MANIFEST_CACHE_LOCK:
         entry = _MANIFEST_CACHE.get(key)
         needs_refresh = (
             refresh
             or entry is None
-            or entry.registry_version != current_version
             or entry.manifest.fingerprint is None
         )
 

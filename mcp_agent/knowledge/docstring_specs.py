@@ -112,3 +112,4 @@ def build_iotoolspec_from_func(
         output_spec=ToolOutputSpec(),
         func=_wrapped,
     )
+

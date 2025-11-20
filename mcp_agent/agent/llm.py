@@ -13,7 +13,7 @@ from typing import Any, Dict, List, TYPE_CHECKING
 from shared.oai_client import OAIClient, extract_assistant_text
 
 if TYPE_CHECKING:
-    from mcp_agent.planner.context import PlannerContext
+    from .context import PlannerContext
     from .budget import BudgetSnapshot
 
 

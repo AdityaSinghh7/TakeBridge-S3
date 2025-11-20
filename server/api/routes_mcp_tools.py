@@ -7,8 +7,9 @@ without needing to drive the Worker/LLM. Do NOT expose in production.
 
 from fastapi import APIRouter, Request, HTTPException
 
-from mcp_agent.oauth import OAuthManager
-from mcp_agent.registry import refresh_registry_from_oauth, MCP
+from mcp_agent.registry.oauth import OAuthManager
+from mcp_agent.registry.manager import RegistryManager
+from mcp_agent.core.context import AgentContext
 from mcp_agent.user_identity import normalize_user_id
 from computer_use_agent.tools.mcp_action_registry import sync_registered_actions
 
@@ -39,19 +40,23 @@ def gmail_send_email_route(payload: dict, request: Request):
     - thread_id (str, optional)
     """
     user_id = _require_user_id(request)
-    if not OAuthManager.is_authorized("gmail", user_id):
+    context = AgentContext.create(user_id)
+    
+    if not OAuthManager.is_authorized(context, "gmail"):
         raise HTTPException(400, "unauthorized: gmail not connected for this user")
 
-    # Ensure MCP URL/headers are present before rebuilding the registry
+    # Ensure MCP URL/headers are present
     try:
         OAuthManager.sync("gmail", user_id, force=True)
     except Exception:
-        # best-effort; continue to refresh registry even if sync hiccups
+        # best-effort; continue even if sync hiccups
         pass
 
-    refresh_registry_from_oauth(user_id)
+    # Registry is DB-backed, no manual refresh needed
     sync_registered_actions(user_id)
-    client = MCP.get("gmail")
+    
+    registry = RegistryManager(context)
+    client = registry.get_mcp_client("gmail")
     if not client:
         raise HTTPException(400, "unconfigured: gmail MCP client missing")
 

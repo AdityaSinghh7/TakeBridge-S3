@@ -5,8 +5,8 @@ from pathlib import Path
 
 import yaml  # type: ignore[import]
 
-from mcp_agent.toolbox.registry import get_tool_spec
-from mcp_agent.toolbox.types import ActionResponse
+from mcp_agent.knowledge.registry import get_tool_spec
+from mcp_agent.types import ActionResponse
 
 
 def main() -> None:

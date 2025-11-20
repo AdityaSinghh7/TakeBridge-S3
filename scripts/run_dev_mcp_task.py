@@ -8,7 +8,7 @@ import sys
 from typing import Any, Dict
 
 from mcp_agent.dev import resolve_dev_user, run_dev_task
-from mcp_agent.planner.llm import PlannerLLM
+from mcp_agent.agent.llm import PlannerLLM
 from mcp_agent.env_sync import ensure_env_for_provider
 
 DEFAULT_RECIPIENT = "adityadevsinghs@gmail.com"

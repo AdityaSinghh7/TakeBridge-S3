@@ -14,7 +14,7 @@ from mcp_agent.actions import (
     configure_mcp_action_filters,
     describe_available_actions,
 )
-from mcp_agent.mcp_agent import MCPAgent
+from mcp_agent.mcp_agent import MCPAgent  # TODO: Migrate to execute_task from agent.entrypoint
 from mcp_agent.user_identity import normalize_user_id, resolve_dev_user_id
 from shared.streaming import emit_event
 

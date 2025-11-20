@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from typing import List, Dict
 
-from mcp_agent.toolbox.search import search_tools, list_providers
-from mcp_agent.registry import registry_version
+from mcp_agent.knowledge.search import search_tools, list_providers
 
 from .context import PlannerContext
 
@@ -32,11 +31,8 @@ def perform_initial_discovery(
     This function is kept for backwards compatibility but should not be used
     in the ReAct planner flow.
     """
-    current_version = registry_version(context.user_id)
-    needs_refresh = (
-        not context.discovery_completed
-        or context.registry_version != current_version
-    )
+    # Note: registry_version check removed - not essential for clean architecture
+    needs_refresh = not context.discovery_completed
     if not needs_refresh:
         return context.search_results
 
@@ -46,7 +42,6 @@ def perform_initial_discovery(
         detail_level=detail_level,
         limit=limit,
     )
-    context.registry_version = current_version
     context.replace_search_results(results)
     return context.search_results
 
@@ -103,3 +98,4 @@ def _run_search(
             },
         )
         return []
+

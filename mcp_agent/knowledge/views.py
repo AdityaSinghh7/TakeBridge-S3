@@ -85,7 +85,7 @@ def get_deep_view(context: AgentContext, tool_ids: List[str]) -> List[Dict[str, 
         - verbose output_schema (replaced with flat output_fields)
         - availability_reason, score, etc.
     """
-    from mcp_agent.toolbox.search import search_tools
+    from mcp_agent.knowledge.search import search_tools
     from mcp_agent.user_identity import normalize_user_id
     
     user_id = normalize_user_id(context.user_id)

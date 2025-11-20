@@ -2,8 +2,15 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from mcp_agent.mcp_agent import MCPAgent
-from mcp_agent.toolbox.envelope import normalize_action_response
+# Optional legacy compatibility - TODO: Remove when fully migrated
+try:
+    from mcp_agent.mcp_agent import MCPAgent
+    _HAS_LEGACY_MCPAGENT = True
+except ImportError:
+    _HAS_LEGACY_MCPAGENT = False
+    MCPAgent = None
+
+from mcp_agent.execution.envelope import normalize_action_response
 
 from .context import PlannerContext
 
@@ -78,12 +85,18 @@ def call_direct_tool(
     """
     Call a single MCP tool synchronously and record its output in
     PlannerContext.raw_outputs under a tool.* key.
+    
+    TODO: Migrate to use actions.dispatcher.dispatch_tool with AgentContext
     """
     context.budget_tracker.tool_calls += 1
     context.record_event(
         "mcp.action.called",
         {"provider": provider, "tool": tool},
     )
+    
+    if not _HAS_LEGACY_MCPAGENT or MCPAgent is None:
+        raise RuntimeError("MCPAgent not available - need to migrate to new dispatcher")
+    
     agent = MCPAgent.current(context.user_id)
     raw_response = agent.call_tool(provider, tool, payload)
     response = normalize_action_response(raw_response)
@@ -105,3 +118,4 @@ def call_direct_tool(
     if summary:
         entry["summary"] = summary
     return response
+

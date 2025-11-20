@@ -141,3 +141,4 @@ def _safe_filename(label: str) -> str:
     sanitized = re.sub(r"[^a-zA-Z0-9._-]", "_", label.strip())
     sanitized = sanitized.strip("_") or "payload"
     return sanitized[:80]
+

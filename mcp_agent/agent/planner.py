@@ -7,18 +7,25 @@ import traceback
 import ast
 import json
 
-from mcp_agent.mcp_agent import MCPAgent
 from mcp_agent.user_identity import normalize_user_id
+
+# Optional legacy compatibility
+try:
+    from mcp_agent.mcp_agent import MCPAgent
+    _HAS_LEGACY_MCPAGENT = True
+except ImportError:
+    _HAS_LEGACY_MCPAGENT = False
+    MCPAgent = None
 from mcp_agent.env_sync import ensure_env_for_provider
-from mcp_agent.toolbox.builder import get_index
+from mcp_agent.knowledge.builder import get_index
 
 from .budget import Budget, BudgetSnapshot
 from .context import PlannerContext, _slim_tool_for_planner
 from .discovery import load_provider_topology, perform_refined_discovery
 from .llm import PlannerLLM
 from .parser import parse_planner_command
-from .actions import call_direct_tool
-from .sandbox import run_sandbox_plan
+from .actions_legacy import call_direct_tool
+from .sandbox_runner import run_sandbox_plan
 from .summarize import summarize_payload
 
 # Import for Phase 2: routing through Python wrappers
@@ -493,10 +500,16 @@ class PlannerRuntime:
             {"provider": provider, "tool": resolved_tool},
         )
         result_key = f"tool.{provider}.{resolved_tool}"
-        agent = MCPAgent.current(self.context.user_id)
-        set_step = getattr(agent, "set_step", None)
-        if callable(set_step):
-            set_step(len(self.context.steps))
+        
+        # Optional: Notify legacy MCPAgent of step change (if present)
+        if _HAS_LEGACY_MCPAGENT and MCPAgent is not None:
+            try:
+                agent = MCPAgent.current(self.context.user_id)
+                set_step = getattr(agent, "set_step", None)
+                if callable(set_step):
+                    set_step(len(self.context.steps))
+            except Exception:
+                pass  # Legacy agent not available, continue without it
         
         # Phase 2: Route through Python wrapper if available (handles parameter mapping)
         try:
@@ -659,10 +672,17 @@ class PlannerRuntime:
                     )
 
         label = (command.get("label") or "sandbox").strip() or "sandbox"
-        agent = MCPAgent.current(self.context.user_id)
-        set_step = getattr(agent, "set_step", None)
-        if callable(set_step):
-            set_step(len(self.context.steps))
+        
+        # Optional: Notify legacy MCPAgent of step change (if present)
+        if _HAS_LEGACY_MCPAGENT and MCPAgent is not None:
+            try:
+                agent = MCPAgent.current(self.context.user_id)
+                set_step = getattr(agent, "set_step", None)
+                if callable(set_step):
+                    set_step(len(self.context.steps))
+            except Exception:
+                pass  # Legacy agent not available, continue without it
+        
         execution = run_sandbox_plan(self.context, code_body, label=label)
         sandbox_result = execution.result
         result_key = f"sandbox.{label}"
@@ -774,6 +794,7 @@ def execute_mcp_task(
         raise ValueError("task must be a non-empty string.")
     normalized_user = normalize_user_id(user_id)
     resolved_toolbox = Path(toolbox_root).resolve() if toolbox_root else Path("toolbox").resolve()
+    
     context = PlannerContext(
         task=task.strip(),
         user_id=normalized_user,
@@ -807,3 +828,4 @@ def execute_mcp_task(
     if "logs" not in result:
         result["logs"] = context.logs
     return result
+

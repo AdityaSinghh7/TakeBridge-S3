@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from mcp_agent.planner.runtime import MCPTaskResult, execute_mcp_task
+from mcp_agent.agent.planner import MCPTaskResult, execute_mcp_task
 
 from .user_identity import (
     DEV_DEFAULT_USER_ID,

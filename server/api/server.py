@@ -55,33 +55,18 @@ logger.info("Starting Orchestrator API")
 
 @contextlib.asynccontextmanager
 async def app_lifespan(app: FastAPI):  # pragma: no cover - startup/shutdown utility
-    # Startup: warm MCP so OAuth state is rehydrated after restarts
+    # Startup: warm MCP (registry is now DB-backed, minimal warmup needed)
     try:
-        from mcp_agent.oauth import OAuthManager  # type: ignore
-        from mcp_agent.registry import refresh_registry_from_oauth  # type: ignore
         from mcp_agent.user_identity import normalize_user_id  # type: ignore
         user_env = os.getenv("TB_USER_ID")
         if not user_env:
             logger.info("Skipping MCP warmup: TB_USER_ID not set.")
-            user_id = None
         else:
             try:
                 user_id = normalize_user_id(user_env)
+                logger.info(f"MCP warmup for user: {user_id}")
             except ValueError:
                 logger.warning("Skipping MCP warmup: invalid TB_USER_ID.")
-                user_id = None
-        for prov in ("gmail", "slack"):
-            if not user_id:
-                break
-            try:
-                OAuthManager.sync(prov, user_id, force=False)
-            except Exception:
-                pass
-        if user_id:
-            try:
-                refresh_registry_from_oauth(user_id)
-            except Exception:
-                pass
     except Exception:
         # Never block startup due to warmup issues
         pass

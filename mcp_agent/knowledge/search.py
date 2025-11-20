@@ -9,11 +9,11 @@ import re
 from typing import Any, Dict, List, Literal
 
 from mcp_agent.user_identity import normalize_user_id
-from mcp_agent.toolbox.builder import get_index, get_manifest
-from mcp_agent.toolbox.index import ToolboxIndex
-from mcp_agent.toolbox.models import LLMToolDescriptor, ProviderSpec, ToolSpec
-from mcp_agent.toolbox.registry import get_tool_spec
-from mcp_agent.toolbox.load_io_specs import ensure_io_specs_loaded
+from mcp_agent.knowledge.builder import get_index, get_manifest
+from mcp_agent.knowledge.index import ToolboxIndex
+from mcp_agent.knowledge.models import LLMToolDescriptor, ProviderSpec, ToolSpec
+from mcp_agent.knowledge.registry import get_tool_spec
+from mcp_agent.knowledge.load_io_specs import ensure_io_specs_loaded
 
 DetailLevel = Literal["names", "summary", "full"]
 

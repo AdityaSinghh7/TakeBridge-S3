@@ -57,11 +57,8 @@ def execute_task(
     # Create AgentContext
     context = AgentContext.create(user_id=user_id)
     
-    # Delegate to existing planner/runtime.py
-    # Note: Supporting modules (budget, parser, llm, prompts) have been migrated to agent/
-    # The planner/runtime.py and planner/context.py remain in place for now as they work well
-    # and can be migrated incrementally when needed.
-    from mcp_agent.planner.runtime import execute_mcp_task
+    # Use the migrated planner in agent/
+    from mcp_agent.agent.planner import execute_mcp_task
     
     return execute_mcp_task(
         task=task,

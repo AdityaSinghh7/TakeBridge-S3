@@ -5,7 +5,7 @@ from typing import Callable, Dict, Tuple
 from mcp_agent.actions import get_provider_action_map
 
 from .docstring_specs import build_iotoolspec_from_func
-from .output_schema_loader import load_output_schemas
+from .schema_store import load_output_schemas
 from .registry import register_tool
 
 

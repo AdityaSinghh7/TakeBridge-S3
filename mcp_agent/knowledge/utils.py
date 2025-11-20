@@ -257,3 +257,4 @@ def to_snake_case(value: str) -> str:
     if not parts:
         return value
     return "_".join(part.lower() for part in parts)
+

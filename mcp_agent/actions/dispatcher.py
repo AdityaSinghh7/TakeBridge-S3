@@ -10,8 +10,6 @@ from typing import TYPE_CHECKING, Any, Dict
 from mcp_agent.core.exceptions import ToolNotFoundError
 from mcp_agent.types import ToolInvocationResult
 
-from . import get_provider_action_map
-
 if TYPE_CHECKING:
     from mcp_agent.core.context import AgentContext
 

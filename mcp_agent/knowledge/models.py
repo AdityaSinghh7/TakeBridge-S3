@@ -338,3 +338,4 @@ class ToolboxManifest:
         for provider in self.providers:
             tools.extend(provider.actions)
         return tools
+
