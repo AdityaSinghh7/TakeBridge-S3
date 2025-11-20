@@ -15,7 +15,7 @@ from mcp_agent.actions import (
     describe_available_actions,
 )
 from mcp_agent.mcp_agent import MCPAgent
-from mcp_agent.user_identity import normalize_user_id, require_env_user_id
+from mcp_agent.user_identity import normalize_user_id, resolve_dev_user_id
 from shared.streaming import emit_event
 
 
@@ -23,7 +23,7 @@ class MCPAgentBridge(MCPToolBridge):
     """Concrete MCP bridge backed by the legacy MCPAgent."""
 
     def __init__(self, user_id: str | None = None) -> None:
-        resolved = normalize_user_id(user_id) if user_id is not None else require_env_user_id()
+        resolved = normalize_user_id(user_id) if user_id is not None else resolve_dev_user_id()
         self._agent = MCPAgent(resolved)
         MCPAgent.set_current(self._agent)
 
@@ -66,7 +66,7 @@ class MCPAgentBridge(MCPToolBridge):
 @contextmanager
 def configure_mcp_tools(constraints: Optional[ToolConstraints], *, user_id: str | None = None) -> Iterator[None]:
     """Apply tool constraints and synchronize MCP action shims for the run."""
-    active_user = normalize_user_id(user_id) if user_id is not None else require_env_user_id()
+    active_user = normalize_user_id(user_id) if user_id is not None else resolve_dev_user_id()
     providers = None
     tools = None
     mode = "auto"

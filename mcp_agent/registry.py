@@ -7,7 +7,7 @@ from typing import Dict, Tuple
 
 from dotenv import load_dotenv
 
-from mcp_agent.user_identity import ensure_user_id, normalize_user_id
+from mcp_agent.user_identity import normalize_user_id
 
 from .mcp_client import MCPClient
 from .oauth import OAuthManager, COMPOSIO_KEY
@@ -48,7 +48,7 @@ def _registry_snapshot_locked(uid: str) -> Tuple[Tuple[str, str | None, Tuple[Tu
 
 
 def _registry_snapshot(user_id: str | None = None) -> Tuple[Tuple[str, str | None, Tuple[Tuple[str, str], ...]], ...]:
-    uid = normalize_user_id(ensure_user_id(user_id))
+    uid = normalize_user_id(user_id)
     with _REGISTRY_LOCK:
         return _registry_snapshot_locked(uid)
 

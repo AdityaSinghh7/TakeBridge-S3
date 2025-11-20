@@ -506,11 +506,16 @@ class PlannerRuntime:
             
             if wrapper:
                 # Call wrapper function (handles parameter mapping like to -> recipient_email)
-                # Create a simple dummy object for 'self' parameter
-                class DummySelf:
-                    _validation_only = False
+                # New wrappers expect AgentContext as first parameter, not self
+                from mcp_agent.core.context import AgentContext
                 
-                response = wrapper(DummySelf(), **payload)
+                # Create AgentContext from PlannerContext
+                agent_context = AgentContext.create(user_id=self.context.user_id)
+                
+                # Remove 'context' from payload if present (it's now passed as first arg)
+                wrapper_payload = {k: v for k, v in payload.items() if k != "context"}
+                
+                response = wrapper(agent_context, **wrapper_payload)
             else:
                 # Fall back to direct MCP call if no wrapper exists
                 response = call_direct_tool(self.context, provider=provider, tool=resolved_tool, payload=payload)

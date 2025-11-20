@@ -1,3 +1,8 @@
+"""Budget tracking for MCP agent task execution.
+
+Migrated from planner/budget.py - unchanged, already clean.
+"""
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
@@ -66,3 +71,4 @@ class BudgetTracker:
 
     def update_llm_cost(self, total_cost: float) -> None:
         self.estimated_llm_cost_usd = total_cost
+

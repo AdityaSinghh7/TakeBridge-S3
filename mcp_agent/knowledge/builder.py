@@ -1,3 +1,8 @@
+"""Knowledge builder: Generate tool metadata from action wrappers.
+
+Migrated from toolbox/builder.py with context-awareness.
+"""
+
 from __future__ import annotations
 
 import ast
@@ -5,20 +10,21 @@ import inspect
 import textwrap
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, Dict, List, Tuple, TYPE_CHECKING
 import threading
 
 from shared.streaming import emit_event
 
-from mcp_agent.actions import get_provider_action_map
-from mcp_agent.oauth import OAuthManager
-from mcp_agent.registry import init_registry, is_registered, registry_version
-from mcp_agent.user_identity import normalize_user_id
+if TYPE_CHECKING:
+    from mcp_agent.core.context import AgentContext
 
-from .models import ParameterSpec, ProviderSpec, ToolSpec, ToolboxManifest
-from .index import ToolboxIndex
-from .python_generator import PythonGenerator
-from .utils import (
+from mcp_agent.actions import get_provider_action_map
+from mcp_agent.compat import OAuthManager, registry_version, is_registered
+from mcp_agent.user_identity import normalize_user_id
+from mcp_agent.toolbox.models import ParameterSpec, ProviderSpec, ToolSpec, ToolboxManifest
+from mcp_agent.toolbox.index import ToolboxIndex
+from mcp_agent.toolbox.python_generator import PythonGenerator
+from mcp_agent.toolbox.utils import (
     action_signature,
     default_toolbox_root,
     extract_call_tool_metadata,
@@ -106,14 +112,14 @@ class ToolboxBuilder:
         self.generated_at = utcnow_iso()
 
     def build(self) -> ToolboxManifest:
+        # Use compat layer for now - will migrate fully later
+        from mcp_agent.compat import init_registry
         init_registry(self.user_id)
+        
         providers: List[ProviderSpec] = []
-        # Canonical path:
-        #   mcp_agent.actions -> get_provider_action_map()
-        #   -> ToolboxBuilder.ToolSpec/ToolboxManifest/ToolboxIndex
-        #   -> search_tools(...) -> LLMToolDescriptor -> planner.
         for provider, funcs in sorted(get_provider_action_map().items()):
             providers.append(self._build_provider(provider, funcs))
+        
         current_version = registry_version(self.user_id)
         payload = {
             "user_id": self.user_id,
@@ -202,6 +208,7 @@ class ToolboxBuilder:
     def _build_provider(
         self, provider: str, funcs: Tuple[Callable[..., object], ...]
     ) -> ProviderSpec:
+        # Use compat layer for OAuth checks
         authorized = OAuthManager.is_authorized(provider, self.user_id)
         registered = is_registered(provider, self.user_id)
         try:
@@ -234,6 +241,7 @@ class ToolboxBuilder:
         signature = inspect.signature(func)
         parameters = []
         for param in signature.parameters.values():
+            # CRITICAL: Filter out "self" and "context" to prevent TypeError
             if param.name in ("self", "context"):
                 continue
             annotation = format_annotation(param.annotation)
@@ -285,7 +293,6 @@ class ToolboxBuilder:
         raw_schema = getattr(func, "__tb_output_schema__", None)
         raw_schema_pretty = getattr(func, "__tb_output_schema_pretty__", None)
         if raw_schema_pretty is not None:
-            # Store as a list of lines for easier prompt rendering.
             pretty_lines = [line.rstrip() for line in str(raw_schema_pretty).strip().splitlines()]
         else:
             pretty_lines = [
@@ -406,3 +413,4 @@ def get_index(
     """
     manifest = get_manifest(user_id=user_id, base_dir=base_dir, persist=False)
     return ToolboxIndex.from_manifest(manifest)
+

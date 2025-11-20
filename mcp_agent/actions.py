@@ -9,7 +9,7 @@ from .registry import is_registered
 from .oauth import OAuthManager
 from .mcp_agent import MCPAgent
 from .types import ToolInvocationResult
-from .user_identity import normalize_user_id, require_env_user_id
+from .user_identity import normalize_user_id, resolve_dev_user_id
 from shared.streaming import emit_event
 
 SUPPORTED_PROVIDERS: tuple[str, ...] = ("slack", "gmail")
@@ -26,7 +26,7 @@ def _payload_key_list(payload: dict[str, Any] | None) -> list[str]:
 def _resolve_user_id(user_id: str | None = None) -> str:
     if user_id is not None:
         return normalize_user_id(user_id)
-    return require_env_user_id()
+    return resolve_dev_user_id()
 
 
 def _current_user_id() -> str:

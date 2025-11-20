@@ -5,7 +5,7 @@ import os
 from importlib import import_module
 from typing import Any, Dict, TYPE_CHECKING
 
-from mcp_agent.user_identity import require_env_user_id
+from mcp_agent.user_identity import normalize_user_id, DEV_USER_ENV_VAR, DEV_DEFAULT_USER_ID
 from mcp_agent.env_sync import ensure_env_for_provider
 
 if TYPE_CHECKING:  # pragma: no cover - type checking only
@@ -13,7 +13,9 @@ if TYPE_CHECKING:  # pragma: no cover - type checking only
 
 
 def _resolve_user_id() -> str:
-    return require_env_user_id()
+    """Resolve user_id from environment variable or default."""
+    env_user = os.getenv(DEV_USER_ENV_VAR)
+    return normalize_user_id(env_user) if env_user else DEV_DEFAULT_USER_ID
 
 
 def register_default_tool_caller() -> None:
