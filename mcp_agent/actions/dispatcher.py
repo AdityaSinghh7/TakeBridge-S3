@@ -14,6 +14,34 @@ if TYPE_CHECKING:
     from mcp_agent.core.context import AgentContext
 
 
+def get_provider_action_map():
+    """Get mapping of provider -> action functions."""
+    from .wrappers import gmail, slack
+    import inspect
+
+    result = {}
+
+    # Collect gmail actions
+    gmail_funcs = []
+    for name, obj in inspect.getmembers(gmail):
+        if callable(obj) and not name.startswith('_') and hasattr(obj, '__module__'):
+            if 'gmail' in obj.__module__:
+                gmail_funcs.append(obj)
+    if gmail_funcs:
+        result['gmail'] = tuple(gmail_funcs)
+
+    # Collect slack actions
+    slack_funcs = []
+    for name, obj in inspect.getmembers(slack):
+        if callable(obj) and not name.startswith('_') and hasattr(obj, '__module__'):
+            if 'slack' in obj.__module__:
+                slack_funcs.append(obj)
+    if slack_funcs:
+        result['slack'] = tuple(slack_funcs)
+
+    return result
+
+
 def dispatch_tool(
     context: AgentContext,
     provider: str,

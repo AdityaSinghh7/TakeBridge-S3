@@ -115,7 +115,9 @@ def register_default_tool_caller() -> None:
         register_tool_caller(_caller)
         return
 
-    from mcp_agent.mcp_agent import MCPAgent
+    # Production path: Use new AgentContext + dispatch_tool architecture
+    from mcp_agent.core.context import AgentContext
+    from mcp_agent.actions.dispatcher import dispatch_tool
 
     try:
         eager_user = _resolve_user_id()
@@ -127,40 +129,53 @@ def register_default_tool_caller() -> None:
 
     async def _caller(provider: str, tool: str, payload: Dict[str, Any]) -> "ToolCallResult":
         """
-        Bridge sandbox helpers to MCPAgent while normalizing the result shape.
+        Bridge sandbox helpers to new dispatch_tool architecture.
 
         Sandbox helpers expect a single envelope:
           {"successful": bool, "data": <tool-payload>, "error": Any, "logs": Any}
         """
         try:
+            # Reconstruct AgentContext from environment
             user_id = _resolve_user_id()
+            request_id = os.getenv("TB_REQUEST_ID", "sandbox-default")
+
+            # Ensure provider environment is set up
             for prov in (provider,):
                 ensure_env_for_provider(user_id, prov)
-            agent = MCPAgent.current(user_id)
-            if hasattr(agent, "acall_tool"):
-                response = await agent.acall_tool(provider, tool, payload)  # type: ignore[attr-defined]
-            else:  # pragma: no cover - legacy/test stubs
-                import asyncio
 
-                loop = asyncio.get_running_loop()
+            # Create AgentContext (lazy DB session will be created if needed)
+            context = AgentContext(
+                user_id=user_id,
+                request_id=request_id,
+                db_session=None,  # Lazy init
+                extra={}
+            )
 
-                def _call_sync() -> Dict[str, Any]:
-                    return agent.call_tool(provider, tool, payload)
+            # Call dispatcher synchronously in executor (dispatcher is sync)
+            loop = asyncio.get_running_loop()
 
-                response = await loop.run_in_executor(None, _call_sync)
+            def _call_sync() -> Dict[str, Any]:
+                return dispatch_tool(
+                    context=context,
+                    provider=provider,
+                    tool=tool,
+                    payload=payload
+                )
+
+            response = await loop.run_in_executor(None, _call_sync)
 
             # Normalize into a canonical envelope, then adapt to sandbox expectations.
-            from mcp_agent.execution.envelope import normalize_action_response, unwrap_nested_data
+            from mcp_agent.execution.envelope import unwrap_nested_data
 
-            envelope = normalize_action_response(response)
-            data = unwrap_nested_data(envelope["data"])
-            result_success = bool(envelope["successful"])
+            # dispatch_tool already returns normalized ToolInvocationResult
+            data = unwrap_nested_data(response["data"])
+            result_success = bool(response["successful"])
             return {
                 "success": result_success,
                 "successful": result_success,
                 "data": data,
-                "error": envelope.get("error"),
-                "logs": (response or {}).get("logs") if isinstance(response, dict) else None,
+                "error": response.get("error"),
+                "logs": None,  # dispatch_tool doesn't return logs field
             }
         except Exception as exc:  # pragma: no cover - exception propagation
             return {

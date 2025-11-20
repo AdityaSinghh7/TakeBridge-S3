@@ -8,14 +8,6 @@ import ast
 import json
 
 from mcp_agent.user_identity import normalize_user_id
-
-# Optional legacy compatibility
-try:
-    from mcp_agent.mcp_agent import MCPAgent
-    _HAS_LEGACY_MCPAGENT = True
-except ImportError:
-    _HAS_LEGACY_MCPAGENT = False
-    MCPAgent = None
 from mcp_agent.env_sync import ensure_env_for_provider
 from mcp_agent.knowledge.builder import get_index
 
@@ -24,12 +16,13 @@ from .context import PlannerContext, _slim_tool_for_planner
 from .discovery import load_provider_topology, perform_refined_discovery
 from .llm import PlannerLLM
 from .parser import parse_planner_command
-from .actions_legacy import call_direct_tool
 from .sandbox_runner import run_sandbox_plan
 from .summarize import summarize_payload
 
-# Import for Phase 2: routing through Python wrappers
+# Import for new architecture: routing through Python wrappers
 from mcp_agent.actions import get_provider_action_map
+from mcp_agent.actions.dispatcher import dispatch_tool
+from mcp_agent.core.context import AgentContext
 
 
 # Planner result contract returned from execute_mcp_task and PlannerRuntime.run.
@@ -500,38 +493,22 @@ class PlannerRuntime:
             {"provider": provider, "tool": resolved_tool},
         )
         result_key = f"tool.{provider}.{resolved_tool}"
-        
-        # Optional: Notify legacy MCPAgent of step change (if present)
-        if _HAS_LEGACY_MCPAGENT and MCPAgent is not None:
-            try:
-                agent = MCPAgent.current(self.context.user_id)
-                set_step = getattr(agent, "set_step", None)
-                if callable(set_step):
-                    set_step(len(self.context.steps))
-            except Exception:
-                pass  # Legacy agent not available, continue without it
-        
-        # Phase 2: Route through Python wrapper if available (handles parameter mapping)
+
+        # Route through new dispatcher architecture
         try:
-            action_map = get_provider_action_map()
-            wrapper_funcs = action_map.get(provider, ())
-            wrapper = next((f for f in wrapper_funcs if f.__name__ == tool_name), None)
-            
-            if wrapper:
-                # Call wrapper function (handles parameter mapping like to -> recipient_email)
-                # New wrappers expect AgentContext as first parameter, not self
-                from mcp_agent.core.context import AgentContext
-                
-                # Create AgentContext from PlannerContext
-                agent_context = AgentContext.create(user_id=self.context.user_id)
-                
-                # Remove 'context' from payload if present (it's now passed as first arg)
-                wrapper_payload = {k: v for k, v in payload.items() if k != "context"}
-                
-                response = wrapper(agent_context, **wrapper_payload)
-            else:
-                # Fall back to direct MCP call if no wrapper exists
-                response = call_direct_tool(self.context, provider=provider, tool=resolved_tool, payload=payload)
+            # Create AgentContext from PlannerContext
+            agent_context = AgentContext.create(user_id=self.context.user_id)
+
+            # Remove 'context' from payload if present (it's now passed as first arg)
+            clean_payload = {k: v for k, v in payload.items() if k != "context"}
+
+            # Dispatch through the new architecture (automatically finds wrapper or raises ToolNotFoundError)
+            response = dispatch_tool(
+                context=agent_context,
+                provider=provider,
+                tool=tool_name,
+                payload=clean_payload
+            )
         except Exception as exc:
             error_message = str(exc)
             trace = "".join(traceback.format_exception(exc))
@@ -672,17 +649,7 @@ class PlannerRuntime:
                     )
 
         label = (command.get("label") or "sandbox").strip() or "sandbox"
-        
-        # Optional: Notify legacy MCPAgent of step change (if present)
-        if _HAS_LEGACY_MCPAGENT and MCPAgent is not None:
-            try:
-                agent = MCPAgent.current(self.context.user_id)
-                set_step = getattr(agent, "set_step", None)
-                if callable(set_step):
-                    set_step(len(self.context.steps))
-            except Exception:
-                pass  # Legacy agent not available, continue without it
-        
+
         execution = run_sandbox_plan(self.context, code_body, label=label)
         sandbox_result = execution.result
         result_key = f"sandbox.{label}"
