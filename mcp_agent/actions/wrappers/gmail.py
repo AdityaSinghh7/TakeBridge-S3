@@ -10,7 +10,7 @@ import os
 from typing import TYPE_CHECKING, Any, Dict
 
 from mcp_agent.core.exceptions import UnauthorizedError
-from mcp_agent.registry.manager import RegistryManager
+from mcp_agent.registry import get_mcp_client, is_provider_available
 from mcp_agent.types import ToolInvocationResult
 from mcp_agent.user_identity import normalize_user_id
 from shared.streaming import emit_event
@@ -134,8 +134,8 @@ def _invoke_mcp_tool(
     })
     
     try:
-        registry = RegistryManager(context)
-        client = registry.get_mcp_client(provider)
+        # Use functional API directly
+        client = get_mcp_client(context, provider)
         if not client:
             raise RuntimeError(f"MCP client not available for provider: {provider}")
         response = client.call(tool, payload)
@@ -192,9 +192,9 @@ def gmail_send_email(
     user_id = normalize_user_id(context.user_id)
     
     # Check authorization via registry
-    from mcp_agent.registry.manager import RegistryManager
-    registry = RegistryManager(context)
-    if not registry.is_provider_available("gmail"):
+    
+    # Use functional API directly
+    if not is_provider_available(context, "gmail"):
         raise UnauthorizedError("gmail", user_id)
     
     # Extract primary recipient and rest
@@ -252,9 +252,9 @@ def gmail_search(
     gmail_user_id = _resolve_gmail_user_id(user_id)
     
     # Check authorization
-    from mcp_agent.registry.manager import RegistryManager
-    registry = RegistryManager(context)
-    if not registry.is_provider_available("gmail"):
+    
+    # Use functional API directly
+    if not is_provider_available(context, "gmail"):
         raise UnauthorizedError("gmail", tb_user_id)
     
     payload: dict[str, Any] = {

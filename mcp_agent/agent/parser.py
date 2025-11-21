@@ -1,7 +1,4 @@
-"""Command parser for planner LLM output.
-
-Migrated from planner/parser.py - unchanged, already clean.
-"""
+"""Command parser for planner LLM output."""
 
 from __future__ import annotations
 

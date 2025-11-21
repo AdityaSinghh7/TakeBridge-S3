@@ -1,7 +1,4 @@
-"""Knowledge builder: Generate tool metadata from action wrappers.
-
-Migrated from toolbox/builder.py with context-awareness.
-"""
+"""Knowledge builder: Generate tool metadata from action wrappers."""
 
 from __future__ import annotations
 
@@ -128,10 +125,9 @@ class ToolboxBuilder:
         # Use new context-based approach
         context = AgentContext.create(self.user_id)
         authorized = OAuthManager.is_authorized(context, provider)
-        
-        from mcp_agent.registry.manager import RegistryManager
-        registry = RegistryManager(context)
-        registered = registry.is_provider_available(provider)
+
+        from mcp_agent.registry import is_provider_available
+        registered = is_provider_available(context, provider)
         
         try:
             mcp_url = OAuthManager.get_mcp_url(context, provider)

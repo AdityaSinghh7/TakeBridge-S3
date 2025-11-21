@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from .models import AuthConfig, ConnectedAccount, MCPConnection, User
+from .db_models import AuthConfig, ConnectedAccount, MCPConnection, User
 
 if TYPE_CHECKING:
     from mcp_agent.core.context import AgentContext
@@ -382,4 +382,174 @@ def disconnect_account(
         "updated_accounts": 1,
         "cleared_connections": con_res.rowcount or 0,
     }
+
+
+# --- High-level registry API (formerly RegistryManager) ---
+
+def get_available_providers(context: AgentContext) -> list[dict]:
+    """
+    Get list of available providers for the current user.
+
+    Args:
+        context: Agent context with user_id and db_session
+
+    Returns:
+        List of provider info dicts with keys: provider, authorized, configured, mcp_url
+    """
+    from mcp_agent.actions import SUPPORTED_PROVIDERS
+    from mcp_agent.user_identity import normalize_user_id
+
+    user_id = normalize_user_id(context.user_id)
+    providers = []
+
+    with context.get_db() as db:
+        for provider in SUPPORTED_PROVIDERS:
+            mcp_url, _ = get_active_mcp_for_provider(db, user_id, provider)
+            authorized = bool(mcp_url)
+            configured = bool(mcp_url)
+
+            providers.append({
+                "provider": provider,
+                "authorized": authorized,
+                "configured": configured,
+                "mcp_url": mcp_url,
+            })
+
+    return providers
+
+
+def get_provider_tools(context: AgentContext, provider: str) -> list[dict]:
+    """
+    Get list of tools for a provider.
+
+    Args:
+        context: Agent context
+        provider: Provider name
+
+    Returns:
+        List of tool info dicts with keys: provider, name, available, reason
+    """
+    from mcp_agent.actions import get_provider_action_map
+
+    action_map = get_provider_action_map()
+    funcs = action_map.get(provider, ())
+
+    is_available, reason = check_availability(context, provider)
+
+    tools = []
+    for func in funcs:
+        tools.append({
+            "provider": provider,
+            "name": func.__name__,
+            "available": is_available,
+            "reason": reason if not is_available else None,
+        })
+
+    return tools
+
+
+def check_availability(context: AgentContext, provider: str, tool: str | None = None) -> tuple[bool, str]:
+    """
+    Check if a provider (and optionally tool) is available.
+
+    Args:
+        context: Agent context
+        provider: Provider name
+        tool: Optional tool name
+
+    Returns:
+        Tuple of (is_available, reason)
+        - is_available: True if provider/tool is usable
+        - reason: Human-readable explanation if not available
+    """
+    from mcp_agent.user_identity import normalize_user_id
+
+    user_id = normalize_user_id(context.user_id)
+
+    # Check if provider is authorized
+    with context.get_db() as db:
+        authorized = is_authorized(db, user_id, provider)
+
+    if not authorized:
+        return False, f"Provider '{provider}' is not authorized for user '{user_id}'"
+
+    # Check if tool exists (if specified)
+    if tool:
+        from mcp_agent.actions import get_provider_action_map
+
+        action_map = get_provider_action_map()
+        funcs = action_map.get(provider, ())
+        tool_exists = any(f.__name__ == tool for f in funcs)
+
+        if not tool_exists:
+            return False, f"Tool '{tool}' not found for provider '{provider}'"
+
+    return True, "available"
+
+
+def get_mcp_client(context: AgentContext, provider: str):
+    """
+    Get an MCP client for a provider.
+
+    Args:
+        context: Agent context
+        provider: Provider name
+
+    Returns:
+        Configured MCPClient instance
+
+    Raises:
+        ProviderNotFoundError: If provider is not configured
+        UnauthorizedError: If user is not authorized
+    """
+    from mcp_agent.core.exceptions import ProviderNotFoundError, UnauthorizedError
+    from mcp_agent.mcp_client import MCPClient
+    from mcp_agent.user_identity import normalize_user_id
+    from .oauth import OAuthManager
+
+    user_id = normalize_user_id(context.user_id)
+
+    with context.get_db() as db:
+        mcp_url, _ = get_active_mcp_for_provider(db, user_id, provider)
+
+    if not mcp_url:
+        # Check if provider exists at all
+        from mcp_agent.actions import SUPPORTED_PROVIDERS
+
+        if provider not in SUPPORTED_PROVIDERS:
+            raise ProviderNotFoundError(
+                provider,
+                details={"user_id": user_id},
+            )
+
+        # Provider exists but not authorized
+        raise UnauthorizedError(
+            provider,
+            user_id,
+            details={"message": "OAuth connection required"},
+        )
+
+    # Get headers from OAuth manager
+    headers = OAuthManager.get_headers(context, provider)
+
+    return MCPClient(mcp_url, headers=headers)
+
+
+def is_provider_available(context: AgentContext, provider: str) -> bool:
+    """
+    Quick check if a provider is available.
+
+    Args:
+        context: Agent context
+        provider: Provider name
+
+    Returns:
+        True if provider is authorized and configured
+    """
+    from mcp_agent.user_identity import normalize_user_id
+
+    user_id = normalize_user_id(context.user_id)
+
+    with context.get_db() as db:
+        return is_authorized(db, user_id, provider)
 

@@ -73,5 +73,4 @@ def execute_mcp_task(
         return runtime.run()
 
 
-# Backwards compatibility alias until tests/migrants updated
 PlannerRuntime = AgentOrchestrator

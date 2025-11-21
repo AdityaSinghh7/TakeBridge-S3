@@ -1,7 +1,4 @@
-"""Budget tracking for MCP agent task execution.
-
-Migrated from planner/budget.py - unchanged, already clean.
-"""
+"""Budget tracking for MCP agent task execution."""
 
 from __future__ import annotations
 

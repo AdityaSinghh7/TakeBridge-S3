@@ -1,4 +1,8 @@
-"""LLM-based payload summarization for tool and sandbox results."""
+"""Smart observation processing using LLM-based compression.
+
+This module provides intelligent summarization of large tool and sandbox results
+using LLM compression. No legacy truncation fallback - we fail fast if LLM is unavailable.
+"""
 
 import json
 from typing import Any, TYPE_CHECKING
@@ -45,14 +49,14 @@ Output: {"messages": [{"id": "123", "text": "Quarterly business results, financi
 Compress aggressively but preserve all structural information."""
 
 
-def summarize_with_llm(
+def summarize_observation(
     payload: Any,
     payload_type: str,
     original_tokens: int,
     context: "AgentState",
 ) -> Any:
     """
-    Summarize a large payload using LLM while maintaining JSON structure.
+    Summarize a large observation using LLM compression.
 
     This function compresses large JSON payloads (tool results or sandbox outputs)
     to approximately 60% of their original size while preserving the complete
@@ -69,12 +73,12 @@ def summarize_with_llm(
 
     Raises:
         ValueError: If payload cannot be serialized to JSON
-        Exception: If LLM call fails (caller should handle fallback)
+        Exception: If LLM call fails - no fallback, fail fast
 
     Example:
         >>> large_result = {"messages": [...100 items...], "total": 100}
         >>> original_tokens = count_json_tokens(large_result)  # 12000
-        >>> compressed = summarize_with_llm(large_result, "tool_result", original_tokens, ctx)
+        >>> compressed = summarize_observation(large_result, "tool_result", original_tokens, ctx)
         >>> new_tokens = count_json_tokens(compressed)  # ~7200 (60% of original)
     """
     # Calculate target tokens: aim for 60% of original (40% reduction)
@@ -89,7 +93,7 @@ def summarize_with_llm(
         payload_json = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
     except Exception as e:
         context.record_event(
-            "mcp.summarizer.serialization_error",
+            "mcp.observation_processor.serialization_error",
             {"error": str(e), "type": payload_type}
         )
         raise ValueError(f"Cannot serialize payload for summarization: {e}")
@@ -118,7 +122,7 @@ def summarize_with_llm(
         # Track tokens for this summarization call
         context.token_tracker.record_response(
             "o4-mini",
-            f"observation.summarizer.{payload_type}",
+            f"observation.processor.{payload_type}",
             response
         )
 
@@ -134,7 +138,7 @@ def summarize_with_llm(
         reduction_pct = ((original_tokens - compressed_tokens) / original_tokens) * 100
 
         context.record_event(
-            "mcp.summarizer.completed",
+            "mcp.observation_processor.completed",
             {
                 "type": payload_type,
                 "original_tokens": original_tokens,
@@ -148,14 +152,14 @@ def summarize_with_llm(
 
     except json.JSONDecodeError as e:
         context.record_event(
-            "mcp.summarizer.invalid_json",
+            "mcp.observation_processor.invalid_json",
             {"error": str(e), "type": payload_type}
         )
         raise
 
     except Exception as e:
         context.record_event(
-            "mcp.summarizer.failed",
+            "mcp.observation_processor.failed",
             {"error": str(e), "type": payload_type}
         )
         raise

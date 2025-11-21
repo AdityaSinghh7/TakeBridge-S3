@@ -16,7 +16,7 @@ from typing import Any, Callable, Iterable, Sequence
 from mcp_agent.actions import get_provider_action_map
 from mcp_agent.core.context import AgentContext
 from mcp_agent.knowledge.utils import extract_call_tool_metadata
-from mcp_agent.registry.manager import RegistryManager
+from mcp_agent.registry import get_available_providers, check_availability
 
 
 def generate_ephemeral_toolbox(context: AgentContext, destination_dir: Path) -> None:
@@ -41,35 +41,34 @@ def generate_ephemeral_toolbox(context: AgentContext, destination_dir: Path) -> 
     _write_helpers_module(base)
     _write_client_module(base / "client.py")
 
-    registry = RegistryManager(context)
-    provider_infos = registry.get_available_providers()
+    provider_infos = get_available_providers(context)
     action_map = get_provider_action_map()
 
     generated: list[str] = []
-    for info in sorted(provider_infos, key=lambda item: item.provider):
-        if not info.authorized:
+    for info in sorted(provider_infos, key=lambda item: item["provider"]):
+        if not info["authorized"]:
             continue
-        funcs = action_map.get(info.provider, ())
+        funcs = action_map.get(info["provider"], ())
         if not funcs:
             continue
 
         available_funcs = [
             func
             for func in funcs
-            if _is_tool_available(registry, info.provider, func.__name__)
+            if _is_tool_available(context, info["provider"], func.__name__)
         ]
         if not available_funcs:
             continue
 
-        module_path = servers_dir / f"{info.provider}.py"
-        _write_provider_module(module_path, info.provider, available_funcs)
-        generated.append(info.provider)
+        module_path = servers_dir / f"{info['provider']}.py"
+        _write_provider_module(module_path, info["provider"], available_funcs)
+        generated.append(info["provider"])
 
     _write_servers_init(servers_dir, generated)
 
 
-def _is_tool_available(registry: RegistryManager, provider: str, tool: str) -> bool:
-    available, _reason = registry.check_availability(provider, tool)
+def _is_tool_available(context: AgentContext, provider: str, tool: str) -> bool:
+    available, _reason = check_availability(context, provider, tool)
     return available
 
 

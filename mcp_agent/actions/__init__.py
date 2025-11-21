@@ -35,31 +35,9 @@ def iter_available_action_functions():
             yield func
 
 
-# Legacy compatibility functions
-def configure_mcp_action_filters(*args, **kwargs):
-    """Legacy compatibility - no-op."""
-    pass
-
-
-def describe_available_actions(*args, **kwargs):
-    """Legacy compatibility."""
-    action_map = get_provider_action_map()
-    result = []
-    for provider, funcs in action_map.items():
-        for func in funcs:
-            result.append({
-                'provider': provider,
-                'name': func.__name__,
-                'description': (func.__doc__ or '').strip().split('\n')[0],
-            })
-    return result
-
-
 __all__ = [
     "dispatch_tool",
     "SUPPORTED_PROVIDERS",
     "get_provider_action_map",
     "iter_available_action_functions",
-    "configure_mcp_action_filters",
-    "describe_available_actions",
 ]

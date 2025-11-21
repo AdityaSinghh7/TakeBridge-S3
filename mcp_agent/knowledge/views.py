@@ -32,23 +32,22 @@ def get_inventory_view(context: AgentContext) -> Dict[str, Any]:
             ]
         }
     """
-    from mcp_agent.registry.manager import RegistryManager
+    from mcp_agent.registry import get_available_providers
     from mcp_agent.actions import get_provider_action_map
-    
-    registry = RegistryManager(context)
+
     action_map = get_provider_action_map()
-    
+
     providers = []
-    for provider_info in registry.get_available_providers():
-        if not provider_info.authorized:
+    for provider_info in get_available_providers(context):
+        if not provider_info.get("authorized"):
             continue  # Skip unauthorized providers
         
         # Get tool names for this provider
-        funcs = action_map.get(provider_info.provider, ())
+        funcs = action_map.get(provider_info["provider"], ())
         tool_names = [f.__name__ for f in funcs]
-        
+
         providers.append({
-            "provider": provider_info.provider,
+            "provider": provider_info["provider"],
             "tools": tool_names,
         })
     

@@ -1,7 +1,4 @@
-"""LLM interface for the MCP agent planner.
-
-Migrated from planner/llm.py - handles LLM calls and message formatting.
-"""
+"""LLM interface for the MCP agent planner."""
 
 from __future__ import annotations
 
@@ -121,7 +118,7 @@ class PlannerLLM:
         context: "AgentState",
         snapshot: BudgetSnapshot,
     ) -> str:
-        state = context.planner_state(snapshot)
+        state = context.build_planner_state(snapshot)
         state_json = json.dumps(state, ensure_ascii=False, sort_keys=True, indent=2)
         
         # DEBUG: optionally dump PLANNER_STATE_JSON to stderr

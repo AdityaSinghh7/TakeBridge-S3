@@ -9,36 +9,18 @@ import json
 import traceback
 from typing import TYPE_CHECKING, Any, Dict, List, Set
 
-from mcp_agent.execution.envelope import process_observation, unwrap_nested_data
+from mcp_agent.execution.envelope import unwrap_nested_data
 from mcp_agent.execution.sandbox import run_python_plan
 from mcp_agent.knowledge.search import search_tools
 from mcp_agent.knowledge.builder import get_index
 from mcp_agent.actions.dispatcher import dispatch_tool
 from mcp_agent.utils.token_counter import count_json_tokens
-from mcp_agent.agent.summarizer import summarize_with_llm
-from .summarize import summarize_payload
+from mcp_agent.agent.observation_processor import summarize_observation
 
 if TYPE_CHECKING:
     from mcp_agent.core.context import AgentContext
     from .state import AgentState
 from .types import StepResult
-
-
-def _smart_format_observation(payload: Any, max_chars: int = 15000) -> Any:
-    """Return raw data if it fits; otherwise summarize."""
-    data = payload
-    if isinstance(payload, dict):
-        if "successful" in payload:
-            if not payload["successful"]:
-                return {"error": payload.get("error", "Unknown failure")}
-            data = payload.get("data", {})
-    try:
-        text = json.dumps(data, default=str, ensure_ascii=False)
-        if len(text) <= max_chars:
-            return data
-    except Exception:
-        pass
-    return summarize_payload("tool_output", data, purpose="planner_observation")
 
 
 def analyze_sandbox(code: str) -> tuple[Set[str], Dict[str, Set[str]]]:
@@ -223,23 +205,14 @@ class ActionExecutor:
         if token_count < 8000:
             return data, False
 
-        # Summarize using LLM
-        try:
-            summarized = summarize_with_llm(
-                payload=data,
-                payload_type="tool_result",
-                original_tokens=token_count,
-                context=self.agent_state,
-            )
-            return summarized, True
-        except Exception as e:
-            # Fallback: return truncated raw data if summarization fails
-            self.agent_state.record_event(
-                "mcp.summarizer.fallback_to_truncation",
-                {"error": str(e), "type": "tool"}
-            )
-            # Use old truncation logic as emergency fallback
-            return _smart_format_observation(result, max_chars=15000), False
+        # Summarize using LLM (no fallback - fail fast)
+        summarized = summarize_observation(
+            payload=data,
+            payload_type="tool_result",
+            original_tokens=token_count,
+            context=self.agent_state,
+        )
+        return summarized, True
 
     def _process_sandbox_observation(self, result: Any) -> tuple[Any, bool]:
         """
@@ -278,23 +251,14 @@ class ActionExecutor:
         if token_count < 10000:
             return result, False
 
-        # Summarize using LLM
-        try:
-            summarized = summarize_with_llm(
-                payload=result,
-                payload_type="sandbox_result",
-                original_tokens=token_count,
-                context=self.agent_state,
-            )
-            return summarized, True
-        except Exception as e:
-            # Fallback: return truncated raw result if summarization fails
-            self.agent_state.record_event(
-                "mcp.summarizer.fallback_to_truncation",
-                {"error": str(e), "type": "sandbox"}
-            )
-            # Use old truncation logic as emergency fallback
-            return _smart_format_observation(result, max_chars=15000), False
+        # Summarize using LLM (no fallback - fail fast)
+        summarized = summarize_observation(
+            payload=result,
+            payload_type="sandbox_result",
+            original_tokens=token_count,
+            context=self.agent_state,
+        )
+        return summarized, True
 
     # --- Tool execution ---
 

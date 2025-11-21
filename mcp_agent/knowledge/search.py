@@ -1,7 +1,4 @@
-"""Tool search functionality - semantic search over available MCP tools.
-
-Migrated from toolbox/search.py with context-awareness.
-"""
+"""Tool search functionality - semantic search over available MCP tools."""
 
 from __future__ import annotations
 

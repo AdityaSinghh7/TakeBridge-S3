@@ -1,6 +1,7 @@
-"""Slim envelope processing for MCP tool responses (migrated from toolbox/envelope.py).
+"""Response normalization for MCP tool outputs.
 
-Normalizes and aggressively truncates responses for LLM consumption.
+Normalizes raw MCP responses into canonical format, unwrapping nested structures
+and handling provider-specific encoding patterns.
 """
 
 from __future__ import annotations
@@ -9,7 +10,6 @@ import json
 from typing import TYPE_CHECKING, Any, Dict
 
 if TYPE_CHECKING:
-    from mcp_agent.core.context import AgentContext
     from mcp_agent.types import ActionResponse
 
 
@@ -137,89 +137,3 @@ def normalize_action_response(raw: Dict[str, Any] | None) -> ActionResponse:
     if raw is not None:
         envelope["raw"] = raw
     return envelope
-
-
-def process_observation(
-    context: AgentContext,
-    raw_response: Dict[str, Any],
-    metadata: Dict[str, Any] | None = None,
-) -> Dict[str, Any]:
-    """
-    Process raw MCP response into slim observation for LLM.
-    
-    Applies aggressive truncation:
-        - Strings > 500 chars → truncated with "..."
-        - Arrays > 20 items → first 20 + truncation notice
-        - Objects nested > 3 levels → flattened
-    
-    Args:
-        context: Agent context (for logging)
-        raw_response: Raw MCP tool response
-        metadata: Optional metadata about the tool
-    
-    Returns:
-        Slim observation dict suitable for LLM
-    """
-    # Normalize first
-    envelope = normalize_action_response(raw_response)
-    
-    # Check success
-    if not envelope["successful"]:
-        return {
-            "successful": False,
-            "error": envelope["error"],
-        }
-    
-    # Truncate data
-    data = envelope["data"]
-    slim_data = _truncate_recursive(data, max_depth=3, depth=0)
-    
-    return {
-        "successful": True,
-        "data": slim_data,
-    }
-
-
-def _truncate_recursive(obj: Any, max_depth: int, depth: int) -> Any:
-    """
-    Recursively truncate data structures for LLM consumption.
-    
-    Args:
-        obj: Object to truncate
-        max_depth: Maximum nesting depth
-        depth: Current depth
-    
-    Returns:
-        Truncated object
-    """
-    MAX_STR_LEN = 500
-    MAX_ARRAY_LEN = 20
-    
-    # Stop at max depth
-    if depth >= max_depth:
-        if isinstance(obj, (dict, list)):
-            return f"<truncated: {type(obj).__name__} at depth {depth}>"
-        return obj
-    
-    # Truncate strings
-    if isinstance(obj, str):
-        if len(obj) > MAX_STR_LEN:
-            return obj[:MAX_STR_LEN] + "..."
-        return obj
-    
-    # Truncate lists
-    if isinstance(obj, list):
-        if len(obj) > MAX_ARRAY_LEN:
-            truncated = [_truncate_recursive(item, max_depth, depth + 1) for item in obj[:MAX_ARRAY_LEN]]
-            return truncated + [{"_truncated": True, "_total": len(obj)}]
-        return [_truncate_recursive(item, max_depth, depth + 1) for item in obj]
-    
-    # Truncate dicts
-    if isinstance(obj, dict):
-        return {
-            k: _truncate_recursive(v, max_depth, depth + 1)
-            for k, v in obj.items()
-        }
-    
-    # Pass through primitives
-    return obj

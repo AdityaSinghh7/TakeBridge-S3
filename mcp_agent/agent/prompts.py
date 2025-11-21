@@ -1,7 +1,4 @@
-"""System prompts for the MCP agent planner.
-
-Migrated from planner/prompt.py - defines the main PLANNER_PROMPT.
-"""
+"""System prompts for the MCP agent planner."""
 
 PLANNER_PROMPT = """You are a planning engine that drives MCP tools and sandbox Python code to finish one user task.
 

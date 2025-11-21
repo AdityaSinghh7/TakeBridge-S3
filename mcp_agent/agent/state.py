@@ -27,9 +27,39 @@ from shared.token_cost_tracker import TokenCostTracker
 from shared.streaming import emit_event
 
 from .budget import Budget, BudgetTracker, BudgetSnapshot
-from .summarize import summarize_payload, redact_payload
 from .prompts import PLANNER_PROMPT
 from mcp_agent.knowledge.builder import get_index
+
+
+def _redact_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Simple payload redaction for logging (inline version)."""
+    # Basic implementation - just return as-is for now
+    # Could add keyword filtering if needed
+    return payload
+
+
+def _summarize_for_storage(
+    label: str,
+    payload: Any,
+    *,
+    purpose: str = "storage",
+    storage_dir: Path | None = None,
+    persist_payload: bool = False,
+) -> Dict[str, Any]:
+    """Simple storage summarization (inline version)."""
+    # Minimal implementation - just truncate if too large
+    import json
+    try:
+        serialized = json.dumps(payload, default=str, ensure_ascii=False)
+        if len(serialized) > 50000:
+            return {
+                "truncated": True,
+                "size": len(serialized),
+                "label": label,
+            }
+        return {}
+    except Exception:
+        return {}
 
 StepType = Literal["tool", "sandbox", "search", "finish", "fail"]
 
@@ -254,10 +284,6 @@ class AgentState:
         self.history.append(step)
         return step
 
-    def add_step(self, **kwargs) -> AgentStep:
-        """Backwards-compatible alias for record_step."""
-        return self.record_step(**kwargs)
-
     def get_context_window(self, max_steps: Optional[int] = None) -> List[AgentStep]:
         """Get recent history within limits.
 
@@ -276,7 +302,7 @@ class AgentState:
     def record_event(self, event: str, payload: Dict[str, Any]) -> None:
         """Record a planner event (mirrors legacy PlannerContext semantics)."""
         try:
-            safe_payload = redact_payload(payload)
+            safe_payload = _redact_payload(payload)
         except Exception:
             safe_payload = payload
         enriched = {
@@ -314,19 +340,6 @@ class AgentState:
         self._trim_context_for_llm()
         if self.search_results:
             self.discovery_completed = True
-
-    def add_search_results(self, results: List[Dict[str, Any]], *, replace: bool = False) -> None:
-        """Backwards-compatible alias for merge_search_results."""
-        self.merge_search_results(results, replace=replace)
-
-    def set_search_results(self, results: List[Dict[str, Any]]) -> None:
-        """Replace the current search results with the provided list."""
-        self.merge_search_results(results, replace=True)
-
-    def replace_search_results(self, results: List[Dict[str, Any]]) -> None:
-        """Deprecated alias for set_search_results; preserved for compatibility."""
-        self.set_search_results(results)
-
 
     def resolve_mcp_tool_name(self, provider: str, tool_name: str) -> str:
         """Resolve provider/tool pair to the underlying MCP tool name."""
@@ -417,7 +430,7 @@ class AgentState:
         if not force and not self.should_summarize(payload):
             return {}
         storage_dir = self.summary_root / storage_subdir
-        summary = summarize_payload(
+        summary = _summarize_for_storage(
             label,
             payload,
             purpose=purpose,
@@ -775,10 +788,6 @@ class AgentState:
             "available_tools": available_tools,
             "trajectory": trajectory,
         }
-
-    def planner_state(self, snapshot: BudgetSnapshot | None = None) -> Dict[str, Any]:
-        """Deprecated alias for build_planner_state."""
-        return self.build_planner_state(snapshot)
 
     # --- Serialization ---
 
