@@ -48,10 +48,10 @@ class PlannerLLM:
         json_mode_kwargs = {
             "model": self.model,
             "messages": messages,
-            "reasoning_effort": "high",
+            "reasoning_effort": "medium",
             "max_output_tokens": 10000,
             "text": json_mode_text,
-            "reasoning_summary": "auto",
+            
         }
         try:
             response = client.create_response(**json_mode_kwargs)

@@ -68,10 +68,17 @@ def run_python_plan(
     
     repo_root = Path(__file__).resolve().parents[2]
 
+    debug_dir = os.getenv("TB_SANDBOX_DEBUG_DIR")
     with tempfile.TemporaryDirectory(prefix=f"sandbox-{context.user_id}-") as tmpdir:
         tmp_path = Path(tmpdir)
         plan_path = tmp_path / "plan.py"
         plan_path.write_text(plan_source, encoding="utf-8")
+
+        if debug_dir:
+            debug_path = Path(debug_dir).expanduser().resolve()
+            debug_path.mkdir(parents=True, exist_ok=True)
+            snapshot = debug_path / f"plan_{context.user_id}_{label}.py"
+            snapshot.write_text(plan_source, encoding="utf-8")
 
         env = os.environ.copy()
         existing_pythonpath = env.get("PYTHONPATH", "")
@@ -138,13 +145,31 @@ def run_python_plan(
 def _build_plan_source(code_body: str) -> str:
     """Build complete Python source for sandbox execution."""
     indented = textwrap.indent(code_body.rstrip() + "\n", "    ")
-    template = f"""\
+    template = """\
 import asyncio
 import json
 import os
+import sys
+import traceback
+
+class _SandboxNullWriter:
+    def write(self, _):
+        pass
+
+    def flush(self):
+        pass
+
+
+_ORIGINAL_STDOUT = sys.stdout
+_ORIGINAL_STDERR = sys.stderr
+sys.stdout = _SandboxNullWriter()
+sys.stderr = _SandboxNullWriter()
+from sandbox_py.helpers import safe_error_text, safe_timestamp_sort_key
 from mcp_agent.sandbox.runtime import call_tool  # noqa: F401
 from mcp_agent.sandbox.glue import register_default_tool_caller
 from mcp_agent.core.context import AgentContext
+
+SENTINEL = "{sentinel}"
 
 register_default_tool_caller()
 
@@ -155,24 +180,33 @@ context = AgentContext.create(
 )
 
 
+
 async def main():
-{indented}
+{body}
+
+
+def _emit_result(payload):
+    sys.stdout = _ORIGINAL_STDOUT
+    sys.stderr = _ORIGINAL_STDERR
+    sys.stdout.write(SENTINEL + json.dumps(payload or {{}}, default=str))
+    sys.stdout.flush()
 
 
 if __name__ == "__main__":
     try:
         result = asyncio.run(main())
-    except Exception as exc:
+    except Exception as exc:  # pragma: no cover - sandbox error surfacing
         error_payload = {{
             "successful": False,
-            "error": f"Sandbox error: {exc}",
-            "data": {{}}
+            "error": "Sandbox error: " + str(exc),
+            "traceback": traceback.format_exc(),
+            "data": {{}},
         }}
-        print("{SENTINEL}" + json.dumps(error_payload))
+        _emit_result(error_payload)
     else:
-        print("{SENTINEL}" + json.dumps(result or {{}}))
+        _emit_result(result)
 """
-    return textwrap.dedent(template)
+    return textwrap.dedent(template).format(sentinel=SENTINEL, body=indented)
 
 
 def _parse_process_output(stdout: str) -> tuple[List[str], Optional[Dict[str, Any]]]:
@@ -187,8 +221,12 @@ def _parse_process_output(stdout: str) -> tuple[List[str], Optional[Dict[str, An
     try:
         result = json.loads(json_text) if json_text else {}
     except json.JSONDecodeError:
-        logs.append("Failed to parse sandbox result JSON.")
-        return logs, None
+        from json import JSONDecoder
+        try:
+            result, _ = JSONDecoder().raw_decode(json_text)
+        except json.JSONDecodeError:
+            logs.append("Failed to parse sandbox result JSON.")
+            return logs, None
     
     return logs, result or {}
 

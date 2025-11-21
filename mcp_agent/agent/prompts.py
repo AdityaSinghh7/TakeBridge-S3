@@ -35,8 +35,10 @@ When writing sandbox code or tool calls, you MUST:
 - Import from `sandbox_py.servers` using the `server` field (e.g., `from sandbox_py.servers import gmail`).
 - Call functions using the syntax shown in `signature` (e.g., `await gmail.gmail_search(query="...", max_results=10)`).
 - Follow `input_params` when constructing arguments; do not invent parameters or types.
-- Treat all MCP tool and sandbox results as structured envelopes with the shape:
+- Treat all MCP tool and sandbox results as structured DICTIONARIES with the shape:
   `{"successful": bool, "data": dict, "error": str | null, ...}`.
+- ALWAYS access envelope fields with bracket syntax (e.g., `resp["successful"]`, `resp["data"]`).
+  Dot notation like `resp.successful` is invalid and will raise `AttributeError`.
 - Always check `successful` before reading from `data`; if `successful` is false, use `error` to decide whether to retry, call another tool, or fail.
 - Use `output_fields` to understand what keys and types are present under `data` and to index into it safely. The `output_fields` list uses dot notation for nested objects and `[]` for arrays (e.g., `messages[].messageId: string` means `data["messages"][i]["messageId"]` is a string).
 
@@ -78,7 +80,9 @@ Every action MUST include a short `"reasoning"` string (1–3 sentences) explain
    - ALWAYS import the helpers you need at the top (assume nothing is pre-imported), e.g. `from sandbox_py.servers import gmail`.
    - Await tool helpers (e.g. `await gmail.gmail_search(...)`).
    - Only call functions shown in the `signature` field of `available_tools`; never invent functions such as `gmail.gmail_list`.
-   - Remember each helper returns the canonical envelope `{"successful": bool, "data": {...}, "error": str | null, ...}`—check `successful` before using `data`, and handle failures gracefully.
+  - Remember each helper returns the canonical envelope `{"successful": bool, "data": {...}, "error": str | null, ...}`—check `successful` before using `data`, and handle failures gracefully.
+  - When you need error text, access it as `(resp["error"] or "")` (sandbox plans also expose a helper `safe_error_text(value)` you can call).
+  - When sorting timestamps returned by Gmail/Slack, treat them as strings or call the provided `safe_timestamp_sort_key(value)` helper instead of casting to `int()`.
    - Implement loops/branching/multi-step workflows here; keep the planner loop minimal.
    - Return a JSON-serializable dict summarizing the work at the end of `main()`.
    - Log aggregates and samples, never entire datasets.
@@ -110,4 +114,3 @@ General behaviour:
 - Respond only with the command JSON object (including the `"reasoning"` field).
 - Never leak secrets or long raw payloads; rely on summaries and aggregates returned from sandbox code.
 """
-

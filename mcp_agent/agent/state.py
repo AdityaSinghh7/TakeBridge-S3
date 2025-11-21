@@ -748,15 +748,9 @@ class AgentState:
             elif step.type == "tool":
                 tool_id = step.command.get("tool_id", "unknown") if step.command else "unknown"
                 entry["tool_id"] = tool_id
-                if step.is_smart_summary and step.output is not None:
-                    entry["summary"] = step.output
-                else:
-                    entry["summary"] = self._summarize_tool_observation(step.output)
+                entry["summary"] = step.output
             elif step.type == "sandbox":
-                if step.is_smart_summary and step.output is not None:
-                    entry["summary"] = step.output
-                else:
-                    entry["summary"] = self._summarize_sandbox_observation(step.output)
+                entry["summary"] = step.output
             elif step.type in ("finish", "fail"):
                 # For finish/fail steps, include minimal info
                 entry["summary"] = step.preview or "Step completed"

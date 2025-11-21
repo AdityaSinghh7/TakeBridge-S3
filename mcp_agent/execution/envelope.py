@@ -39,12 +39,6 @@ def unwrap_composio_content(data: Any) -> Any:
     
     Composio returns: {"content": [{"text": "{\"actual\": \"data\"}"}], ...}
     This function parses the stringified JSON and returns the actual data.
-    
-    Args:
-        data: Potentially double-encoded data from Composio
-    
-    Returns:
-        Clean parsed dictionary if pattern detected, otherwise data unchanged
     """
     if not isinstance(data, dict):
         return data
@@ -56,7 +50,27 @@ def unwrap_composio_content(data: Any) -> Any:
             text = item["text"]
             if isinstance(text, str) and (text.startswith("{") or text.startswith("[")):
                 try:
-                    return json.loads(text)
+                    parsed = json.loads(text)
+
+                    if isinstance(parsed, dict) and "data" in parsed:
+                        is_envelope = any(
+                            key in parsed
+                            for key in (
+                                "successfull",
+                                "successful",
+                                "auth_refresh_required",
+                                "log_id",
+                            )
+                        )
+
+                        if is_envelope:
+                            s1 = parsed.get("successfull")
+                            s2 = parsed.get("successful")
+                            if (s1 is not False) and (s2 is not False):
+                                return parsed["data"]
+                            return parsed
+
+                    return parsed
                 except (ValueError, TypeError, json.JSONDecodeError):
                     pass
     
@@ -209,4 +223,3 @@ def _truncate_recursive(obj: Any, max_depth: int, depth: int) -> Any:
     
     # Pass through primitives
     return obj
-

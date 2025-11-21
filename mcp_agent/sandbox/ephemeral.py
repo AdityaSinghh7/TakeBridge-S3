@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import inspect
 import shutil
+import textwrap
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
@@ -37,6 +38,7 @@ def generate_ephemeral_toolbox(context: AgentContext, destination_dir: Path) -> 
 
     # Always provide thin compatibility shims for sandbox_py.__init__ and client.
     _write_base_init(base)
+    _write_helpers_module(base)
     _write_client_module(base / "client.py")
 
     registry = RegistryManager(context)
@@ -84,6 +86,40 @@ def _write_servers_init(servers_dir: Path, providers: Sequence[str]) -> None:
     exports = ", ".join(f'\"{name}\"' for name in sorted(providers))
     lines.append(f"__all__ = [{exports}]" if exports else "__all__ = []")
     (servers_dir / "__init__.py").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_helpers_module(base: Path) -> None:
+    helpers_source = """\
+\"\"\"Sandbox helper utilities exposed to generated plans.\"\"\"
+
+from datetime import datetime
+
+
+def safe_error_text(value):
+    \"\"\"Return a safe string when concatenating provider errors.\"\"\"
+    if not value:
+        return ""
+    return value if isinstance(value, str) else str(value)
+
+
+def safe_timestamp_sort_key(value):
+    \"\"\"Convert provider timestamps (ints or ISO strings) into sortable ints.\"\"\"
+    if value is None:
+        return 0
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            try:
+                cleaned = value.replace("Z", "+00:00")
+                return int(datetime.fromisoformat(cleaned).timestamp())
+            except Exception:
+                return 0
+    return 0
+"""
+    (base / "helpers.py").write_text(textwrap.dedent(helpers_source), encoding="utf-8")
 
 
 def _write_client_module(path: Path) -> None:
