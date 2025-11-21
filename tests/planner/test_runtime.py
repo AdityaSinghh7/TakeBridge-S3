@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from mcp_agent.agent.budget import Budget
-from mcp_agent.agent.orchestrator import AgentOrchestrator
+from mcp_agent.agent.run_loop import AgentOrchestrator
 from mcp_agent.agent.state import AgentState
 from mcp_agent.core.context import AgentContext
 
@@ -27,7 +27,7 @@ class FakeLLM:
 @pytest.fixture(autouse=True)
 def no_inventory(monkeypatch):
     monkeypatch.setattr(
-        "mcp_agent.agent.orchestrator.AgentOrchestrator._load_inventory",
+        "mcp_agent.agent.run_loop.AgentOrchestrator._load_inventory",
         lambda self: None,
     )
 

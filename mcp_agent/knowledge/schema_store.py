@@ -5,8 +5,8 @@ from pathlib import Path
 import os
 from typing import Any, Dict
 
-from .io_spec import ToolOutputSpec
-from .registry import get_tool_spec
+from .types import ToolOutputSpec
+from .introspection import get_tool_spec
 
 
 def _default_schema_path() -> Path:

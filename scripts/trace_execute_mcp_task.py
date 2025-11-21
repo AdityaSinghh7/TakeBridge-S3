@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from mcp_agent.mcp_agent import MCPAgent
 from mcp_agent.registry.oauth import OAuthManager
-from mcp_agent.agent.planner import execute_mcp_task
+from mcp_agent.agent import execute_mcp_task
 from mcp_agent.core.context import AgentContext
 from mcp_agent.dev import resolve_dev_user
 

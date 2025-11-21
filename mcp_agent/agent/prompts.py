@@ -78,6 +78,18 @@ Every action MUST include a short `"reasoning"` string (1–3 sentences) explain
    - Await tool helpers (e.g. `await gmail.gmail_search(...)`).
    - Only call functions shown in the `signature` field of `available_tools`; never invent functions such as `gmail.gmail_list`.
   - Remember each helper returns the canonical envelope `{"successful": bool, "data": {...}, "error": str | null, ...}`—check `successful` before using `data`, and handle failures gracefully.
+  - IMPORTANT: Tool responses are WRAPPED in an envelope. Access the actual tool data via `response["data"]`. Example:
+    ```python
+    resp = await slack.slack_post_message(channel="#social", text="Hello")
+    # CORRECT: Check envelope first, then access data fields
+    if not resp["successful"]:
+        return {"error": resp["error"]}
+    # Access tool-specific fields from data
+    slack_ts = resp["data"]["ts"]
+    slack_ok = resp["data"].get("ok", False)
+
+    # WRONG: resp.get("ok") or resp.get("ts") - these don't exist at top level!
+    ```
   - When you need error text, access it as `(resp["error"] or "")` (sandbox plans also expose a helper `safe_error_text(value)` you can call).
   - When sorting timestamps returned by Gmail/Slack, treat them as strings or call the provided `safe_timestamp_sort_key(value)` helper instead of casting to `int()`.
    - Implement loops/branching/multi-step workflows here; keep the planner loop minimal.

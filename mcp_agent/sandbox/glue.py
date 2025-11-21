@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-from importlib import import_module
 from typing import Any, Dict, TYPE_CHECKING
 
 from mcp_agent.user_identity import normalize_user_id, DEV_USER_ENV_VAR, DEV_DEFAULT_USER_ID
@@ -19,103 +18,12 @@ def _resolve_user_id() -> str:
 
 
 def register_default_tool_caller() -> None:
-    """
-    Bind sandbox-generated wrappers to the active MCPAgent.
-
-    No-op when `TB_DISABLE_SANDBOX_CALLER=1` so tests can opt out or inject their own callers.
-    """
-
-    if os.getenv("TB_DISABLE_SANDBOX_CALLER") == "1":
-        return
-
+    """Bind sandbox-generated wrappers to the dispatch_tool architecture."""
     from mcp_agent.sandbox.runtime import register_tool_caller
-
-    try:
-        from mcp_agent.testing.stubs import ensure_test_stubs
-    except Exception:  # pragma: no cover - optional helper
-        ensure_test_stubs = None  # type: ignore[assignment]
-
-    fake_factory_path = os.getenv("MCP_FAKE_CLIENT_FACTORY", "").strip()
-
-    use_stubs = (
-        os.getenv("MCP_USE_HTTP_STUBS", "") == "1"
-        or os.getenv("PYTEST_CURRENT_TEST")
-        or bool(fake_factory_path)
-    )
-    if ensure_test_stubs and use_stubs:
-        ensure_test_stubs()
-
-    # When a fake factory is configured (tests), avoid importing the full MCP
-    # client stack and instead bridge directly to the stub clients.
-    if fake_factory_path:
-        module_name, func_name = fake_factory_path.rsplit(":", 1)
-        module = import_module(module_name)
-        factory = getattr(module, func_name)
-
-        clients: Dict[str, Any] | None = None
-
-        async def _caller(provider: str, tool: str, payload: Dict[str, Any]) -> "ToolCallResult":
-            """
-            Bridge sandbox helpers to fake MCP clients provided by tests.
-
-            This path is used when MCP_FAKE_CLIENT_FACTORY is set and does not
-            depend on the external `mcp` Python package.
-            """
-            nonlocal clients
-            try:
-                user_id = _resolve_user_id()
-            except Exception:
-                user_id = None
-
-            if clients is None:
-                # Factories may or may not accept a user_id kwarg.
-                try:
-                    if user_id is not None:
-                        created = factory(user_id=user_id)
-                    else:
-                        created = factory()
-                except TypeError:
-                    created = factory()
-                if not isinstance(created, dict):
-                    raise RuntimeError(
-                        "Fake client factory must return a dict of provider -> client instances."
-                    )
-                clients = created
-
-            client = clients.get(provider)
-            if client is None:
-                raise RuntimeError(f"Stub MCP provider '{provider}' missing.")
-
-            if hasattr(client, "acall"):
-                response = await client.acall(tool, payload)
-            else:  # pragma: no cover - sync fake clients
-                loop = asyncio.get_running_loop()
-
-                def _call_sync() -> Dict[str, Any]:
-                    return client.call(tool, payload)
-
-                response = await loop.run_in_executor(None, _call_sync)
-
-            from mcp_agent.execution.envelope import normalize_action_response, unwrap_nested_data
-
-            envelope = normalize_action_response(response)
-            data = unwrap_nested_data(envelope["data"])
-            result_success = bool(envelope["successful"])
-            return {
-                "success": result_success,
-                "successful": result_success,
-                "data": data,
-                "error": envelope.get("error"),
-                "logs": (response or {}).get("logs") if isinstance(response, dict) else None,
-            }
-
-        register_tool_caller(_caller)
-        return
-
-    # Production path: Use new AgentContext + dispatch_tool architecture
     from mcp_agent.core.context import AgentContext
     from mcp_agent.actions.dispatcher import dispatch_tool
 
+    # Eagerly set up environment for common providers
     try:
         eager_user = _resolve_user_id()
     except Exception:
@@ -126,9 +34,9 @@ def register_default_tool_caller() -> None:
 
     async def _caller(provider: str, tool: str, payload: Dict[str, Any]) -> "ToolCallResult":
         """
-        Bridge sandbox helpers to new dispatch_tool architecture.
+        Bridge sandbox helpers to dispatch_tool architecture.
 
-        Sandbox helpers expect a single envelope:
+        Sandbox helpers expect:
           {"successful": bool, "data": <tool-payload>, "error": Any, "logs": Any}
         """
         try:
@@ -137,8 +45,7 @@ def register_default_tool_caller() -> None:
             request_id = os.getenv("TB_REQUEST_ID", "sandbox-default")
 
             # Ensure provider environment is set up
-            for prov in (provider,):
-                ensure_env_for_provider(user_id, prov)
+            ensure_env_for_provider(user_id, provider)
 
             # Create AgentContext (lazy DB session will be created if needed)
             context = AgentContext(
@@ -161,10 +68,10 @@ def register_default_tool_caller() -> None:
 
             response = await loop.run_in_executor(None, _call_sync)
 
-            # Normalize into a canonical envelope, then adapt to sandbox expectations.
+            # dispatch_tool returns normalized ActionResponse, but we need one more unwrap
+            # to collapse remaining {"data": {...}} nesting for sandbox expectations
             from mcp_agent.execution.envelope import unwrap_nested_data
 
-            # dispatch_tool already returns normalized ToolInvocationResult
             data = unwrap_nested_data(response["data"])
             result_success = bool(response["successful"])
             return {
@@ -174,7 +81,7 @@ def register_default_tool_caller() -> None:
                 "error": response.get("error"),
                 "logs": None,  # dispatch_tool doesn't return logs field
             }
-        except Exception as exc:  # pragma: no cover - exception propagation
+        except Exception as exc:
             return {
                 "success": False,
                 "successful": False,

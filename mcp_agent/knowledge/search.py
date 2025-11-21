@@ -1,16 +1,24 @@
-"""Tool search functionality - semantic search over available MCP tools."""
+"""Tool search functionality - semantic search over available MCP tools.
+
+Combines:
+- Tool search (semantic matching against toolbox index)
+- View generators (inventory and deep views for ReAct discovery)
+- Provider listing
+"""
 
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Literal
+from typing import TYPE_CHECKING, Any, Dict, List, Literal
+
+if TYPE_CHECKING:
+    from mcp_agent.core.context import AgentContext
 
 from mcp_agent.user_identity import normalize_user_id
-from mcp_agent.knowledge.builder import get_index, get_manifest
+from mcp_agent.knowledge.introspection import get_index, get_manifest
 from mcp_agent.knowledge.index import ToolboxIndex
-from mcp_agent.knowledge.models import CompactToolDescriptor, LLMToolDescriptor, ProviderSpec, ToolSpec
-from mcp_agent.knowledge.registry import get_tool_spec
-from mcp_agent.knowledge.load_io_specs import ensure_io_specs_loaded
+from mcp_agent.knowledge.types import CompactToolDescriptor, LLMToolDescriptor, ProviderSpec, ToolSpec
+from mcp_agent.knowledge.introspection import get_tool_spec, ensure_io_specs_loaded
 
 DetailLevel = Literal["names", "summary", "full"]
 
@@ -111,20 +119,20 @@ def _normalize_query(query: str | None) -> _Query:
 def _score_tool(tool: ToolSpec, query: _Query) -> int:
     """
     Score a tool against a query for relevance.
-    
+
     Prevents cross-provider contamination by hard-filtering when query explicitly
     mentions a provider (e.g., "gmail search" won't return Slack tools).
     """
     if not query.terms:
         return 2 if tool.available else 1
-    
+
     # Provider alignment check - prevent cross-provider contamination
     known_providers = ["gmail", "slack", "github", "google", "microsoft", "composio"]
     query_lower = query.raw.lower()
-    
+
     # Check if query mentions any specific provider
     mentioned_providers = [p for p in known_providers if p in query_lower]
-    
+
     if mentioned_providers:
         # Query explicitly mentions a provider
         tool_provider = tool.provider.lower()
@@ -136,7 +144,7 @@ def _score_tool(tool: ToolSpec, query: _Query) -> int:
     else:
         # No specific provider mentioned - start with neutral score
         score = 0
-    
+
     haystacks = {
         "name": tool.name.lower(),
         "provider": tool.provider.lower(),
@@ -161,3 +169,121 @@ def _score_tool(tool: ToolSpec, query: _Query) -> int:
     if score > 0 and tool.available:
         score += 1
     return score
+
+
+# ============================================================================
+# View generators for ReAct discovery flow
+# ============================================================================
+
+
+def get_inventory_view(context: AgentContext) -> Dict[str, Any]:
+    """
+    Generate inventory view: provider names + tool names only.
+
+    This is the initial state shown to the LLM before discovery.
+    Ultra-slim to minimize tokens.
+
+    Args:
+        context: Agent context with user_id
+
+    Returns:
+        Dict with providers list:
+        {
+            "providers": [
+                {"provider": "gmail", "tools": ["gmail_send_email", "gmail_search"]},
+                {"provider": "slack", "tools": ["slack_post_message", "slack_search_messages"]}
+            ]
+        }
+    """
+    from mcp_agent.registry import get_available_providers
+    from mcp_agent.actions import get_provider_action_map
+
+    action_map = get_provider_action_map()
+
+    providers = []
+    for provider_info in get_available_providers(context):
+        if not provider_info.get("authorized"):
+            continue
+
+        funcs = action_map.get(provider_info["provider"], ())
+        tool_names = [f.__name__ for f in funcs]
+
+        providers.append({
+            "provider": provider_info["provider"],
+            "tools": tool_names,
+        })
+
+    return {"providers": providers}
+
+
+def get_deep_view(context: AgentContext, tool_ids: List[str]) -> List[Dict[str, Any]]:
+    """
+    Generate deep view: detailed specs for specific tools.
+
+    This is returned after search to provide full tool documentation.
+    Aggressively debloated - only essential fields.
+
+    Args:
+        context: Agent context with user_id
+        tool_ids: List of tool IDs (e.g., ["gmail.gmail_search", "slack.slack_post_message"])
+
+    Returns:
+        List of tool specs (debloated):
+        [
+            {
+                "tool_id": "gmail.gmail_search",
+                "description": "...",
+                "input_params": {"required": [...], "optional": [...]},
+                "output_fields": ["messages[].messageId", "messages[].subject", ...],
+                "call_signature": "gmail.gmail_search(query, max_results)"
+            }
+        ]
+
+    REMOVED from output (compared to old search results):
+        - raw docstrings
+        - source paths/line numbers
+        - py_module/py_name (internal implementation details)
+        - verbose output_schema (replaced with flat output_fields)
+        - availability_reason, score, etc.
+    """
+    user_id = normalize_user_id(context.user_id)
+
+    # Parse tool_ids to extract providers
+    providers_needed = set()
+    for tool_id in tool_ids:
+        if "." in tool_id:
+            provider, _ = tool_id.split(".", 1)
+            providers_needed.add(provider)
+
+    # Search for each provider separately to get matching tools
+    all_tools = []
+    for provider in providers_needed:
+        results = search_tools(
+            query=None,
+            provider=provider,
+            detail_level="full",
+            limit=100,
+            user_id=user_id,
+        )
+        all_tools.extend(results)
+
+    # Filter to requested tool_ids
+    filtered_tools = []
+    for tool in all_tools:
+        tool_id = tool.get("tool_id") or f"{tool.get('provider')}.{tool.get('tool')}"
+        if tool_id in tool_ids:
+            filtered_tools.append(tool)
+
+    # Debloat: keep only essential fields
+    debloated = []
+    for tool in filtered_tools:
+        slim = {
+            "tool_id": tool.get("tool_id"),
+            "description": tool.get("description", ""),
+            "input_params": tool.get("input_params", {}),
+            "output_fields": tool.get("output_fields", []),
+            "call_signature": tool.get("call_signature", tool.get("tool_id", "")),
+        }
+        debloated.append(slim)
+
+    return debloated

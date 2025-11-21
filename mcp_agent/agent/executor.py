@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-from __future__ import annotations
-
 import ast
 import json
 import traceback
 from typing import TYPE_CHECKING, Any, Dict, List, Set
 
 from mcp_agent.execution.envelope import unwrap_nested_data
-from mcp_agent.execution.sandbox import run_python_plan
+from mcp_agent.execution.runner import run_python_plan
 from mcp_agent.knowledge.search import search_tools
-from mcp_agent.knowledge.builder import get_index
+from mcp_agent.knowledge.introspection import get_index
 from mcp_agent.actions.dispatcher import dispatch_tool
 from mcp_agent.utils.token_counter import count_json_tokens
 from mcp_agent.agent.observation_processor import summarize_observation

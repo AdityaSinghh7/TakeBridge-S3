@@ -1,13 +1,19 @@
-"""Knowledge builder: Generate tool metadata from action wrappers."""
+"""Tool introspection - Building tool metadata from action wrappers.
+
+Combines:
+- Toolbox builder (manifest generation from action wrappers)
+- IoToolSpec registry (for documentation/probing utilities)
+- Lazy loading of IO specifications
+"""
 
 from __future__ import annotations
 
 import ast
 import inspect
 import textwrap
+import threading
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Tuple, TYPE_CHECKING
-import threading
 
 from shared.streaming import emit_event
 
@@ -18,7 +24,7 @@ from mcp_agent.actions import get_provider_action_map
 from mcp_agent.registry.oauth import OAuthManager
 from mcp_agent.core.context import AgentContext
 from mcp_agent.user_identity import normalize_user_id
-from mcp_agent.knowledge.models import ParameterSpec, ProviderSpec, ToolSpec, ToolboxManifest
+from mcp_agent.knowledge.types import ParameterSpec, ProviderSpec, ToolSpec, ToolboxManifest, IoToolSpec
 from mcp_agent.knowledge.index import ToolboxIndex
 from mcp_agent.knowledge.utils import (
     action_signature,
@@ -31,6 +37,12 @@ from mcp_agent.knowledge.utils import (
     short_description,
     utcnow_iso,
 )
+
+
+# ============================================================================
+# Toolbox manifest building and caching
+# ============================================================================
+
 
 CacheKey = str
 
@@ -97,12 +109,10 @@ class ToolboxBuilder:
         self.generated_at = utcnow_iso()
 
     def build(self) -> ToolboxManifest:
-        # No initialization needed - registry is DB-backed
-        
         providers: List[ProviderSpec] = []
         for provider, funcs in sorted(get_provider_action_map().items()):
             providers.append(self._build_provider(provider, funcs))
-        
+
         current_version = 0  # Registry versioning removed
         payload = {
             "user_id": self.user_id,
@@ -122,13 +132,12 @@ class ToolboxBuilder:
     def _build_provider(
         self, provider: str, funcs: Tuple[Callable[..., object], ...]
     ) -> ProviderSpec:
-        # Use new context-based approach
         context = AgentContext.create(self.user_id)
         authorized = OAuthManager.is_authorized(context, provider)
 
         from mcp_agent.registry import is_provider_available
         registered = is_provider_available(context, provider)
-        
+
         try:
             mcp_url = OAuthManager.get_mcp_url(context, provider)
         except Exception:
@@ -159,7 +168,6 @@ class ToolboxBuilder:
         signature = inspect.signature(func)
         parameters = []
         for param in signature.parameters.values():
-            # CRITICAL: Filter out "self" and "context" to prevent TypeError
             if param.name in ("self", "context"):
                 continue
             annotation = format_annotation(param.annotation)
@@ -304,3 +312,75 @@ def get_index(
     """
     manifest = get_manifest(user_id=user_id)
     return ToolboxIndex.from_manifest(manifest)
+
+
+# ============================================================================
+# IoToolSpec registry (for documentation and probing utilities)
+# ============================================================================
+
+
+_TOOL_REGISTRY: Dict[str, IoToolSpec] = {}
+_IO_SPECS_LOADED: bool = False
+
+
+def _registry_key(provider: str, tool_name: str) -> str:
+    return f"{provider}.{tool_name}"
+
+
+def register_tool(spec: IoToolSpec) -> None:
+    """
+    Register a tool specification for use by probing and documentation helpers.
+
+    This registry is intentionally decoupled from the runtime toolbox index
+    used by the planner.
+    """
+    _TOOL_REGISTRY[_registry_key(spec.provider, spec.tool_name)] = spec
+
+
+def get_tool_spec(provider: str, tool_name: str) -> IoToolSpec | None:
+    """Get IoToolSpec from registry (used by documentation/probing utilities)."""
+    return _TOOL_REGISTRY.get(_registry_key(provider, tool_name))
+
+
+def all_tools() -> List[IoToolSpec]:
+    """Get all registered IoToolSpecs."""
+    return list(_TOOL_REGISTRY.values())
+
+
+def ensure_io_specs_loaded() -> None:
+    """
+    Lazily load output schemas from tool_output_schemas.generated.json.
+
+    Registers basic IoToolSpecs from action wrappers, then enriches them
+    with output schema information extracted from sample MCP responses.
+    """
+    global _IO_SPECS_LOADED
+    if _IO_SPECS_LOADED:
+        return
+
+    from .schema_store import load_output_schemas
+    from .types import ToolInputSpec, ToolOutputSpec
+
+    # Register basic IoToolSpecs from action wrappers
+    action_map: Dict[str, Tuple[Callable[..., object], ...]] = get_provider_action_map()
+    for provider, funcs in action_map.items():
+        for func in funcs:
+            doc = inspect.getdoc(func) or ""
+            sig = inspect.signature(func)
+
+            # Create minimal IoToolSpec
+            spec = IoToolSpec(
+                provider=provider,
+                tool_name=func.__name__,
+                python_name=func.__name__,
+                python_signature=str(sig),
+                description=doc.strip() or f"{provider}.{func.__name__}",
+                input_spec=ToolInputSpec(),
+                output_spec=ToolOutputSpec(),
+                func=None,
+            )
+            register_tool(spec)
+
+    # Load and merge output schemas from JSON
+    load_output_schemas()
+    _IO_SPECS_LOADED = True

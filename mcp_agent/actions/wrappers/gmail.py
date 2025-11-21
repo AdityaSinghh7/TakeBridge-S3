@@ -261,8 +261,9 @@ def gmail_search(
         "query": query,
         "max_results": max_results,
         "user_id": gmail_user_id,
+        "ids_only": False if ids_only is None else bool(ids_only),
     }
-    
+
     norm_labels = _norm_string_list(label_ids)
     if norm_labels:
         payload["label_ids"] = norm_labels
@@ -272,8 +273,6 @@ def gmail_search(
         payload["include_payload"] = bool(include_payload)
     if include_spam_trash is not None:
         payload["include_spam_trash"] = bool(include_spam_trash)
-    if ids_only is not None:
-        payload["ids_only"] = bool(ids_only)
     if verbose is not None:
         payload["verbose"] = bool(verbose)
     

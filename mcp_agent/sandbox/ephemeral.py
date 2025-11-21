@@ -36,7 +36,7 @@ def generate_ephemeral_toolbox(context: AgentContext, destination_dir: Path) -> 
         shutil.rmtree(base)
     servers_dir.mkdir(parents=True, exist_ok=True)
 
-    # Always provide thin compatibility shims for sandbox_py.__init__ and client.
+    # Generate core sandbox_py package modules
     _write_base_init(base)
     _write_helpers_module(base)
     _write_client_module(base / "client.py")
@@ -122,7 +122,7 @@ def safe_timestamp_sort_key(value):
 
 
 def _write_client_module(path: Path) -> None:
-    content = """from __future__ import annotations\n\nimport json\nfrom typing import Any, Sequence\n\nfrom mcp_agent.sandbox.runtime import (\n    ToolCallResult,\n    ToolCaller,\n    call_tool,\n    normalize_string_list,\n    redact_payload,\n    register_tool_caller,\n    sanitize_payload,\n)\n\nStructuredData = Any\nStringListInput = Any\n\n\n__all__ = [\n    \"ToolCallResult\",\n    \"ToolCaller\",\n    \"call_tool\",\n    \"register_tool_caller\",\n    \"sanitize_payload\",\n    \"normalize_string_list\",\n    \"redact_payload\",\n    \"serialize_structured_param\",\n    \"merge_recipient_lists\",\n]\n\n\n# Backwards compatible helpers extracted from the legacy sandbox_py package.\ndef serialize_structured_param(value: StructuredData) -> str | None:\n    if value in (None, \"\"):\n        return None\n    if isinstance(value, str):\n        return value\n    try:\n        return json.dumps(value)\n    except Exception as exc:\n        raise ValueError(f\"Failed to serialize structured payload: {exc}\") from exc\n\n\nStringList = list[str]\n\n\ndef merge_recipient_lists(base: StringListInput, extras: Sequence[str] | None = None) -> StringList:\n    combined = normalize_string_list(base) or []\n    if extras:\n        combined.extend(extra for extra in extras if extra)\n    deduped: StringList = []\n    seen = set()\n    for entry in combined:\n        lowered = entry.lower()\n        if lowered not in seen:\n            deduped.append(entry)\n            seen.add(lowered)\n    return deduped\n"""
+    content = """from __future__ import annotations\n\nfrom mcp_agent.sandbox.runtime import (\n    ToolCallResult,\n    ToolCaller,\n    call_tool,\n    normalize_string_list,\n    redact_payload,\n    register_tool_caller,\n    sanitize_payload,\n)\n\n\n__all__ = [\n    \"ToolCallResult\",\n    \"ToolCaller\",\n    \"call_tool\",\n    \"register_tool_caller\",\n    \"sanitize_payload\",\n    \"normalize_string_list\",\n    \"redact_payload\",\n]\n"""
     path.write_text(content, encoding="utf-8")
 
 

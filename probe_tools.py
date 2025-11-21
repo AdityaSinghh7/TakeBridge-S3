@@ -10,17 +10,18 @@ load_dotenv()
 sys.path.append(os.getcwd())
 
 from mcp_agent.core.context import AgentContext
-from mcp_agent.registry.manager import RegistryManager
+from mcp_agent.registry.crud import get_available_providers
+from mcp_agent.registry.crud import get_mcp_client
 
 
 async def probe() -> None:
     user_id = "dev-local"
     ctx = AgentContext.create(user_id)
-    registry = RegistryManager(ctx)
+    providers = get_available_providers(ctx)
 
     print(f"\n--- PROBING GMAIL (User: {user_id}) ---")
     try:
-        gmail_client = registry.get_mcp_client("gmail")
+        gmail_client = get_mcp_client(ctx, "gmail")
         print(f"DEBUG: Gmail URL -> {gmail_client.base_url}")
 
         res = await gmail_client.acall(
@@ -36,7 +37,7 @@ async def probe() -> None:
 
     print(f"\n--- PROBING SLACK (User: {user_id}) ---")
     try:
-        slack_client = registry.get_mcp_client("slack")
+        slack_client = get_mcp_client(ctx, "slack")
         print(f"DEBUG: Slack URL -> {slack_client.base_url}")
 
         res = await slack_client.acall(
