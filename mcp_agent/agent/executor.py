@@ -413,6 +413,87 @@ class ActionExecutor:
 
     # --- Sandbox execution ---
 
+    def _check_all_tools_succeeded(self, result: Any) -> bool:
+        """
+        Check if all tool calls within a sandbox result succeeded.
+
+        Uses heuristics to determine success:
+        1. If result contains explicit error → False
+        2. If result contains MCP tool envelopes, check those
+        3. If result doesn't have errors and has meaningful data → True
+
+        This helps the model determine if a sandbox execution fully completed
+        its intended operations without needing to re-run the same logic.
+
+        Args:
+            result: The sandbox execution result (typically a dict)
+
+        Returns:
+            True if ALL tool calls succeeded, False otherwise
+        """
+        if not isinstance(result, dict):
+            # If result isn't a dict, we can't determine success
+            return False
+
+        # Check for explicit error at top level
+        if "error" in result and result["error"]:
+            return False
+
+        found_any_tool_response = False
+        all_envelopes_succeeded = True
+
+        def check_dict(obj: Any) -> bool:
+            """Recursively check if all tool responses in obj are successful."""
+            nonlocal found_any_tool_response, all_envelopes_succeeded
+
+            if not isinstance(obj, dict):
+                return True
+
+            # Check if this looks like a canonical MCP tool response envelope
+            # All three fields must be present: successful, data, error
+            if all(key in obj for key in ["successful", "data", "error"]):
+                found_any_tool_response = True
+                # Check the 'successful' field (try different spellings for robustness)
+                is_successful = obj.get("successful") or obj.get("successfull")
+                if not is_successful:
+                    all_envelopes_succeeded = False
+                    return False
+
+            # Recursively check nested dicts and lists
+            for value in obj.values():
+                if isinstance(value, dict):
+                    if not check_dict(value):
+                        return False
+                elif isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, dict):
+                            if not check_dict(item):
+                                return False
+
+            return True
+
+        check_dict(result)
+
+        # Strategy:
+        # 1. If we found tool envelopes, use those to determine success
+        if found_any_tool_response:
+            return all_envelopes_succeeded
+
+        # 2. If no envelopes found but result has no errors and has data → assume success
+        # This handles cases where sandbox extracts specific fields rather than
+        # preserving full tool response envelopes
+        if not result.get("error"):
+            # Consider it successful if result has meaningful content
+            # (not just empty dicts/lists)
+            has_content = any(
+                v for k, v in result.items()
+                if k != "_all_tools_succeeded" and v not in (None, {}, [])
+            )
+            return has_content
+
+        # 3. Default to False if we can't determine
+        return False
+
     def _execute_sandbox(self, command: Dict[str, Any]) -> StepResult:
         """Execute Python code in sandbox with static validation."""
         code_body = command.get("code")
@@ -533,6 +614,10 @@ class ActionExecutor:
 
         normalized_result = unwrap_nested_data(sandbox_result.result)
         result_key = f"sandbox.{label}"
+
+        # Check if all tool calls within the sandbox succeeded
+        all_tools_succeeded = self._check_all_tools_succeeded(normalized_result)
+
         entry = {
             "type": "sandbox",
             "label": label,
@@ -542,6 +627,7 @@ class ActionExecutor:
             "error": sandbox_result.error,
             "result": normalized_result,
             "code_preview": code_body[:1200],
+            "all_tools_succeeded": all_tools_succeeded,
         }
         self.agent_state.append_raw_output(result_key, entry)
 
@@ -553,6 +639,9 @@ class ActionExecutor:
         if sandbox_result.success:
             observation, is_smart_summary = self._process_sandbox_observation(sandbox_result.result)
             preview = command.get("reasoning") or f"Sandbox '{label}' success"
+            # Add metadata about tool success to the observation
+            if isinstance(observation, dict) and not observation.get("error"):
+                observation["_all_tools_succeeded"] = all_tools_succeeded
             return StepResult(
                 type="sandbox",
                 success=True,

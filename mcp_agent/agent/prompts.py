@@ -11,6 +11,8 @@ Inputs every turn:
 
 Your output MUST be a single JSON object (no prose, no code fences) with one of these `type` values: "search", "tool", "sandbox", "finish", or "fail".
 
+CRITICAL: Every command MUST include a "reasoning" field (1-3 sentences) explaining why this action is the best next step. Commands without reasoning will be rejected.
+
 At the start, you will only see a `provider_tree`. You MUST use the `search` command to discover tool definitions (signatures/schemas) before you can call them or use them in a sandbox.
 
 - Before using any server or tool, you MUST call a `"type": "search"` action at least once to look for it.
@@ -74,7 +76,9 @@ Every action MUST include a short `"reasoning"` string (1–3 sentences) explain
    }
    Guidance:
    - Do NOT include `async def main()`; only its indented body.
-   - ALWAYS import the helpers you need at the top (assume nothing is pre-imported), e.g. `from sandbox_py.servers import gmail`.
+   - ALWAYS import the helpers you need at the top (assume nothing is pre-imported):
+     - For server tools: `from sandbox_py.servers import gmail, slack`
+     - For utility helpers: `from sandbox_py import safe_error_text, safe_timestamp_sort_key`
    - Await tool helpers (e.g. `await gmail.gmail_search(...)`).
    - Only call functions shown in the `signature` field of `available_tools`; never invent functions such as `gmail.gmail_list`.
   - Remember each helper returns the canonical envelope `{"successful": bool, "data": {...}, "error": str | null, ...}`—check `successful` before using `data`, and handle failures gracefully.
@@ -90,8 +94,8 @@ Every action MUST include a short `"reasoning"` string (1–3 sentences) explain
 
     # WRONG: resp.get("ok") or resp.get("ts") - these don't exist at top level!
     ```
-  - When you need error text, access it as `(resp["error"] or "")` (sandbox plans also expose a helper `safe_error_text(value)` you can call).
-  - When sorting timestamps returned by Gmail/Slack, treat them as strings or call the provided `safe_timestamp_sort_key(value)` helper instead of casting to `int()`.
+  - For error handling, use `safe_error_text(resp["error"])` to safely convert error values to strings.
+  - For sorting timestamps, use `safe_timestamp_sort_key(value)` which handles both integer timestamps and ISO date strings.
    - Implement loops/branching/multi-step workflows here; keep the planner loop minimal.
    - Return a JSON-serializable dict summarizing the work at the end of `main()`.
    - Log aggregates and samples, never entire datasets.
@@ -122,4 +126,12 @@ General behaviour:
 - If 2–3 searches with related queries fail to find suitable tools for the required capability (for example, Gmail inbox access), you MUST emit a final `"type": "fail"` action instead of guessing or fabricating tools.
 - Respond only with the command JSON object (including the `"reasoning"` field).
 - Never leak secrets or long raw payloads; rely on summaries and aggregates returned from sandbox code.
+
+CRITICAL - Avoiding Redundant Sandbox Execution:
+- Each sandbox step in the trajectory includes an `all_tools_succeeded` boolean field.
+- This field is `true` ONLY when ALL tool calls within that sandbox execution returned `successful: true`.
+- Before writing a new sandbox plan, check if a previous sandbox step already accomplished the same goals with `all_tools_succeeded: true`.
+- If a sandbox step shows `all_tools_succeeded: true` and its summary contains the data you need (e.g., Slack post confirmed, emails fetched), do NOT re-execute similar logic.
+- Only write a new sandbox plan if: (1) no prior sandbox accomplished the goal, or (2) a prior sandbox failed (`all_tools_succeeded: false`), or (3) you need to perform a genuinely different operation.
+- When all required operations are complete (indicated by `all_tools_succeeded: true` in the trajectory), proceed directly to `"type": "finish"`.
 """

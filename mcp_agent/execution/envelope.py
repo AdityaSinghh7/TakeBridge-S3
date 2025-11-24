@@ -36,13 +36,22 @@ def unwrap_nested_data(value: Any) -> Any:
 def unwrap_composio_content(data: Any) -> Any:
     """
     Detect and unwrap Composio's double-encoded response format.
-    
+
     Composio returns: {"content": [{"text": "{\"actual\": \"data\"}"}], ...}
     This function parses the stringified JSON and returns the actual data.
+
+    Also checks the isError flag to detect backend errors even when the outer
+    envelope indicates success.
     """
+    import os
+    import sys
+
     if not isinstance(data, dict):
         return data
-    
+
+    # Check if Composio flagged this as an error (even if outer envelope succeeded)
+    is_error = data.get("isError", False)
+
     content = data.get("content")
     if isinstance(content, list) and len(content) > 0:
         item = content[0]
@@ -51,6 +60,23 @@ def unwrap_composio_content(data: Any) -> Any:
             if isinstance(text, str) and (text.startswith("{") or text.startswith("[")):
                 try:
                     parsed = json.loads(text)
+
+                    # Debug logging
+                    if os.getenv("MCP_DEBUG_UNWRAP") == "1":
+                        print(f"\n[DEBUG] unwrap_composio_content parsed:", file=sys.stderr)
+                        print(f"  isError flag: {is_error}", file=sys.stderr)
+                        print(f"  Type: {type(parsed)}", file=sys.stderr)
+                        if isinstance(parsed, dict):
+                            print(f"  Keys: {list(parsed.keys())}", file=sys.stderr)
+                            print(f"  successful/successfull: {parsed.get('successful')}/{parsed.get('successfull')}", file=sys.stderr)
+                            if "data" in parsed:
+                                inner_data = parsed["data"]
+                                print(f"  data type: {type(inner_data)}", file=sys.stderr)
+                                if isinstance(inner_data, dict):
+                                    print(f"  data keys: {list(inner_data.keys())}", file=sys.stderr)
+                                    if "messages" in inner_data:
+                                        msgs = inner_data["messages"]
+                                        print(f"  messages count: {len(msgs) if isinstance(msgs, list) else 'N/A'}", file=sys.stderr)
 
                     if isinstance(parsed, dict) and "data" in parsed:
                         is_envelope = any(
@@ -66,14 +92,26 @@ def unwrap_composio_content(data: Any) -> Any:
                         if is_envelope:
                             s1 = parsed.get("successfull")
                             s2 = parsed.get("successful")
+
+                            # If isError flag is set OR inner response failed, return full envelope
+                            if is_error or (s1 is False) or (s2 is False):
+                                if os.getenv("MCP_DEBUG_UNWRAP") == "1":
+                                    print(f"  → Returning full envelope (error detected)", file=sys.stderr)
+                                return parsed
+
+                            # Success case: extract data
                             if (s1 is not False) and (s2 is not False):
-                                return parsed["data"]
+                                extracted_data = parsed["data"]
+                                if os.getenv("MCP_DEBUG_UNWRAP") == "1":
+                                    print(f"  → Extracting data from envelope", file=sys.stderr)
+                                return extracted_data
+
                             return parsed
 
                     return parsed
                 except (ValueError, TypeError, json.JSONDecodeError):
                     pass
-    
+
     return data
 
 

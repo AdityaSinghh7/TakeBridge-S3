@@ -3,6 +3,10 @@ from typing import Any, Optional
 from fastapi.responses import JSONResponse, RedirectResponse
 from urllib.parse import quote_plus
 
+import os
+from shared.db.engine import session_scope
+from shared.db import crud
+from mcp_agent.core.context import AgentContext
 from mcp_agent.registry.oauth import (
     OAuthManager,
     COMPOSIO_HOST as _COMPOSIO_API_BASE,
@@ -10,13 +14,10 @@ from mcp_agent.registry.oauth import (
     COMPOSIO_API_V3 as _COMPOSIO_API_V3,
 )
 from mcp_agent.user_identity import normalize_user_id
-from mcp_agent.knowledge.builder import get_manifest as get_toolbox_manifest
+from mcp_agent.knowledge.introspection import get_manifest as get_toolbox_manifest
 from mcp_agent.knowledge.search import search_tools as toolbox_search_tools, list_providers as toolbox_list_providers
 from mcp_agent.knowledge.utils import safe_filename
 from shared.settings import build_redirect, OAUTH_REDIRECT_BASE
-import os
-from shared.db.engine import session_scope
-from shared.db import crud
 from mcp_agent.mcp_client import MCPClient
 from computer_use_agent.tools.mcp_action_registry import sync_registered_actions
 
@@ -52,17 +53,20 @@ def start(
 ):
     provider = _normalize_provider(provider)
     user_id = _require_user_id(request)
+    context = AgentContext.create(user_id)
     # Build redirect deterministically from environment configuration
     redirect_uri = build_redirect(provider)
-    if redirect_success or redirect_error:
-        OAuthManager.set_redirect_hints(
-            provider,
-            user_id,
-            success_url=redirect_success,
-            error_url=redirect_error,
-        )
     try:
-        url = OAuthManager.start_oauth(provider, user_id, redirect_uri)
+        # Hint redirect destinations for post-auth flows (optional)
+        if redirect_success or redirect_error:
+            OAuthManager.set_redirect_hints(
+                provider,
+                user_id,
+                success_url=redirect_success,
+                error_url=redirect_error,
+            )
+
+        url = OAuthManager.start_oauth(context, provider, redirect_uri)
         return JSONResponse({"authorization_url": url})
     except Exception as e:
         # Surface likely misconfig or connectivity problems clearly
@@ -79,24 +83,35 @@ def start(
 def callback(provider: str, request: Request, code: Optional[str] = None, state: Optional[str] = None):
     provider = _normalize_provider(provider)
     user_id = _require_user_id(request)
-    try:
-        OAuthManager.handle_callback(provider, user_id, code or "", state or "")
-        # Pull latest connected account + MCP server details explicitly
-        OAuthManager.sync(provider, user_id, force=True)
-        # Make newly available clients & actions discoverable to Worker
-        # Registry is DB-backed, no manual refresh needed
-        sync_registered_actions(user_id)
-        # Redirect to preferred UI destination if provided
-        redirect_url = OAuthManager.consume_redirect_hint(provider, user_id, success=True)
-        target = redirect_url or f"/settings/integrations?connected={provider}"
-        return RedirectResponse(url=target)
-    except Exception as e:  # pragma: no cover - safety
-        error_redirect = OAuthManager.consume_redirect_hint(provider, user_id, success=False)
-        if error_redirect:
-            target = _attach_error(error_redirect, str(e))
-            if target:
-                return RedirectResponse(url=target, status_code=302)
-        raise HTTPException(400, f"OAuth failed: {e}")
+    context = AgentContext.create(user_id)
+    qp = request.query_params
+    ca_id = qp.get("connectedAccountId")
+    status = qp.get("status")
+
+    # Phase 2: finalize if Composio already redirected with connectedAccountId
+    if ca_id:
+        if status and status != "success":
+            raise HTTPException(400, f"Composio reported status={status}")
+        try:
+            OAuthManager.finalize_connected_account(context, provider, ca_id)
+            sync_registered_actions(user_id)
+            redirect_url = OAuthManager.consume_redirect_hint(provider, user_id, success=True)
+            target = redirect_url or f"/settings/integrations?connected={provider}"
+            return RedirectResponse(url=target, status_code=302)
+        except Exception as e:  # pragma: no cover - safety
+            error_redirect = OAuthManager.consume_redirect_hint(provider, user_id, success=False)
+            if error_redirect:
+                target = _attach_error(error_redirect, str(e))
+                if target:
+                    return RedirectResponse(url=target, status_code=302)
+            raise HTTPException(400, f"OAuth failed: {e}")
+
+    # Phase 1: forward code/state to Composio's callback endpoint
+    qs = request.url.query
+    callback_url = f"{_COMPOSIO_API_V3}/toolkits/auth/callback"
+    url = callback_url if not qs else f"{callback_url}?{qs}"
+    return RedirectResponse(url=url, status_code=302)
+    
 
 
 @router.get("/providers")
@@ -188,16 +203,16 @@ def search_tools(
 @router.get("/status")
 def status(request: Request):
     user_id = _require_user_id(request)
-    # Rehydrate from Composio on-demand so status survives restarts
-    for prov in ("slack", "gmail"):
-        try:
-            OAuthManager.sync(prov, user_id, force=False)
-        except Exception:
-            pass
+    context = AgentContext.create(user_id)
+    slack = OAuthManager.auth_status(context, "slack")
+    gmail = OAuthManager.auth_status(context, "gmail")
     return {
-        "slack": OAuthManager.is_authorized("slack", user_id),
-        "gmail": OAuthManager.is_authorized("gmail", user_id),
-        # extend with other providers when enabled
+        "slack": slack["authorized"],
+        "gmail": gmail["authorized"],
+        "details": {
+            "slack": slack,
+            "gmail": gmail,
+        },
     }
 
 
@@ -206,21 +221,11 @@ def live_status(provider: str, request: Request):
     """Force-refresh provider status directly from Composio before responding."""
     provider = _normalize_provider(provider)
     user_id = _require_user_id(request)
-    try:
-        OAuthManager.sync(provider, user_id, force=True)
-    except Exception as exc:  # pragma: no cover - upstream guard
-        raise HTTPException(502, f"Composio sync failed: {exc}")
+    context = AgentContext.create(user_id)
 
-    with session_scope() as db:
-        ca_id, ac_id, url, headers = crud.get_active_context_for_provider(db, user_id, provider)
-    return {
-        "provider": provider,
-        "authorized": bool(url),
-        "connected_account_id": ca_id,
-        "auth_config_id": ac_id,
-        "mcp_url": url,
-        "has_auth_headers": bool(headers),
-    }
+    status = OAuthManager.auth_status(context, provider)
+    status.update({"provider": provider})
+    return status
 
 
 @router.post("/{provider}/finalize")
@@ -232,13 +237,12 @@ def finalize(provider: str, payload: dict, request: Request):
       - connected_account_id (str): e.g., "ca_..."
     """
     user_id = _require_user_id(request)
+    context = AgentContext.create(user_id)
     ca_id = payload.get("connected_account_id") or payload.get("id") or payload.get("ca_id")
     if not ca_id:
         raise HTTPException(400, "connected_account_id is required")
     try:
-        summary = OAuthManager.finalize_connected_account(provider, user_id, ca_id)
-        # Explicitly sync to fetch MCP connection details now that we know CA id
-        OAuthManager.sync(provider, user_id, force=True)
+        summary = OAuthManager.finalize_connected_account(context, provider, ca_id)
         # Registry is DB-backed, no manual refresh needed
         sync_registered_actions(user_id)
         return summary
@@ -383,8 +387,9 @@ def debug_mcp_client(request: Request, provider: str, test_tool: str | None = No
     """
     provider = _normalize_provider(provider)
     user_id = _require_user_id(request)
-    url = OAuthManager.get_mcp_url(user_id, provider)
-    hdrs = OAuthManager.get_headers(user_id, provider)
+    context = AgentContext.create(user_id)
+    url = OAuthManager.get_mcp_url(context, provider)
+    hdrs = OAuthManager.get_headers(context, provider)
     if not url:
         return {"ok": False, "error": "no mcp_url", "provider": provider}
     client = MCPClient(url, headers=hdrs)

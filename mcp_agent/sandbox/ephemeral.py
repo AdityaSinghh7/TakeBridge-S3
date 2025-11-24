@@ -73,7 +73,7 @@ def _is_tool_available(context: AgentContext, provider: str, tool: str) -> bool:
 
 
 def _write_base_init(base: Path) -> None:
-    content = """from . import client, servers\n\n__all__ = [\"client\", \"servers\"]\n"""
+    content = """from . import client, servers, helpers\nfrom .helpers import safe_error_text, safe_timestamp_sort_key\n\n__all__ = [\"client\", \"servers\", \"helpers\", \"safe_error_text\", \"safe_timestamp_sort_key\"]\n"""
     (base / "__init__.py").write_text(content, encoding="utf-8")
 
 

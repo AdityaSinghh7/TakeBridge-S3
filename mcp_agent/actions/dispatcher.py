@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, Dict
 
 from mcp_agent.core.exceptions import ToolNotFoundError
 from mcp_agent.types import ToolInvocationResult
+from .provider_loader import discover_providers, load_action_map
 
 if TYPE_CHECKING:
     from mcp_agent.core.context import AgentContext
@@ -16,30 +17,8 @@ if TYPE_CHECKING:
 
 def get_provider_action_map():
     """Get mapping of provider -> action functions."""
-    from .wrappers import gmail, slack
-    import inspect
-
-    result = {}
-
-    # Collect gmail actions
-    gmail_funcs = []
-    for name, obj in inspect.getmembers(gmail):
-        if callable(obj) and not name.startswith('_') and hasattr(obj, '__module__'):
-            if 'gmail' in obj.__module__:
-                gmail_funcs.append(obj)
-    if gmail_funcs:
-        result['gmail'] = tuple(gmail_funcs)
-
-    # Collect slack actions
-    slack_funcs = []
-    for name, obj in inspect.getmembers(slack):
-        if callable(obj) and not name.startswith('_') and hasattr(obj, '__module__'):
-            if 'slack' in obj.__module__:
-                slack_funcs.append(obj)
-    if slack_funcs:
-        result['slack'] = tuple(slack_funcs)
-
-    return result
+    providers = discover_providers()
+    return load_action_map(providers)
 
 
 def dispatch_tool(
@@ -92,4 +71,3 @@ def dispatch_tool(
     
     # Call wrapper with context and payload
     return wrapper_func(context, **payload)
-

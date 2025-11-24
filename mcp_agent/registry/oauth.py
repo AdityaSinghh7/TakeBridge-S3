@@ -38,6 +38,32 @@ COMPOSIO_REDIRECT = os.getenv(
 AUTH_CONFIG_IDS = {
     "gmail": os.getenv("COMPOSIO_GMAIL_AUTH_CONFIG_ID", ""),
     "slack": os.getenv("COMPOSIO_SLACK_AUTH_CONFIG_ID", ""),
+    "shopify": os.getenv("COMPOSIO_SHOPIFY_AUTH_CONFIG_ID", ""),
+    "stripe": os.getenv("COMPOSIO_STRIPE_AUTH_CONFIG_ID", ""),
+    "zendesk": os.getenv("COMPOSIO_ZENDESK_AUTH_CONFIG_ID", ""),
+    "gorgias": os.getenv("COMPOSIO_GORGIAS_AUTH_CONFIG_ID", ""),
+    "googledrive": os.getenv("COMPOSIO_GOOGLEDRIVE_AUTH_CONFIG_ID", ""),
+    "airtable": os.getenv("COMPOSIO_AIRTABLE_AUTH_CONFIG_ID", ""),
+    "amplitude": os.getenv("COMPOSIO_AMPLITUDE_AUTH_CONFIG_ID", ""),
+    "apollo": os.getenv("COMPOSIO_APOLLO_AUTH_CONFIG_ID", ""),
+    "calendly": os.getenv("COMPOSIO_CALENDLY_AUTH_CONFIG_ID", ""),
+    "docusign": os.getenv("COMPOSIO_DOCUSIGN_AUTH_CONFIG_ID", ""),
+    "dropbox": os.getenv("COMPOSIO_DROPBOX_AUTH_CONFIG_ID", ""),
+    "figma": os.getenv("COMPOSIO_FIGMA_AUTH_CONFIG_ID", ""),
+    "github": os.getenv("COMPOSIO_GITHUB_AUTH_CONFIG_ID", ""),
+    "google_admin": os.getenv("COMPOSIO_GOOGLE_ADMIN_AUTH_CONFIG_ID", ""),
+    "googlesheets": os.getenv("COMPOSIO_GOOGLESHEETS_AUTH_CONFIG_ID", ""),
+    "googleslides": os.getenv("COMPOSIO_GOOGLESLIDES_AUTH_CONFIG_ID", ""),
+    "intercom": os.getenv("COMPOSIO_INTERCOM_AUTH_CONFIG_ID", ""),
+    "jira": os.getenv("COMPOSIO_JIRA_AUTH_CONFIG_ID", ""),
+    "klaviyo": os.getenv("COMPOSIO_KLAVIYO_AUTH_CONFIG_ID", ""),
+    "mailchimp": os.getenv("COMPOSIO_MAILCHIMP_AUTH_CONFIG_ID", ""),
+    "notion": os.getenv("COMPOSIO_NOTION_AUTH_CONFIG_ID", ""),
+    "pagerduty": os.getenv("COMPOSIO_PAGERDUTY_AUTH_CONFIG_ID", ""),
+    "quickbooks": os.getenv("COMPOSIO_QUICKBOOKS_AUTH_CONFIG_ID", ""),
+    "salesforce": os.getenv("COMPOSIO_SALESFORCE_AUTH_CONFIG_ID", ""),
+    "snowflake": os.getenv("COMPOSIO_SNOWFLAKE_AUTH_CONFIG_ID", ""),
+    "xero": os.getenv("COMPOSIO_XERO_AUTH_CONFIG_ID", ""),
 }
 
 
@@ -65,6 +91,91 @@ class OAuthManager:
     All methods now accept AgentContext for multi-tenant operations.
     DB is the source of truth - no in-memory state.
     """
+    
+    # In-memory redirect hints (optional)
+    _redirect_hints: Dict[tuple[str, str], Dict[str, str | None]] = {}
+
+    @classmethod
+    def set_redirect_hints(
+        cls, provider: str, user_id: str, *, success_url: str | None = None, error_url: str | None = None
+    ) -> None:
+        """Cache redirect hints for post-OAuth success/error redirects."""
+        key = (normalize_user_id(user_id), provider.lower())
+        cls._redirect_hints[key] = {"success": success_url, "error": error_url}
+
+    @classmethod
+    def consume_redirect_hint(cls, provider: str, user_id: str, success: bool) -> str | None:
+        """Pop and return any cached redirect hint for this provider/user."""
+        key = (normalize_user_id(user_id), provider.lower())
+        hints = cls._redirect_hints.pop(key, None) or {}
+        return hints.get("success" if success else "error")
+
+    @classmethod
+    def sync(cls, provider: str, user_id: str | Any, force: bool = False) -> None:
+        """
+        Compatibility no-op: legacy callers expect a sync hook.
+        
+        The current implementation persists OAuth state immediately during
+        finalize, so no explicit sync is required.
+        """
+        return None
+
+    @classmethod
+    def auth_status(cls, context: "AgentContext", provider: str) -> Dict[str, Any]:
+        """
+        Compute provider auth status with refresh awareness.
+
+        Returns:
+            {
+              "authorized": bool,
+              "connected_account_id": str | None,
+              "auth_config_id": str | None,
+              "mcp_url": str | None,
+              "refresh_required": bool,
+              "reason": str | None,
+            }
+        """
+        from mcp_agent.user_identity import normalize_user_id
+        user_id = normalize_user_id(context.user_id)
+
+        with context.get_db() as db:
+            ca_id, ac_id, url, headers = crud.get_active_context_for_provider(db, user_id, provider)
+
+        if not url or not ca_id:
+            return {
+                "authorized": False,
+                "connected_account_id": ca_id,
+                "auth_config_id": ac_id,
+                "mcp_url": url,
+                "refresh_required": False,
+                "reason": "missing mcp_url" if not url else "missing connected_account_id",
+            }
+
+        refresh_required = False
+        reason: str | None = None
+
+        try:
+            detail = _get_connected_account(ca_id)
+            status = (detail.get("status") or "").upper()
+            if status and status != "ACTIVE":
+                refresh_required = True
+                reason = f"connected_account_status={status}"
+            if detail.get("auth_refresh_required"):
+                refresh_required = True
+                reason = reason or "auth_refresh_required"
+        except Exception as exc:
+            reason = f"status_check_failed: {exc}"
+
+        authorized = bool(url and ca_id) and not refresh_required
+
+        return {
+            "authorized": authorized,
+            "connected_account_id": ca_id,
+            "auth_config_id": ac_id,
+            "mcp_url": url,
+            "refresh_required": refresh_required,
+            "reason": reason,
+        }
     
     @classmethod
     def start_oauth(
@@ -550,4 +661,3 @@ def _ensure_account_bound_url(url: str, user_id: str, ca_id: str) -> str:
         return urlunparse((pr.scheme, pr.netloc, pr.path, pr.params, new_q, pr.fragment))
     except Exception:
         return url
-

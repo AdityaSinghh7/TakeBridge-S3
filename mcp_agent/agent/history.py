@@ -164,7 +164,10 @@ class ExecutionHistory:
                 entry["tool_id"] = tool_id
                 entry["summary"] = step.output  # Already summarized by executor
             elif step.type == "sandbox":
-                entry["summary"] = step.output  # Already summarized by executor
+                entry["summary"] = step.output  # Keep full output for sandbox steps
+                # Add explicit flag indicating if all tool calls succeeded
+                if isinstance(step.output, dict):
+                    entry["all_tools_succeeded"] = step.output.get("_all_tools_succeeded", False)
             elif step.type in ("finish", "fail"):
                 entry["summary"] = step.preview or "Step completed"
             else:

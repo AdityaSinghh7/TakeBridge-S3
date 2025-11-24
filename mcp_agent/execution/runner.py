@@ -59,8 +59,9 @@ def run_python_plan(
         raise RuntimeError("Unable to determine python executable for sandbox run.")
     
     # Ensure environment for providers
+    from mcp_agent.actions import SUPPORTED_PROVIDERS
     from mcp_agent.env_sync import ensure_env_for_provider
-    for provider in ("gmail", "slack"):
+    for provider in SUPPORTED_PROVIDERS:
         ensure_env_for_provider(context.user_id, provider)
     
     # Build plan source

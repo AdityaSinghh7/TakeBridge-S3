@@ -73,7 +73,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = run(task, user_id=user_id, model=args.model)
     except Exception as exc:  # pragma: no cover - runtime guardrail
+        import traceback
         print(f"[error] Planner execution failed: {exc}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         return 1
 
     if args.pretty:

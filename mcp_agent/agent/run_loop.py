@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from mcp_agent.core.context import AgentContext
+from mcp_agent.actions import SUPPORTED_PROVIDERS
 from mcp_agent.env_sync import ensure_env_for_provider
 from mcp_agent.user_identity import normalize_user_id
 from mcp_agent.sandbox.ephemeral import generate_ephemeral_toolbox
@@ -423,7 +424,7 @@ def execute_mcp_task(
             budget=budget or Budget(),
             extra_context=extra_context or {},
         )
-        for provider in ("gmail", "slack"):
+        for provider in SUPPORTED_PROVIDERS:
             ensure_env_for_provider(normalized_user, provider)
         state.record_event(
             "mcp.planner.started",

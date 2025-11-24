@@ -4,6 +4,7 @@ import asyncio
 import os
 from typing import Any, Dict, TYPE_CHECKING
 
+from mcp_agent.actions import SUPPORTED_PROVIDERS
 from mcp_agent.user_identity import normalize_user_id, DEV_USER_ENV_VAR, DEV_DEFAULT_USER_ID
 from mcp_agent.env_sync import ensure_env_for_provider
 
@@ -29,7 +30,7 @@ def register_default_tool_caller() -> None:
     except Exception:
         eager_user = None
     else:
-        for provider in ("gmail", "slack"):
+        for provider in SUPPORTED_PROVIDERS:
             ensure_env_for_provider(eager_user, provider)
 
     async def _caller(provider: str, tool: str, payload: Dict[str, Any]) -> "ToolCallResult":

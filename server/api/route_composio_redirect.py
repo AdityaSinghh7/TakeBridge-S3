@@ -2,6 +2,7 @@ from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse, JSONResponse, HTMLResponse
 from urllib.parse import quote_plus
 
+from mcp_agent.core.context import AgentContext
 from mcp_agent.registry.oauth import COMPOSIO_API_V3, OAuthManager
 from mcp_agent.user_identity import normalize_user_id
 from computer_use_agent.tools.mcp_action_registry import sync_registered_actions
@@ -58,13 +59,9 @@ def composio_redirect(request: Request):
             raise HTTPException(400, f"Composio reported status={status}")
         user_id = _require_user_id(request)
         provider = (app_name or "gmail").lower()
+        context = AgentContext.create(user_id=user_id)
         try:
-            OAuthManager.finalize_connected_account(provider, user_id, ca_id)
-            # Ensure local cache pulls latest MCP details for this account
-            try:
-                OAuthManager.sync(provider, user_id, force=True)
-            except Exception:
-                pass
+            OAuthManager.finalize_connected_account(context, provider, ca_id)
             # Registry is DB-backed, no manual refresh needed
             sync_registered_actions(user_id)
         except Exception as e:

@@ -1,39 +1,32 @@
 """Actions layer - Tool wrappers and dispatching."""
 
-from .dispatcher import dispatch_tool
+from .provider_loader import discover_providers, load_action_map
 
-# Static list of supported provider modules. Update this when adding/removing
-# wrappers in ``mcp_agent/actions/wrappers``.
-SUPPORTED_PROVIDERS: tuple[str, ...] = ("gmail", "slack")
+# Discover providers dynamically based on wrapper modules
+SUPPORTED_PROVIDERS: tuple[str, ...] = discover_providers()
+
 
 # Keep the action map export for compatibility
 def get_provider_action_map():
     """Get mapping of provider -> action functions."""
-    import importlib
-    import inspect
-
-    result = {}
-
-    for provider in SUPPORTED_PROVIDERS:
-        module = importlib.import_module(f"mcp_agent.actions.wrappers.{provider}")
-        funcs = []
-        for name, obj in inspect.getmembers(module):
-            if callable(obj) and not name.startswith("_") and hasattr(obj, "__module__"):
-                if provider in obj.__module__:
-                    funcs.append(obj)
-        if funcs:
-            result[provider] = tuple(funcs)
-
-    return result
+    return load_action_map(SUPPORTED_PROVIDERS)
 
 
-def iter_available_action_functions():
-    """Iterate over all available action functions."""
+def iter_available_action_functions(user_id=None):
+    """
+    Iterate over available action functions, yielding (provider, function).
+
+    The optional user_id is accepted for backward compatibility; it is
+    currently ignored because availability is already encoded in the wrapper
+    registration.
+    """
     action_map = get_provider_action_map()
     for provider, funcs in action_map.items():
         for func in funcs:
-            yield func
+            yield provider, func
 
+
+from .dispatcher import dispatch_tool
 
 __all__ = [
     "dispatch_tool",

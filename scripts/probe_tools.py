@@ -27,7 +27,7 @@ async def probe() -> None:
         res = await gmail_client.acall(
             "GMAIL_FETCH_EMAILS",
             {
-                "query": "is:unread",
+                "query": "in:inbox",
                 "max_results": 1,
             },
         )

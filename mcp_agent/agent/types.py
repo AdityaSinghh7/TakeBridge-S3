@@ -35,4 +35,3 @@ class MCPTaskResult(TypedDict, total=False):
     budget_usage: dict[str, Any]
     logs: list[dict[str, Any]]
     steps: list[dict[str, Any]]
-    error_code: Optional[str] = None

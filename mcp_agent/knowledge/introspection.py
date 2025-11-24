@@ -107,11 +107,16 @@ class ToolboxBuilder:
     def __init__(self, *, user_id: str):
         self.user_id = normalize_user_id(user_id)
         self.generated_at = utcnow_iso()
+        self.context = AgentContext.create(self.user_id)
 
     def build(self) -> ToolboxManifest:
         providers: List[ProviderSpec] = []
         for provider, funcs in sorted(get_provider_action_map().items()):
-            providers.append(self._build_provider(provider, funcs))
+            status = OAuthManager.auth_status(self.context, provider)
+            # Only include providers that are authorized and not refresh-blocked
+            if not status.get("authorized"):
+                continue
+            providers.append(self._build_provider(provider, funcs, status))
 
         current_version = 0  # Registry versioning removed
         payload = {
@@ -130,18 +135,17 @@ class ToolboxBuilder:
         )
 
     def _build_provider(
-        self, provider: str, funcs: Tuple[Callable[..., object], ...]
+        self,
+        provider: str,
+        funcs: Tuple[Callable[..., object], ...],
+        status: Dict[str, object],
     ) -> ProviderSpec:
-        context = AgentContext.create(self.user_id)
-        authorized = OAuthManager.is_authorized(context, provider)
+        authorized = bool(status.get("authorized"))
+        mcp_url = status.get("mcp_url") if isinstance(status, dict) else None
 
         from mcp_agent.registry import is_provider_available
-        registered = is_provider_available(context, provider)
+        registered = authorized and is_provider_available(self.context, provider)
 
-        try:
-            mcp_url = OAuthManager.get_mcp_url(context, provider)
-        except Exception:
-            mcp_url = None
         configured = bool(mcp_url) or registered
         actions = [self._build_tool(provider, fn, authorized, registered) for fn in funcs]
         return ProviderSpec(
@@ -260,6 +264,16 @@ def get_manifest(
     """Return (and cache) the toolbox manifest for a user."""
     user = normalize_user_id(user_id)
     key = user
+    # Helper to compute currently authorized providers (refresh-aware)
+    def _current_authorized_set() -> set[str]:
+        ctx = AgentContext.create(user)
+        auth = set()
+        for prov in get_provider_action_map().keys():
+            status = OAuthManager.auth_status(ctx, prov)
+            if status.get("authorized"):
+                auth.add(prov)
+        return auth
+
     with _MANIFEST_CACHE_LOCK:
         entry = _MANIFEST_CACHE.get(key)
         needs_refresh = (
@@ -267,6 +281,11 @@ def get_manifest(
             or entry is None
             or entry.manifest.fingerprint is None
         )
+        if not needs_refresh and entry is not None:
+            cached_auth = {p.provider for p in entry.manifest.providers if p.authorized}
+            current_auth = _current_authorized_set()
+            if cached_auth != current_auth:
+                needs_refresh = True
 
     if needs_refresh:
         builder = ToolboxBuilder(user_id=user)
