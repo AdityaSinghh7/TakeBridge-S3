@@ -9,7 +9,7 @@ Manages the step-by-step trajectory of agent execution, including:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional
 
 StepType = Literal["tool", "sandbox", "search", "finish", "fail"]
@@ -17,31 +17,27 @@ StepType = Literal["tool", "sandbox", "search", "finish", "fail"]
 
 @dataclass
 class AgentStep:
-    """Single step in agent execution history."""
+    """Canonical step in agent execution history."""
 
-    index: int
-    type: StepType
-    command: Dict[str, Any]
+    action_step: int
+    action_type: StepType
     success: bool
-    preview: str
-    result_key: Optional[str] = None
+    action_reasoning: str
+    action_input: Dict[str, Any]
+    action_outcome: Dict[str, Any]
     error: Optional[str] = None
-    output: Any = None
-    is_summary: bool = False
     is_smart_summary: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict for serialization."""
         return {
-            "index": self.index,
-            "type": self.type,
-            "command": self.command,
+            "action_step": self.action_step,
+            "action_type": self.action_type,
             "success": self.success,
-            "preview": self.preview,
-            "result_key": self.result_key,
+            "action_reasoning": self.action_reasoning,
+            "action_input": self.action_input,
+            "action_outcome": self.action_outcome,
             "error": self.error,
-            "output": self.output,
-            "is_summary": self.is_summary,
             "is_smart_summary": self.is_smart_summary,
         }
 
@@ -78,42 +74,23 @@ class ExecutionHistory:
     def record_step(
         self,
         *,
-        type: StepType,
-        command: Dict[str, Any],
+        action_type: StepType,
         success: bool,
-        preview: str,
-        result_key: Optional[str] = None,
+        action_reasoning: str,
+        action_input: Dict[str, Any],
+        action_outcome: Dict[str, Any],
         error: Optional[str] = None,
-        output: Any = None,
-        is_summary: bool = False,
         is_smart_summary: bool = False,
     ) -> AgentStep:
-        """Add a step to execution history.
-
-        Args:
-            type: Type of step (tool, sandbox, search, finish, fail)
-            command: Command dict that was executed
-            success: Whether the step succeeded
-            preview: Short preview text (will be truncated to 200 chars)
-            result_key: Optional key for storing raw output
-            error: Optional error message if step failed
-            output: Actual output/observation from the step
-            is_summary: Whether this is a summarized step
-            is_smart_summary: Whether this is a smart summary
-
-        Returns:
-            The created AgentStep
-        """
+        """Add a canonical step to execution history."""
         step = AgentStep(
-            index=len(self._history),
-            type=type,
-            command=command,
+            action_step=len(self._history),
+            action_type=action_type,
             success=success,
-            preview=preview[:200],  # Truncate long previews
-            result_key=result_key,
+            action_reasoning=action_reasoning,
+            action_input=action_input,
+            action_outcome=action_outcome,
             error=error,
-            output=output,
-            is_summary=is_summary,
             is_smart_summary=is_smart_summary,
         )
         self._history.append(step)
@@ -133,69 +110,31 @@ class ExecutionHistory:
         return self._history[-max_steps:]
 
     def build_trajectory(self) -> List[Dict[str, Any]]:
-        """Build trajectory for planner state with summarized observations.
-
-        This is the trajectory that gets sent to the LLM. Each step is formatted
-        with:
-        - step: Index number
-        - type: Step type (tool, sandbox, search, etc.)
-        - reasoning: The reasoning provided in the command
-        - status: success or failed
-        - summary: Summarized observation (NOT the full output)
-
-        Returns:
-            List of trajectory entries (dicts)
-        """
+        """Build a structured trajectory from canonical AgentSteps (no formatted text)."""
         trajectory: List[Dict[str, Any]] = []
 
+        def _fmt(obj: Any) -> Any:
+            if obj is None:
+                return {}
+            if isinstance(obj, dict):
+                return dict(obj)
+            return obj
+
         for step in self._history:
-            entry: Dict[str, Any] = {
-                "step": step.index,
-                "type": step.type,
-                "reasoning": step.command.get("reasoning", "") if step.command else "",
-                "status": "success" if step.success else "failed",
-            }
-
-            # Add summarized observation based on step type
-            if step.type == "search":
-                entry["summary"] = self._summarize_search_observation(step.output)
-            elif step.type == "tool":
-                tool_id = step.command.get("tool_id", "unknown") if step.command else "unknown"
-                entry["tool_id"] = tool_id
-                entry["summary"] = step.output  # Already summarized by executor
-            elif step.type == "sandbox":
-                entry["summary"] = step.output  # Keep full output for sandbox steps
-                # Add explicit flag indicating if all tool calls succeeded
-                if isinstance(step.output, dict):
-                    entry["all_tools_succeeded"] = step.output.get("_all_tools_succeeded", False)
-            elif step.type in ("finish", "fail"):
-                entry["summary"] = step.preview or "Step completed"
-            else:
-                entry["summary"] = step.preview or "No summary"
-
-            trajectory.append(entry)
+            trajectory.append(
+                {
+                    "step": step.action_step,
+                    "type": step.action_type,
+                    "action_reasoning": step.action_reasoning,
+                    "action_input": _fmt(step.action_input),
+                    "action_outcome": _fmt(step.action_outcome),
+                    "success": step.success,
+                    "error": step.error,
+                    "is_smart_summary": step.is_smart_summary,
+                }
+            )
 
         return trajectory
-
-    def _summarize_search_observation(self, observation: Dict[str, Any]) -> str:
-        """Summarize search results: store tool_ids only, not full descriptors.
-
-        This prevents duplication - the full tool specs are in available_tools.
-        """
-        if not observation:
-            return "Search returned no results"
-
-        found_tools = observation.get("found_tools", [])
-        if not found_tools:
-            return "Search returned no results"
-
-        tool_ids = [t.get("tool_id", "unknown") for t in found_tools]
-        count = len(tool_ids)
-
-        if count <= 3:
-            return f"Found {count} tools: {', '.join(tool_ids)}"
-        else:
-            return f"Found {count} tools: {', '.join(tool_ids[:3])}, ..."
 
     @staticmethod
     def summarize_tool_observation(observation: Dict[str, Any]) -> str:

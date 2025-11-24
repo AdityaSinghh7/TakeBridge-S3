@@ -139,26 +139,22 @@ class AgentState:
     def record_step(
         self,
         *,
-        type: StepType,
-        command: Dict[str, Any],
+        action_type: StepType,
         success: bool,
-        preview: str,
-        result_key: Optional[str] = None,
+        action_reasoning: str,
+        action_input: Dict[str, Any],
+        action_outcome: Dict[str, Any],
         error: Optional[str] = None,
-        output: Any = None,
-        is_summary: bool = False,
         is_smart_summary: bool = False,
     ) -> AgentStep:
-        """Add a step to execution history (delegates to ExecutionHistory)."""
+        """Add a canonical step to execution history (delegates to ExecutionHistory)."""
         return self._execution_history.record_step(
-            type=type,
-            command=command,
+            action_type=action_type,
             success=success,
-            preview=preview,
-            result_key=result_key,
+            action_reasoning=action_reasoning,
+            action_input=action_input,
+            action_outcome=action_outcome,
             error=error,
-            output=output,
-            is_summary=is_summary,
             is_smart_summary=is_smart_summary,
         )
 

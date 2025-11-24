@@ -132,26 +132,26 @@ class AgentOrchestrator:
             summary = command.get("summary") or "Task completed."
             reasoning = command.get("reasoning") or ""
             self.agent_state.record_step(
-                type="finish",
-                command=command,
+                action_type="finish",
                 success=True,
-                preview=reasoning or summary,
-                output={"summary": summary},
-                is_summary=False,
+                action_reasoning=reasoning,
+                action_input={"summary": summary},
+                action_outcome={"success": True, "final_summary": summary},
+                error=None,
             )
             return self._success_result(summary)
 
         if cmd_type == "fail":
             self._executor.execute_step(command)
             reason_text = command.get("reason") or "Planner reported a failure."
+            reasoning = command.get("reasoning") or ""
             self.agent_state.record_step(
-                type="fail",
-                command=command,
+                action_type="fail",
                 success=False,
-                preview=reason_text,
+                action_reasoning=reasoning,
+                action_input={"reason": reason_text},
+                action_outcome={"success": False, "error": reason_text},
                 error=reason_text,
-                output={"error": reason_text},
-                is_summary=False,
             )
             return self._failure("planner_fail_action", reason_text, preview=str(command))
 
@@ -169,6 +169,19 @@ class AgentOrchestrator:
 
         if cmd_type == "search":
             if not result.success:
+                self.agent_state.record_step(
+                    action_type="search",
+                    success=False,
+                    action_reasoning=command.get("reasoning") or "",
+                    action_input={
+                        "search_query": (command.get("query") or "").strip(),
+                        "provider": command.get("provider"),
+                        "max_limit": command.get("limit") or command.get("max_results"),
+                        "reasoning": command.get("reasoning") or "",
+                    },
+                    action_outcome={"success": False, "error": error_message},
+                    error=result.error_code or error_message,
+                )
                 return self._failure(result.error_code or "search_failed", error_message, preview=str(command))
             query = (command.get("query") or "").strip()
             found_tools = observation.get("found_tools", [])
@@ -185,26 +198,42 @@ class AgentOrchestrator:
             )
             reasoning = command.get("reasoning") or result.preview
             self.agent_state.record_step(
-                type="search",
-                command=command,
+                action_type="search",
                 success=True,
-                preview=reasoning or f"Search '{query}' returned {len(found_tools)} results",
-                output={"found_tools": found_tools},
-                is_summary=False,
+                action_reasoning=reasoning,
+                action_input={
+                    "search_query": query,
+                    "provider": command.get("provider"),
+                    "max_limit": command.get("limit") or command.get("max_results"),
+                },
+                action_outcome={
+                    "success": True,
+                    "total_found": len(found_tools),
+                    "found_tool_names": [
+                        (t.get("tool") or t.get("tool_id") or "") for t in found_tools
+                    ],
+                },
             )
             return None
 
         if cmd_type == "tool":
             if not result.success:
                 self.agent_state.record_step(
-                    type="tool",
-                    command=command,
+                    action_type="tool",
                     success=False,
-                    preview=error_message,
-                    result_key=result.raw_output_key,
+                    action_reasoning=command.get("reasoning") or "",
+                    action_input={
+                    "tool_id": command.get("tool_id") or f"{command.get('provider')}.{command.get('tool')}",
+                    "provider": command.get("provider") or command.get("server"),
+                    "server": command.get("server") or command.get("provider"),
+                    "args": command.get("args") or command.get("payload") or {},
+                },
+                action_outcome={
+                    "success": False,
+                    "error": error_message,
+                },
                     error=result.error_code or result.error or "tool_execution_failed",
-                    output=observation,
-                    is_summary=False,
+                    is_smart_summary=result.is_smart_summary,
                 )
                 return self._failure(
                     result.error_code or "tool_execution_failed",
@@ -214,13 +243,21 @@ class AgentOrchestrator:
                 )
             reasoning = command.get("reasoning") or result.preview
             self.agent_state.record_step(
-                type="tool",
-                command=command,
+                action_type="tool",
                 success=True,
-                preview=reasoning or result.preview,
-                result_key=result.raw_output_key,
-                output=result.observation,
-                is_summary=False,
+                action_reasoning=reasoning,
+                action_input={
+                    "tool_id": command.get("tool_id") or f"{command.get('provider')}.{command.get('tool')}",
+                    "provider": command.get("provider") or command.get("server"),
+                    "server": command.get("server") or command.get("provider"),
+                    "args": command.get("args") or command.get("payload") or {},
+                },
+                action_outcome={
+                    "success": True,
+                    "raw_output_ref": result.raw_output_key,
+                    "is_smartly_summarized": result.is_smart_summary,
+                },
+                error=None,
                 is_smart_summary=result.is_smart_summary,
             )
             return None
@@ -228,17 +265,23 @@ class AgentOrchestrator:
         if cmd_type == "sandbox":
             error_code = result.error_code or result.error
             if not result.success:
-                result_key = result.raw_output_key
                 self.agent_state.record_step(
-                    type="sandbox",
-                    command=command,
+                    action_type="sandbox",
                     success=False,
-                    preview=error_message,
-                    result_key=result_key,
-                    error=error_code,
-                    output=observation,
-                    is_summary=False,
-                )
+                    action_reasoning=command.get("reasoning") or "",
+                    action_input={
+                        "sandbox_code": command.get("code"),
+                        "label": command.get("label"),
+                    },
+                action_outcome={
+                    "success": False,
+                    "error": error_message,
+                    "raw_output_ref": result.raw_output_key,
+                    "return_values": observation,
+                },
+                error=error_code,
+                is_smart_summary=result.is_smart_summary,
+            )
                 if error_code == "sandbox_syntax_error":
                     prior_errors = observation.get("prior_errors", 0)
                     if prior_errors >= 2:
@@ -258,13 +301,24 @@ class AgentOrchestrator:
 
             reasoning = command.get("reasoning") or result.preview
             self.agent_state.record_step(
-                type="sandbox",
-                command=command,
-                success=True,
-                preview=reasoning or result.preview,
-                result_key=result.raw_output_key,
-                output=result.observation,
-                is_summary=False,
+                    action_type="sandbox",
+                    success=True,
+                    action_reasoning=reasoning,
+                    action_input={
+                        "sandbox_code": command.get("code"),
+                        "label": command.get("label"),
+                    },
+                action_outcome={
+                    "success": True,
+                    "all_tools_successfully_returned": bool(
+                        isinstance(observation, dict)
+                        and observation.get("_all_tools_succeeded")
+                    ),
+                    "raw_output_ref": result.raw_output_key,
+                    "return_values": observation,
+                    "is_smartly_summarized": result.is_smart_summary,
+                },
+                error=None,
                 is_smart_summary=result.is_smart_summary,
             )
             return None
@@ -296,13 +350,12 @@ class AgentOrchestrator:
             payload["model"] = model_name
         self.agent_state.record_event("mcp.budget.exceeded", payload)
         self.agent_state.record_step(
-            type="finish",
-            command={"type": "finish", "summary": message},
+            action_type="finish",
             success=False,
-            preview=message,
+            action_reasoning="budget_exceeded",
+            action_input={"summary": message},
+            action_outcome={"success": False, "error": message, "budget_type": budget_type},
             error=budget_type,
-            output={"summary": message},
-            is_summary=False,
         )
         # Use a stable, coarse-grained error_code while preserving the
         # budget_type detail in error_details.
@@ -352,13 +405,12 @@ class AgentOrchestrator:
         )
         if not recorded_step:
             self.agent_state.record_step(
-                type="finish",
-                command={"type": "finish", "summary": summary},
+                action_type="finish",
                 success=False,
-                preview=summary,
+                action_reasoning="planner_failure",
+                action_input={"summary": summary},
+                action_outcome={"success": False, "error": summary},
                 error=reason,
-                output={"summary": summary},
-                is_summary=False,
             )
         steps = [asdict(step) for step in self.agent_state.history]
         result: MCPTaskResult = MCPTaskResult(

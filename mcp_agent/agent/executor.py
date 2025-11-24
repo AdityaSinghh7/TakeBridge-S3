@@ -324,7 +324,7 @@ class ActionExecutor:
             for entry in self.agent_state.search_results
             if entry.get("tool_id")
         }
-        has_search_steps = any(step.type == "search" for step in self.agent_state.history)
+        has_search_steps = any(step.action_type == "search" for step in self.agent_state.history)
         if has_search_steps and tool_id not in discovered_tool_ids:
             return StepResult(
                 type="tool",
@@ -523,9 +523,9 @@ class ActionExecutor:
             prior_errors = 0
             for step in self.agent_state.history:
                 if (
-                    step.type == "sandbox"
+                    step.action_type == "sandbox"
                     and step.error == "sandbox_syntax_error"
-                    and (step.command.get("label") or "").strip() == label
+                    and (step.action_input.get("label") or "").strip() == label
                 ):
                     prior_errors += 1
             observation = {
