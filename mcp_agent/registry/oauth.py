@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any, Dict, List
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import requests
@@ -183,6 +183,7 @@ class OAuthManager:
         context: AgentContext,
         provider: str,
         redirect_uri: str,
+        provider_fields: Dict[str, str] | None = None,
     ) -> str:
         """
         Initiate OAuth flow for a provider.
@@ -191,6 +192,7 @@ class OAuthManager:
             context: Agent context with user_id
             provider: Provider name ("gmail", "slack")
             redirect_uri: Ignored for white-label (uses COMPOSIO_REDIRECT)
+            provider_fields: Optional provider-specific fields (e.g., Shopify subdomain)
         
         Returns:
             URL to redirect user to for OAuth consent
@@ -206,6 +208,55 @@ class OAuthManager:
                 "callback_url": COMPOSIO_REDIRECT,
             },
         }
+
+        # Provider-specific required fields
+        provider_fields = provider_fields or {}
+        field_map: Dict[str, str] = {}
+        field_values: List[Dict[str, str]] = []
+        seen_field_values: set[tuple[str, str, str]] = set()
+
+        def _add_field(key: str | None, value: str | None) -> None:
+            if not key or value is None or value == "":
+                return
+            field_map[key] = value
+            for label in ("key", "name"):
+                sig = (label, key, value)
+                if sig not in seen_field_values:
+                    field_values.append({label: key, "value": value})
+                    seen_field_values.add(sig)
+
+        if provider == "shopify":
+            env_key = (os.getenv("SHOPIFY_STORE_FIELD_KEY") or "subdomain").strip() or "subdomain"
+            shop_subdomain = (
+                provider_fields.get("subdomain")
+                or provider_fields.get("store_subdomain")
+                or provider_fields.get(env_key)
+                or os.getenv("SHOPIFY_STORE_SUBDOMAIN", "").strip()
+            )
+            if not shop_subdomain:
+                raise RuntimeError(
+                    "Shopify OAuth requires a store subdomain. "
+                    "Provide it per-user (e.g., --shopify-subdomain or ?subdomain=...) "
+                    "or set SHOPIFY_STORE_SUBDOMAIN for local development."
+                )
+            for key in {env_key, "subdomain", "store_subdomain"}:
+                _add_field(key or "subdomain", shop_subdomain)
+
+        # Attach any other provider-specific fields provided by caller
+        for k, v in provider_fields.items():
+            _add_field(k, v)
+
+        if field_map:
+            body["fields"] = field_map
+            body["field_values"] = field_values
+            body["connection"]["fields"] = field_map
+            body["connection"]["field_values"] = field_values
+            body["connection"]["state"] = {
+                "authScheme": "OAUTH2",
+                "val": {"status": "INITIALIZING", **field_map},
+            }
+            body["auth_config"]["fields"] = field_map
+            body["auth_config"]["field_values"] = field_values
         
         try:
             r = requests.post(

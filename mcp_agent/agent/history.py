@@ -27,6 +27,8 @@ class AgentStep:
     action_outcome: Dict[str, Any]
     error: Optional[str] = None
     is_smart_summary: bool = False
+    observation: Optional[Any] = None
+    observation_metadata: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict for serialization."""
@@ -39,6 +41,8 @@ class AgentStep:
             "action_outcome": self.action_outcome,
             "error": self.error,
             "is_smart_summary": self.is_smart_summary,
+            "observation": self.observation,
+            "observation_metadata": self.observation_metadata,
         }
 
 
@@ -81,6 +85,8 @@ class ExecutionHistory:
         action_outcome: Dict[str, Any],
         error: Optional[str] = None,
         is_smart_summary: bool = False,
+        observation: Optional[Any] = None,
+        observation_metadata: Optional[Dict[str, Any]] = None,
     ) -> AgentStep:
         """Add a canonical step to execution history."""
         step = AgentStep(
@@ -92,6 +98,8 @@ class ExecutionHistory:
             action_outcome=action_outcome,
             error=error,
             is_smart_summary=is_smart_summary,
+            observation=observation,
+            observation_metadata=observation_metadata,
         )
         self._history.append(step)
         return step
@@ -115,7 +123,7 @@ class ExecutionHistory:
 
         def _fmt(obj: Any) -> Any:
             if obj is None:
-                return {}
+                return None
             if isinstance(obj, dict):
                 return dict(obj)
             return obj
@@ -131,6 +139,8 @@ class ExecutionHistory:
                     "success": step.success,
                     "error": step.error,
                     "is_smart_summary": step.is_smart_summary,
+                    "observation": _fmt(step.observation),
+                    "observation_metadata": step.observation_metadata,
                 }
             )
 

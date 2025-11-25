@@ -20,6 +20,8 @@ class StepResult:
     raw_output_key: Optional[str] = None
     error_code: Optional[str] = None
     is_smart_summary: bool = False
+    original_tokens: Optional[int] = None
+    compressed_tokens: Optional[int] = None
 
 
 class MCPTaskResult(TypedDict, total=False):

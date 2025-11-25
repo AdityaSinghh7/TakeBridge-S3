@@ -135,8 +135,10 @@ class AgentOrchestrator:
                 action_type="finish",
                 success=True,
                 action_reasoning=reasoning,
-                action_input={"summary": summary},
+                action_input={"summary": summary, "reasoning": reasoning},
                 action_outcome={"success": True, "final_summary": summary},
+                observation=None,
+                observation_metadata=None,
                 error=None,
             )
             return self._success_result(summary)
@@ -149,8 +151,10 @@ class AgentOrchestrator:
                 action_type="fail",
                 success=False,
                 action_reasoning=reasoning,
-                action_input={"reason": reason_text},
+                action_input={"reason": reason_text, "reasoning": reasoning},
                 action_outcome={"success": False, "error": reason_text},
+                observation=None,
+                observation_metadata=None,
                 error=reason_text,
             )
             return self._failure("planner_fail_action", reason_text, preview=str(command))
@@ -180,6 +184,13 @@ class AgentOrchestrator:
                         "reasoning": command.get("reasoning") or "",
                     },
                     action_outcome={"success": False, "error": error_message},
+                    observation={"error": error_message, "found_tools": []},
+                    observation_metadata={
+                        "summarization_method": "none",
+                        "summarization_model": None,
+                        "raw_output_ref": None,
+                        "total_found": 0,
+                    },
                     error=result.error_code or error_message,
                 )
                 return self._failure(result.error_code or "search_failed", error_message, preview=str(command))
@@ -205,6 +216,7 @@ class AgentOrchestrator:
                     "search_query": query,
                     "provider": command.get("provider"),
                     "max_limit": command.get("limit") or command.get("max_results"),
+                    "reasoning": reasoning,
                 },
                 action_outcome={
                     "success": True,
@@ -212,6 +224,15 @@ class AgentOrchestrator:
                     "found_tool_names": [
                         (t.get("tool") or t.get("tool_id") or "") for t in found_tools
                     ],
+                },
+                observation=found_tools,
+                observation_metadata={
+                    "summarization_method": "none",
+                    "summarization_model": None,
+                    "raw_output_ref": None,
+                    "total_found": len(found_tools),
+                    "merged_into_cache": True,
+                    "cache_size_after": len(self.agent_state.search_results),
                 },
             )
             return None
@@ -223,15 +244,24 @@ class AgentOrchestrator:
                     success=False,
                     action_reasoning=command.get("reasoning") or "",
                     action_input={
-                    "tool_id": command.get("tool_id") or f"{command.get('provider')}.{command.get('tool')}",
-                    "provider": command.get("provider") or command.get("server"),
-                    "server": command.get("server") or command.get("provider"),
-                    "args": command.get("args") or command.get("payload") or {},
-                },
-                action_outcome={
-                    "success": False,
-                    "error": error_message,
-                },
+                        "tool_id": command.get("tool_id") or f"{command.get('provider')}.{command.get('tool')}",
+                        "provider": command.get("provider") or command.get("server"),
+                        "server": command.get("server") or command.get("provider"),
+                        "tool": command.get("tool"),
+                        "args": command.get("args") or command.get("payload") or {},
+                    },
+                    action_outcome={
+                        "success": False,
+                        "error": error_message,
+                    },
+                    observation=result.observation if result.observation else {"error": error_message},
+                    observation_metadata={
+                        "raw_output_ref": result.raw_output_key,
+                        "summarization_method": "none",
+                        "summarization_model": None,
+                        "original_tokens": result.original_tokens,
+                        "compressed_tokens": result.compressed_tokens,
+                    },
                     error=result.error_code or result.error or "tool_execution_failed",
                     is_smart_summary=result.is_smart_summary,
                 )
@@ -250,12 +280,26 @@ class AgentOrchestrator:
                     "tool_id": command.get("tool_id") or f"{command.get('provider')}.{command.get('tool')}",
                     "provider": command.get("provider") or command.get("server"),
                     "server": command.get("server") or command.get("provider"),
+                    "tool": command.get("tool"),
                     "args": command.get("args") or command.get("payload") or {},
                 },
                 action_outcome={
                     "success": True,
                     "raw_output_ref": result.raw_output_key,
                     "is_smartly_summarized": result.is_smart_summary,
+                },
+                observation=result.observation,
+                observation_metadata={
+                    "raw_output_ref": result.raw_output_key,
+                    "summarization_method": "llm" if result.is_smart_summary else "none",
+                    "summarization_model": "o4-mini" if result.is_smart_summary else None,
+                    "original_tokens": result.original_tokens,
+                    "compressed_tokens": result.compressed_tokens,
+                    "compression_ratio": (
+                        ((result.original_tokens - result.compressed_tokens) / result.original_tokens * 100)
+                        if result.original_tokens and result.compressed_tokens and result.original_tokens > 0
+                        else None
+                    ),
                 },
                 error=None,
                 is_smart_summary=result.is_smart_summary,
@@ -273,15 +317,22 @@ class AgentOrchestrator:
                         "sandbox_code": command.get("code"),
                         "label": command.get("label"),
                     },
-                action_outcome={
-                    "success": False,
-                    "error": error_message,
-                    "raw_output_ref": result.raw_output_key,
-                    "return_values": observation,
-                },
-                error=error_code,
-                is_smart_summary=result.is_smart_summary,
-            )
+                    action_outcome={
+                        "success": False,
+                        "error": error_message,
+                        "raw_output_ref": result.raw_output_key,
+                        "return_values": observation,
+                    },
+                    observation=result.observation if result.observation else observation,
+                    observation_metadata={
+                        "raw_output_ref": result.raw_output_key,
+                        "summarization_method": "none",
+                        "summarization_model": None,
+                        "retry_count": observation.get("prior_errors", 0) if isinstance(observation, dict) else 0,
+                    },
+                    error=error_code,
+                    is_smart_summary=result.is_smart_summary,
+                )
                 if error_code == "sandbox_syntax_error":
                     prior_errors = observation.get("prior_errors", 0)
                     if prior_errors >= 2:
@@ -301,13 +352,13 @@ class AgentOrchestrator:
 
             reasoning = command.get("reasoning") or result.preview
             self.agent_state.record_step(
-                    action_type="sandbox",
-                    success=True,
-                    action_reasoning=reasoning,
-                    action_input={
-                        "sandbox_code": command.get("code"),
-                        "label": command.get("label"),
-                    },
+                action_type="sandbox",
+                success=True,
+                action_reasoning=reasoning,
+                action_input={
+                    "sandbox_code": command.get("code"),
+                    "label": command.get("label"),
+                },
                 action_outcome={
                     "success": True,
                     "all_tools_successfully_returned": bool(
@@ -317,6 +368,19 @@ class AgentOrchestrator:
                     "raw_output_ref": result.raw_output_key,
                     "return_values": observation,
                     "is_smartly_summarized": result.is_smart_summary,
+                },
+                observation=result.observation,
+                observation_metadata={
+                    "raw_output_ref": result.raw_output_key,
+                    "summarization_method": "llm" if result.is_smart_summary else "none",
+                    "summarization_model": "o4-mini" if result.is_smart_summary else None,
+                    "original_tokens": result.original_tokens,
+                    "compressed_tokens": result.compressed_tokens,
+                    "compression_ratio": (
+                        ((result.original_tokens - result.compressed_tokens) / result.original_tokens * 100)
+                        if result.original_tokens and result.compressed_tokens and result.original_tokens > 0
+                        else None
+                    ),
                 },
                 error=None,
                 is_smart_summary=result.is_smart_summary,
@@ -368,7 +432,7 @@ class AgentOrchestrator:
     def _success_result(self, summary: str) -> MCPTaskResult:
         """Build a terminal success result snapshot."""
         snapshot = self.agent_state.budget_tracker.snapshot()
-        steps = [asdict(step) for step in self.agent_state.history]
+        steps = [step.to_dict() for step in self.agent_state.history]
         return MCPTaskResult(
             success=True,
             final_summary=summary,
@@ -410,9 +474,11 @@ class AgentOrchestrator:
                 action_reasoning="planner_failure",
                 action_input={"summary": summary},
                 action_outcome={"success": False, "error": summary},
+                observation=None,
+                observation_metadata=None,
                 error=reason,
             )
-        steps = [asdict(step) for step in self.agent_state.history]
+        steps = [step.to_dict() for step in self.agent_state.history]
         result: MCPTaskResult = MCPTaskResult(
             success=False,
             final_summary=summary,

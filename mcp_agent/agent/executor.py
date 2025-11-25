@@ -154,7 +154,7 @@ class ActionExecutor:
 
     # --- Observation processing with intelligent summarization ---
 
-    def _process_tool_observation(self, result: Dict[str, Any]) -> tuple[Any, bool]:
+    def _process_tool_observation(self, result: Dict[str, Any]) -> tuple[Any, bool, int, int]:
         """
         Process tool execution result with intelligent summarization.
 
@@ -168,13 +168,18 @@ class ActionExecutor:
             result: Raw tool execution response envelope
 
         Returns:
-            Processed observation (raw or summarized)
+            Tuple of (observation, is_smart_summary, original_tokens, compressed_tokens)
         """
         # Handle unsuccessful results - just return error
         if isinstance(result, dict):
             if "successful" in result and not result["successful"]:
                 error_msg = result.get("error", "Unknown failure")
-                return {"successful": False, "error": error_msg}, False
+                error_data = {"successful": False, "error": error_msg}
+                try:
+                    error_tokens = count_json_tokens(error_data)
+                except Exception:
+                    error_tokens = 0
+                return error_data, False, error_tokens, error_tokens
 
         # Extract data payload
         if isinstance(result, dict) and "data" in result:
@@ -191,7 +196,7 @@ class ActionExecutor:
                 {"error": str(e), "type": "tool"}
             )
             # Fallback to raw if counting fails
-            return data, False
+            return data, False, 0, 0
 
         # Log token count for monitoring
         self.agent_state.record_event(
@@ -201,7 +206,7 @@ class ActionExecutor:
 
         # Decision: raw or summarize
         if token_count < 8000:
-            return data, False
+            return data, False, token_count, token_count
 
         # Summarize using LLM (no fallback - fail fast)
         summarized = summarize_observation(
@@ -210,9 +215,16 @@ class ActionExecutor:
             original_tokens=token_count,
             context=self.agent_state,
         )
-        return summarized, True
 
-    def _process_sandbox_observation(self, result: Any) -> tuple[Any, bool]:
+        # Count tokens in summarized output
+        try:
+            compressed_tokens = count_json_tokens(summarized)
+        except Exception:
+            compressed_tokens = token_count  # Fallback to original if counting fails
+
+        return summarized, True, token_count, compressed_tokens
+
+    def _process_sandbox_observation(self, result: Any) -> tuple[Any, bool, int, int]:
         """
         Process sandbox execution result with intelligent summarization.
 
@@ -226,7 +238,7 @@ class ActionExecutor:
             result: Raw sandbox execution result (any shape)
 
         Returns:
-            Processed observation (raw or summarized)
+            Tuple of (observation, is_smart_summary, original_tokens, compressed_tokens)
         """
         # Count tokens in full result
         try:
@@ -237,7 +249,7 @@ class ActionExecutor:
                 {"error": str(e), "type": "sandbox"}
             )
             # Fallback to raw if counting fails
-            return result, False
+            return result, False, 0, 0
 
         # Log token count for monitoring
         self.agent_state.record_event(
@@ -247,7 +259,7 @@ class ActionExecutor:
 
         # Decision: raw or summarize
         if token_count < 10000:
-            return result, False
+            return result, False, token_count, token_count
 
         # Summarize using LLM (no fallback - fail fast)
         summarized = summarize_observation(
@@ -256,7 +268,14 @@ class ActionExecutor:
             original_tokens=token_count,
             context=self.agent_state,
         )
-        return summarized, True
+
+        # Count tokens in summarized output
+        try:
+            compressed_tokens = count_json_tokens(summarized)
+        except Exception:
+            compressed_tokens = token_count  # Fallback to original if counting fails
+
+        return summarized, True, token_count, compressed_tokens
 
     # --- Tool execution ---
 
@@ -378,7 +397,7 @@ class ActionExecutor:
                 error_code="tool_execution_failed",
             )
 
-        observation, is_smart_summary = self._process_tool_observation(result)
+        observation, is_smart_summary, original_tokens, compressed_tokens = self._process_tool_observation(result)
         self.agent_state.append_raw_output(
             result_key,
             {
@@ -409,6 +428,8 @@ class ActionExecutor:
             preview=preview,
             raw_output_key=result_key,
             is_smart_summary=is_smart_summary,
+            original_tokens=original_tokens,
+            compressed_tokens=compressed_tokens,
         )
 
     # --- Sandbox execution ---
@@ -637,7 +658,7 @@ class ActionExecutor:
                 entry["summary"] = summary
 
         if sandbox_result.success:
-            observation, is_smart_summary = self._process_sandbox_observation(sandbox_result.result)
+            observation, is_smart_summary, original_tokens, compressed_tokens = self._process_sandbox_observation(sandbox_result.result)
             preview = command.get("reasoning") or f"Sandbox '{label}' success"
             # Add metadata about tool success to the observation
             if isinstance(observation, dict) and not observation.get("error"):
@@ -649,6 +670,8 @@ class ActionExecutor:
                 preview=preview,
                 raw_output_key=result_key,
                 is_smart_summary=is_smart_summary,
+                original_tokens=original_tokens,
+                compressed_tokens=compressed_tokens,
             )
 
         error_payload = {

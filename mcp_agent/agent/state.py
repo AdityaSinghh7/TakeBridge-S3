@@ -146,6 +146,8 @@ class AgentState:
         action_outcome: Dict[str, Any],
         error: Optional[str] = None,
         is_smart_summary: bool = False,
+        observation: Optional[Any] = None,
+        observation_metadata: Optional[Dict[str, Any]] = None,
     ) -> AgentStep:
         """Add a canonical step to execution history (delegates to ExecutionHistory)."""
         return self._execution_history.record_step(
@@ -156,6 +158,8 @@ class AgentState:
             action_outcome=action_outcome,
             error=error,
             is_smart_summary=is_smart_summary,
+            observation=observation,
+            observation_metadata=observation_metadata,
         )
 
     def get_context_window(self, max_steps: Optional[int] = None) -> List[AgentStep]:

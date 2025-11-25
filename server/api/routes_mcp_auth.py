@@ -50,12 +50,23 @@ def start(
     request: Request,
     redirect_success: Optional[str] = None,
     redirect_error: Optional[str] = None,
+    subdomain: Optional[str] = None,
 ):
     provider = _normalize_provider(provider)
     user_id = _require_user_id(request)
     context = AgentContext.create(user_id)
     # Build redirect deterministically from environment configuration
     redirect_uri = build_redirect(provider)
+    provider_fields: dict[str, str] | None = None
+    if provider == "shopify":
+        sd = (
+            subdomain
+            or request.query_params.get("subdomain")
+            or request.query_params.get("store_subdomain")
+            or request.query_params.get("shop")
+        )
+        if sd:
+            provider_fields = {"subdomain": sd.strip()}
     try:
         # Hint redirect destinations for post-auth flows (optional)
         if redirect_success or redirect_error:
@@ -66,7 +77,7 @@ def start(
                 error_url=redirect_error,
             )
 
-        url = OAuthManager.start_oauth(context, provider, redirect_uri)
+        url = OAuthManager.start_oauth(context, provider, redirect_uri, provider_fields=provider_fields)
         return JSONResponse({"authorization_url": url})
     except Exception as e:
         # Surface likely misconfig or connectivity problems clearly

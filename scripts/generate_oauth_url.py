@@ -24,6 +24,10 @@ def main() -> None:
         help="Optional user id (defaults to dev-local resolution).",
         default=None,
     )
+    parser.add_argument(
+        "--shopify-subdomain",
+        help="Shopify store subdomain (e.g., your-store-name). Required for provider=shopify unless provided via env.",
+    )
     args = parser.parse_args()
 
     provider = args.provider.strip().lower()
@@ -35,8 +39,13 @@ def main() -> None:
         env_name = f"COMPOSIO_{provider.upper()}_AUTH_CONFIG_ID"
         sys.exit(f"Missing {env_name}; set it in your environment and retry.")
 
+    # Provider-specific fields (per-user)
+    provider_fields = None
+    if provider == "shopify" and args.shopify_subdomain:
+        provider_fields = {"subdomain": args.shopify_subdomain.strip()}
+
     try:
-        url = OAuthManager.start_oauth(context, provider, redirect_uri="")
+        url = OAuthManager.start_oauth(context, provider, redirect_uri="", provider_fields=provider_fields)
     except Exception as exc:  # pragma: no cover - CLI passthrough
         sys.exit(f"Failed to generate OAuth URL for provider '{provider}': {exc}")
 
