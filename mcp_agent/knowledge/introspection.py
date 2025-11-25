@@ -328,9 +328,23 @@ def get_index(
     Convenience helper to construct a ToolboxIndex for the given user.
 
     This reuses the manifest cache and does not persist any new files.
+    Automatically invalidates cache and rebuilds if embeddings become available.
     """
+    from .embeddings import get_embedding_service
+
     manifest = get_manifest(user_id=user_id)
-    return ToolboxIndex.from_manifest(manifest)
+    index = ToolboxIndex.from_manifest(manifest)
+
+    # Check if embeddings were generated - if not, check if model is now available
+    if not index.tool_embeddings:
+        embedding_service = get_embedding_service()
+        if embedding_service._ensure_model_loaded():
+            # Model is now available, invalidate cache to rebuild with embeddings
+            invalidate_manifest_cache(user_id)
+            manifest = get_manifest(user_id=user_id, refresh=True)
+            index = ToolboxIndex.from_manifest(manifest)
+
+    return index
 
 
 # ============================================================================

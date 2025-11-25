@@ -8,8 +8,11 @@ Combines:
 
 from __future__ import annotations
 
+import logging
 import re
-from typing import TYPE_CHECKING, Any, Dict, List, Literal
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+
+import numpy as np
 
 if TYPE_CHECKING:
     from mcp_agent.core.context import AgentContext
@@ -20,7 +23,14 @@ from mcp_agent.knowledge.index import ToolboxIndex
 from mcp_agent.knowledge.types import CompactToolDescriptor, LLMToolDescriptor, ProviderSpec, ToolSpec
 from mcp_agent.knowledge.introspection import get_tool_spec, ensure_io_specs_loaded
 
+logger = logging.getLogger(__name__)
+
 DetailLevel = Literal["names", "summary", "full"]
+
+# Minimum score thresholds for filtering results
+MIN_SEMANTIC_SCORE_THRESHOLD = 0.25  # Minimum score to include in results when using semantic search (increased for better precision)
+MIN_FALLBACK_SCORE_THRESHOLD = 0.3  # Higher threshold for fallback heuristic mode
+ADAPTIVE_THRESHOLD_RATIO = 0.5  # Keep tools within 70% of top score when using adaptive threshold
 
 
 def list_providers(user_id: str) -> List[Dict[str, Any]]:
@@ -61,10 +71,32 @@ def search_tools(
     # Ensure IoToolSpecs are registered for schema enrichment
     ensure_io_specs_loaded()
     normalized_user = normalize_user_id(user_id)
-    norm_query = _normalize_query(query)
-    provider_filter = provider.lower().strip() if provider else None
     index: ToolboxIndex = get_index(user_id=normalized_user)
-    matches: List[tuple[int, ProviderSpec, ToolSpec]] = []
+    norm_query = _normalize_query(query, index)
+    provider_filter = provider.lower().strip() if provider else None
+
+    # Get query embedding once
+    query_embedding = norm_query.embedding
+
+    # Check if we have embeddings available
+    has_tool_embeddings = any(
+        index.get_tool_embedding(t.tool_id) is not None
+        for prov in index.providers.values()
+        for t in prov.actions
+    )
+
+    # Log fallback usage for debugging
+    if query and not has_tool_embeddings:
+        logger.warning(
+            f"Tool embeddings not available for user {normalized_user}. "
+            "Using heuristic fallback scoring. Index may need refresh."
+        )
+    elif query and query_embedding is None:
+        logger.warning(
+            f"Query embedding failed for query '{query}'. Using heuristic fallback."
+        )
+
+    matches: List[tuple[float, ProviderSpec, ToolSpec]] = []
 
     for prov in index.providers.values():
         if not (prov.authorized and prov.registered and any(t.available for t in prov.actions)):
@@ -74,13 +106,57 @@ def search_tools(
         for tool in prov.actions:
             if not tool.available:
                 continue
-            score = _score_tool(tool, norm_query)
-            if norm_query.terms and score == 0:
+
+            # Get pre-computed tool embedding
+            tool_embedding = index.get_tool_embedding(tool.tool_id)
+
+            # Score using semantic similarity
+            score = _score_tool_semantic(tool, norm_query, tool_embedding, query_embedding)
+
+            # Debug logging for first few tools
+            if query and len(matches) < 3:
+                logger.debug(
+                    f"Tool {tool.tool_id}: score={score:.3f}, "
+                    f"has_embedding={tool_embedding is not None}, "
+                    f"query_embedding={query_embedding is not None}"
+                )
+
+            # Skip tools with zero score only if we have a query
+            if norm_query.terms and score <= 0.0:
                 continue
+
             matches.append((score, prov, tool))
 
-    matches = [entry for entry in matches if entry[0] > 0]
-    matches.sort(key=lambda item: (-item[0], item[1].provider, item[2].name))
+    # Filter out low scores using adaptive threshold
+    # Use stricter threshold if using fallback (no embeddings)
+    using_fallback = query_embedding is None or not has_tool_embeddings
+    base_threshold = MIN_FALLBACK_SCORE_THRESHOLD if using_fallback else MIN_SEMANTIC_SCORE_THRESHOLD
+    
+    # Apply query-specific threshold adjustment
+    threshold = _get_adaptive_threshold(query or "", base_threshold, using_fallback)
+    
+    # Apply adaptive threshold: keep top score and any within ratio of it
+    matches = _apply_adaptive_threshold(matches, threshold)
+
+    if query:
+        logger.info(
+            f"Search '{query}': {len(matches)} matches after threshold, "
+            f"threshold={threshold:.3f}, using_fallback={using_fallback}, "
+            f"has_tool_embeddings={has_tool_embeddings}, query_embedding={query_embedding is not None}"
+        )
+        if matches:
+            logger.debug(
+                f"Top scores: {[(t.tool_id, s) for s, _, t in matches[:5]]}"
+            )
+    
+    # Sort by: exact name match first, then score
+    matches.sort(key=lambda item: (
+        not _has_exact_name_match(item[2], norm_query),  # False (0) for matches sorts first
+        -item[0],  # Then by score descending
+        item[1].provider,
+        item[2].name
+    ))
+    
     if limit and limit > 0:
         matches = matches[:limit]
 
@@ -106,44 +182,202 @@ def search_tools(
 
 
 class _Query:
-    def __init__(self, raw: str | None) -> None:
+    def __init__(self, raw: str | None, embedding: Optional[np.ndarray] = None) -> None:
         text = (raw or "").strip().lower()
         self.raw = text
         self.terms = [term for term in re.split(r"[^a-z0-9_]+", text) if term]
+        self.embedding = embedding
 
 
-def _normalize_query(query: str | None) -> _Query:
-    return _Query(query)
+def _normalize_query(query: str | None, index: ToolboxIndex) -> _Query:
+    """Normalize query and generate embedding if available.
 
+    Args:
+        query: Raw query string.
+        index: ToolboxIndex to use for embedding cache.
 
-def _score_tool(tool: ToolSpec, query: _Query) -> int:
+    Returns:
+        _Query object with normalized text and embedding.
     """
-    Score a tool against a query for relevance.
+    text = (query or "").strip().lower()
+    embedding = None
 
-    Prevents cross-provider contamination by hard-filtering when query explicitly
-    mentions a provider (e.g., "gmail search" won't return Slack tools).
+    if text:
+        # Get or generate query embedding
+        embedding = index.get_query_embedding(text)
+
+    return _Query(raw=text, embedding=embedding)
+
+
+def _has_exact_name_match(tool: ToolSpec, query: _Query) -> bool:
+    """Check if any query term exactly matches tool name.
+
+    Args:
+        tool: ToolSpec to check.
+        query: _Query object with normalized terms.
+
+    Returns:
+        True if any query term appears in tool name.
     """
     if not query.terms:
-        return 2 if tool.available else 1
+        return False
+    tool_name_lower = tool.name.lower()
+    return any(term in tool_name_lower for term in query.terms)
 
-    # Provider alignment check - prevent cross-provider contamination
+
+def _get_adaptive_threshold(query: str, base_threshold: float, using_fallback: bool) -> float:
+    """Adjust threshold based on query characteristics.
+
+    Args:
+        query: Query string.
+        base_threshold: Base threshold value.
+        using_fallback: Whether using fallback heuristic mode.
+
+    Returns:
+        Adjusted threshold value.
+    """
+    if using_fallback:
+        return base_threshold
+
+    # Short, specific queries (1-2 words) → higher threshold
+    words = query.split()
+    if len(words) <= 2:
+        return max(base_threshold, 0.3)  # More selective for short queries
+
+    # Longer queries → can be more lenient
+    return base_threshold
+
+
+def _apply_adaptive_threshold(
+    matches: List[tuple[float, ProviderSpec, ToolSpec]], min_threshold: float
+) -> List[tuple[float, ProviderSpec, ToolSpec]]:
+    """Apply adaptive threshold: keep top score and any within ratio of it.
+
+    Args:
+        matches: List of (score, provider, tool) tuples.
+        min_threshold: Minimum absolute threshold.
+
+    Returns:
+        Filtered matches list.
+    """
+    if not matches:
+        return []
+
+    matches_sorted = sorted(matches, key=lambda x: -x[0])
+    top_score = matches_sorted[0][0]
+
+    # Keep top result and any within ADAPTIVE_THRESHOLD_RATIO of top score
+    # But never go below min_threshold
+    threshold = max(min_threshold, top_score * ADAPTIVE_THRESHOLD_RATIO)
+    return [m for m in matches_sorted if m[0] >= threshold]
+
+
+def _score_tool_semantic(
+    tool: ToolSpec,
+    query: _Query,
+    tool_embedding: Optional[np.ndarray],
+    query_embedding: Optional[np.ndarray],
+) -> float:
+    """
+    Score a tool against a query using semantic similarity.
+
+    Uses cosine similarity between query and tool embeddings, with soft provider
+    boosting instead of hard filtering.
+
+    Args:
+        tool: ToolSpec to score.
+        query: _Query object with normalized text and terms.
+        tool_embedding: Pre-computed embedding for the tool.
+        query_embedding: Pre-computed embedding for the query.
+
+    Returns:
+        Semantic similarity score between 0.0 and 1.0 (after provider boost).
+    """
+    from .embeddings import get_embedding_service
+
+    # If no query, return default score based on availability
+    if not query.terms:
+        return 0.5 if tool.available else 0.3
+
+    # Fallback to heuristic scoring if embeddings unavailable
+    if query_embedding is None or tool_embedding is None:
+        return _score_tool_heuristic_fallback(tool, query)
+
+    # Compute cosine similarity
+    embedding_service = get_embedding_service()
+    semantic_score = embedding_service.cosine_similarity(query_embedding, tool_embedding)
+
+    # Apply exact term matching boost (strong signal for relevance)
+    query_terms_lower = [t.lower() for t in query.terms]
+    tool_name_lower = tool.name.lower()
+    desc_lower = (tool.description or "").lower()
+
+    # Boost for exact term matches in tool name (strongest signal)
+    name_matches = sum(1 for term in query_terms_lower if term in tool_name_lower)
+    if name_matches > 0:
+        # Strong boost for name matches (0.2 per match, capped at 0.4)
+        name_boost = min(0.2 * name_matches, 0.4)
+        semantic_score += name_boost
+
+    # Boost for exact term matches in description (weaker signal)
+    desc_matches = sum(1 for term in query_terms_lower if term in desc_lower)
+    if desc_matches > 0:
+        # Smaller boost for description matches
+        desc_boost = min(0.1 * desc_matches, 0.2)
+        semantic_score += desc_boost
+
+    # Apply provider boost/filter
     known_providers = ["gmail", "slack", "github", "google", "microsoft", "composio"]
     query_lower = query.raw.lower()
+    mentioned_providers = [p for p in known_providers if p in query_lower]
+    tool_provider = tool.provider.lower()
 
-    # Check if query mentions any specific provider
+    if mentioned_providers:
+        if tool_provider in mentioned_providers:
+            # Provider match - boost score
+            semantic_score *= 1.5
+        else:
+            # Provider mismatch - hard filter (return 0.0) when query explicitly mentions a provider
+            return 0.0
+
+    # Small boost for available tools
+    if tool.available:
+        semantic_score *= 1.05
+
+    # Clamp to [0, 1] range
+    return float(np.clip(semantic_score, 0.0, 1.0))
+
+
+def _score_tool_heuristic_fallback(tool: ToolSpec, query: _Query) -> float:
+    """
+    Fallback heuristic scoring when embeddings are unavailable.
+
+    This maintains backward compatibility and handles error cases gracefully.
+
+    Args:
+        tool: ToolSpec to score.
+        query: _Query object with normalized text and terms.
+
+    Returns:
+        Heuristic score normalized to [0, 1] range.
+    """
+    if not query.terms:
+        return 0.5 if tool.available else 0.3
+
+    # Provider alignment check
+    known_providers = ["gmail", "slack", "github", "google", "microsoft", "composio"]
+    query_lower = query.raw.lower()
     mentioned_providers = [p for p in known_providers if p in query_lower]
 
     if mentioned_providers:
-        # Query explicitly mentions a provider
         tool_provider = tool.provider.lower()
         if tool_provider not in mentioned_providers:
-            # Hard filter - query asks for "gmail" but this is a "slack" tool
-            return 0
-        # Provider match - boost the score significantly
-        score = 10
+            # Provider mismatch - return zero to filter out
+            return 0.0
+        # Provider match - start with higher base score
+        score = 0.6
     else:
-        # No specific provider mentioned - start with neutral score
-        score = 0
+        score = 0.0
 
     haystacks = {
         "name": tool.name.lower(),
@@ -153,22 +387,26 @@ def _score_tool(tool: ToolSpec, query: _Query) -> int:
         "mcp_tool": (tool.mcp_tool_name or "").lower(),
     }
     param_names = [param.name.lower() for param in tool.parameters]
+
     for term in query.terms:
         if term in haystacks["name"]:
-            score += 5
+            score += 0.15
         if term in haystacks["provider"]:
-            score += 3
+            score += 0.1
         if term in haystacks["description"]:
-            score += 2
+            score += 0.08
         if term in haystacks["doc"]:
-            score += 1
+            score += 0.05
         if any(term in name for name in param_names):
-            score += 1
+            score += 0.05
         if term in haystacks["mcp_tool"]:
-            score += 2
+            score += 0.08
+
     if score > 0 and tool.available:
-        score += 1
-    return score
+        score += 0.05
+
+    # Normalize to [0, 1] range
+    return float(np.clip(score, 0.0, 1.0))
 
 
 # ============================================================================

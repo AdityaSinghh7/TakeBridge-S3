@@ -65,6 +65,7 @@ dependencies = [
   "alembic>=1.13",
   "psycopg2-binary>=2.9.11",
   "tiktoken>=0.12.0",
+  "sentence-transformers>=2.2.0",
 ]
 
 [project.optional-dependencies]
