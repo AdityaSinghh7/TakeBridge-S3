@@ -210,7 +210,11 @@ def get_active_mcp_for_provider(
             ConnectedAccount.status == STATUS_ACTIVE,
             MCPConnection.mcp_url.is_not(None),
         )
-        .order_by(MCPConnection.id.desc())
+        .order_by(
+            ConnectedAccount.updated_at.desc(),
+            ConnectedAccount.created_at.desc(),
+            MCPConnection.id.desc(),
+        )
         .limit(1)
     )
     row = db.execute(stmt).first()
@@ -248,7 +252,11 @@ def get_active_context_for_provider(
             ConnectedAccount.status == STATUS_ACTIVE,
             MCPConnection.mcp_url.is_not(None),
         )
-        .order_by(MCPConnection.id.desc())
+        .order_by(
+            ConnectedAccount.updated_at.desc(),
+            ConnectedAccount.created_at.desc(),
+            MCPConnection.id.desc(),
+        )
         .limit(1)
     )
     row = db.execute(stmt).first()
@@ -552,4 +560,3 @@ def is_provider_available(context: AgentContext, provider: str) -> bool:
 
     with context.get_db() as db:
         return is_authorized(db, user_id, provider)
-

@@ -13,10 +13,7 @@ from mcp_agent.env_sync import ensure_env_for_provider
 
 DEFAULT_RECIPIENT = "adityadevsinghs@gmail.com"
 DEFAULT_TASK_TEMPLATE = (
-    "Run a Python sandbox plan that (1) fetches the five most recent Gmail messages, "
-    "(2) extracts key insights plus whether a follow-up is required for each, and (3) aggregates the "
-    "results into a concise JSON summary that also includes the total unread count. After the sandbox "
-    "completes, post a Slack #social update summarizing the insights."
+    "Use Shopify update order tool to update order id 6842801783067 and set its phone number to '+1-415-555-1212'."
 )
 
 
@@ -67,7 +64,12 @@ def main(argv: list[str] | None = None) -> int:
     # Ensure downstream components know the active user + enable summaries
     os.environ.setdefault("TB_USER_ID", user_id)
     os.environ["MCP_PLANNER_LLM_ENABLED"] = "1"
-    for provider in ("gmail", "slack"):
+    # Stream client by default; Composio execute endpoint is disabled due to recent 500s (code 1601).
+    os.environ.setdefault("COMPOSIO_TOOL_EXECUTE_ENABLED", "0")
+    api_base = os.getenv("COMPOSIO_API_BASE") or os.getenv("COMPOSIO_BASE_URL") or "https://backend.composio.dev"
+    print(f"[run_dev_mcp_task] user={user_id} task='{task}'")
+    print(f"[run_dev_mcp_task] COMPOSIO_API_BASE={api_base} COMPOSIO_TOOL_EXECUTE_ENABLED={os.getenv('COMPOSIO_TOOL_EXECUTE_ENABLED')}")
+    for provider in ("gmail", "slack", "shopify"):
         ensure_env_for_provider(user_id, provider)
 
     try:

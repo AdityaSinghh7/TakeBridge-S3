@@ -90,6 +90,18 @@ shopify.shopify_update_order:
         id: 0
         phone: ""
 
+shopify.shopify_get_orders_with_filters:
+  mode: read
+  success_examples:
+    - args:
+        status: "any"
+        limit: 5
+        created_at_min: "2023-01-01T00:00:00Z"
+        created_at_max: "2023-01-15T23:59:59Z"
+  error_examples:
+    - args:
+        status: "not_a_status"
+
 stripe.stripe_create_refund:
   mode: mutate
   success_examples:

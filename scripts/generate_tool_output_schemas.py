@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from functools import partial
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -9,10 +10,35 @@ import yaml  # type: ignore[import]
 
 from mcp_agent.dev import resolve_dev_user
 from mcp_agent.core.context import AgentContext
-from mcp_agent.registry.manager import RegistryManager
-from mcp_agent.knowledge.registry import get_tool_spec
+from mcp_agent.registry.oauth import OAuthManager
+from mcp_agent.actions import SUPPORTED_PROVIDERS, get_provider_action_map
+from mcp_agent.knowledge.introspection import get_tool_spec, ensure_io_specs_loaded
 from mcp_agent.knowledge.output_schema_sampler import sample_output_schema_for_wrapper
-from mcp_agent.knowledge.load_io_specs import ensure_io_specs_loaded
+
+
+def init_registry(user_id: str) -> AgentContext:
+    """
+    Compatibility shim: create an AgentContext for the user.
+
+    The legacy registry initializer mutated global state; the current code
+    uses functional helpers, so we just return a context for callers that need it.
+    """
+    return AgentContext.create(user_id)
+
+
+def get_configured_providers(user_id: str) -> set[str]:
+    """
+    Determine which providers are authorized/configured for this user.
+
+    Uses OAuthManager.auth_status to mirror runtime availability checks.
+    """
+    ctx = AgentContext.create(user_id)
+    configured: set[str] = set()
+    for provider in SUPPORTED_PROVIDERS:
+        status = OAuthManager.auth_status(ctx, provider)
+        if status.get("authorized"):
+            configured.add(provider)
+    return configured
 
 
 def _parse_examples_block(entry: Dict[str, Any], key: str) -> List[Dict[str, Any]]:
@@ -93,6 +119,8 @@ def main() -> None:
     # Ensure IoToolSpecs are registered (from action docstrings) before we look
     # up specs for individual tools.
     ensure_io_specs_loaded()
+    context = AgentContext.create(user_id)
+    action_map = get_provider_action_map()
 
     cfg = yaml.safe_load(config_path.read_text()) or {}
     schemas: Dict[str, Dict[str, Any]] = {}
@@ -124,9 +152,17 @@ def main() -> None:
             continue
 
         spec = get_tool_spec(provider, tool_name)
-        if spec is None or spec.func is None:
-            print(f"[schema] Skipping {key!r}: no IoToolSpec or func registered.")
+        if spec is None:
+            print(f"[schema] Skipping {key!r}: no IoToolSpec registered.")
             continue
+        if spec.func is None:
+            func = next((f for f in action_map.get(provider, ()) if f.__name__ == tool_name), None)
+            if func:
+                # Bind the AgentContext so sampler can call the wrapper directly.
+                spec.func = partial(func, context)
+            else:
+                print(f"[schema] Skipping {key!r}: no wrapper function found to sample.")
+                continue
 
         # Prefer success_examples/error_examples, but accept legacy success/error blocks.
         success_examples = _parse_examples_block(entry, "success_examples")
