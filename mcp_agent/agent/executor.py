@@ -14,6 +14,7 @@ from mcp_agent.knowledge.introspection import get_index
 from mcp_agent.actions.dispatcher import dispatch_tool
 from mcp_agent.utils.token_counter import count_json_tokens
 from mcp_agent.agent.observation_processor import summarize_observation
+from shared import agent_signal
 
 if TYPE_CHECKING:
     from mcp_agent.core.context import AgentContext
@@ -75,6 +76,8 @@ class ActionExecutor:
         Returns:
             StepResult containing success flag, preview text, observation payload, etc.
         """
+        agent_signal.raise_if_exit_requested()
+        agent_signal.wait_for_resume()
         action_type = command.get("type")
         if action_type == "search":
             return self._execute_search(command)
@@ -105,6 +108,8 @@ class ActionExecutor:
         Returns:
             Observation with discovered tools
         """
+        agent_signal.raise_if_exit_requested()
+        agent_signal.wait_for_resume()
         query = (command.get("query") or "").strip()
         provider = command.get("provider")
 
@@ -281,6 +286,8 @@ class ActionExecutor:
 
     def _execute_tool(self, command: Dict[str, Any]) -> StepResult:
         """Execute MCP tool call with validation."""
+        agent_signal.raise_if_exit_requested()
+        agent_signal.wait_for_resume()
         tool_id = command.get("tool_id")
         server = command.get("server")
         args = command.get("args")
@@ -370,6 +377,8 @@ class ActionExecutor:
 
         try:
             clean_payload = {k: v for k, v in payload.items() if k != "context"}
+            agent_signal.raise_if_exit_requested()
+            agent_signal.wait_for_resume()
             result = dispatch_tool(
                 context=self.agent_context,
                 provider=provider,
@@ -674,11 +683,25 @@ class ActionExecutor:
                 compressed_tokens=compressed_tokens,
             )
 
+        # Extract detailed error information including traceback
+        error_details = sandbox_result.error or "sandbox_execution_failed"
         error_payload = {
-            "error": sandbox_result.error or "sandbox_execution_failed",
+            "error": error_details,
             "logs": sandbox_result.logs,
         }
-        preview = command.get("reasoning") or f"Sandbox '{label}' failed"
+
+        # If the result contains traceback or additional error info, include it
+        if isinstance(normalized_result, dict):
+            if "traceback" in normalized_result:
+                error_payload["traceback"] = normalized_result["traceback"]
+            if "error_type" in normalized_result:
+                error_payload["error_type"] = normalized_result["error_type"]
+            # Include the full error message from the result if available
+            if "error" in normalized_result and normalized_result["error"]:
+                error_details = normalized_result["error"]
+                error_payload["error"] = error_details
+
+        preview = command.get("reasoning") or f"Sandbox '{label}' failed: {error_details[:100]}"
         return StepResult(
             type="sandbox",
             success=False,

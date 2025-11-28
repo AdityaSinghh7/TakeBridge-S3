@@ -197,10 +197,31 @@ if __name__ == "__main__":
     try:
         result = asyncio.run(main())
     except Exception as exc:  # pragma: no cover - sandbox error surfacing
+        # Extract detailed error information from nested exceptions
+        error_message = str(exc)
+        tb = traceback.format_exc()
+
+        # For ExceptionGroup/TaskGroup exceptions, extract sub-exception details
+        if hasattr(exc, '__cause__') and exc.__cause__:
+            error_message = f"{{error_message}} (caused by: {{str(exc.__cause__)}})"
+
+        if hasattr(exc, '__context__') and exc.__context__:
+            error_message = f"{{error_message}} (context: {{str(exc.__context__)}})"
+
+        # If this is an ExceptionGroup (Python 3.11+), extract all sub-exceptions
+        if hasattr(exc, 'exceptions'):
+            sub_errors = []
+            for i, sub_exc in enumerate(exc.exceptions):
+                sub_msg = f"[{{i+1}}] {{type(sub_exc).__name__}}: {{str(sub_exc)}}"
+                sub_errors.append(sub_msg)
+            if sub_errors:
+                error_message = f"{{error_message}}\\n  Sub-exceptions:\\n  " + "\\n  ".join(sub_errors)
+
         error_payload = {{
             "successful": False,
-            "error": "Sandbox error: " + str(exc),
-            "traceback": traceback.format_exc(),
+            "error": error_message,
+            "traceback": tb,
+            "error_type": type(exc).__name__,
             "data": {{}},
         }}
         _emit_result(error_payload)

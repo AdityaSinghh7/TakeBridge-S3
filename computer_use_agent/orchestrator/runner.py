@@ -21,7 +21,6 @@ from computer_use_agent.utils.behavior_narrator import BehaviorNarrator
 from shared.latency_logger import LATENCY_LOGGER
 from shared.streaming import emit_event
 from shared import agent_signal
-from computer_use_agent.tools.mcp_proxy import MCPToolBridge, NullMCPToolBridge
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +74,6 @@ def _build_grounding_prompts(
 
 def runner(
     request: OrchestrateRequest,
-    *,
-    mcp_bridge_factory: Optional[Callable[[], MCPToolBridge]] = None,
 ) -> RunnerResult:
     agent_signal.clear_signal_state()
     controller = VMControllerClient(
@@ -112,9 +109,6 @@ def runner(
     grounding_cfg = request.grounding
     worker_cfg = request.worker
     worker_post_action_delay = max(worker_cfg.post_action_worker_delay, 0.0)
-    mcp_bridge: MCPToolBridge = (
-        mcp_bridge_factory() if mcp_bridge_factory else NullMCPToolBridge()
-    )
 
     def _perform_run() -> RunnerResult:
         grounding_agent = OSWorldACI(
@@ -136,7 +130,6 @@ def runner(
         agent = AgentS3(
             worker_cfg.engine_params,
             grounding_agent,
-            mcp_bridge=mcp_bridge,
             platform=platform.lower() if platform else "unknown",
             max_trajectory_length=worker_cfg.max_trajectory_length,
             enable_reflection=worker_cfg.enable_reflection,
@@ -165,12 +158,9 @@ def runner(
         agent_signal.wait_for_resume()
         reflection_screenshot_bytes = before_screenshot_bytes
 
-        info: Dict[str, Any] = {"action_kind": "gui"}
         for step_index in range(1, max_steps + 1):
             agent_signal.raise_if_exit_requested()
             agent_signal.wait_for_resume()
-
-            mcp_bridge.set_step(step_index)
 
             emit_event(
                 "runner.step.started",
@@ -179,13 +169,10 @@ def runner(
                 },
             )
 
-            action_kind = info.get("action_kind", "gui")
-
             observation = {
                 "screenshot": before_screenshot_bytes,
                 "previous_behavior": previous_behavior_result,
                 "reflection_screenshot": reflection_screenshot_bytes,
-                "last_action_kind": action_kind,
             }
 
             agent_signal.raise_if_exit_requested()
@@ -313,19 +300,12 @@ def runner(
             agent_signal.raise_if_exit_requested()
             agent_signal.wait_for_resume()
 
-            behavior = None
-            if action_kind != "mcp":
-                with LATENCY_LOGGER.measure("runner", "behavior_narrator", extra={"step": step_index}):
-                    behavior = behavior_narrator.judge(
-                        screenshot_num=step_index,
-                        before_img_bytes=before_screenshot_bytes,
-                        after_img_bytes=after_screenshot_bytes,
-                        pyautogui_action=action,
-                    )
-            else:
-                emit_event(
-                    "runner.behavior.skipped",
-                    {"step": step_index, "reason": "mcp_action"},
+            with LATENCY_LOGGER.measure("runner", "behavior_narrator", extra={"step": step_index}):
+                behavior = behavior_narrator.judge(
+                    screenshot_num=step_index,
+                    before_img_bytes=before_screenshot_bytes,
+                    after_img_bytes=after_screenshot_bytes,
+                    pyautogui_action=action,
                 )
 
             steps.append(
@@ -340,13 +320,11 @@ def runner(
                     info=info,
                     behavior_fact_thoughts=behavior.get("fact_thoughts") if behavior else None,
                     behavior_fact_answer=behavior.get("fact_answer") if behavior else None,
-                    action_kind=action_kind,
+                    action_kind="gui",
                 )
             )
 
-            previous_behavior_result = behavior if action_kind != "mcp" else None
-
-            mcp_bridge.finalize_step()
+            previous_behavior_result = behavior
 
             emit_event(
                 "runner.step.completed",
@@ -406,10 +384,6 @@ def runner(
 
         return result
 
-    try:
-        return _perform_run()
-    finally:
-        if revert_action_filter:
-            configure_mcp_action_filters(None, None)
+    return _perform_run()
 
 __all__ = ["runner"]

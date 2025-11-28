@@ -99,7 +99,8 @@ def search_tools(
     matches: List[tuple[float, ProviderSpec, ToolSpec]] = []
 
     for prov in index.providers.values():
-        if not (prov.authorized and prov.registered and any(t.available for t in prov.actions)):
+        # Simplified: only check authorized (registered field removed as redundant)
+        if not (prov.authorized and any(t.available for t in prov.actions)):
             continue
         if provider_filter and prov.provider.lower() != provider_filter:
             continue

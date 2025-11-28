@@ -679,3 +679,35 @@ def respond_once(
         retry_backoff_jitter=retry_backoff_jitter,
         **kwargs,
     )
+
+
+def get_client(
+    *,
+    api_key: Optional[str] = None,
+    timeout: Optional[float] = None,
+    base_url: Optional[str] = None,
+) -> OpenAI:
+    """
+    Get a raw OpenAI client for direct SDK access.
+
+    For simple use cases that don't need the OAIClient wrapper.
+    Loads OPENAI_API_KEY from environment if not provided.
+
+    Args:
+        api_key: OpenAI API key (defaults to OPENAI_API_KEY env var)
+        timeout: Request timeout in seconds
+        base_url: Alternative API base URL
+
+    Returns:
+        OpenAI client instance
+    """
+    if api_key is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+
+    client_kwargs: Dict[str, Any] = {"api_key": api_key}
+    if timeout is not None:
+        client_kwargs["timeout"] = timeout
+    if base_url is not None:
+        client_kwargs["base_url"] = base_url
+
+    return OpenAI(**client_kwargs)

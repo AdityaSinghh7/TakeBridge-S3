@@ -4,7 +4,6 @@ from typing import Dict, List, Optional, Tuple
 
 from computer_use_agent.grounding.grounding_agent import ACI
 from computer_use_agent.worker.worker import Worker
-from computer_use_agent.tools.mcp_proxy import MCPToolBridge
 
 logger = logging.getLogger("desktopenv.agent")
 
@@ -53,7 +52,6 @@ class AgentS3(UIAgent):
         self,
         worker_engine_params: Dict,
         grounding_agent: ACI,
-        mcp_bridge: Optional[MCPToolBridge] = None,
         platform: str = platform.system().lower(),
         max_trajectory_length: int = 8,
         enable_reflection: bool = True,
@@ -71,7 +69,6 @@ class AgentS3(UIAgent):
         super().__init__(worker_engine_params, grounding_agent, platform)
         self.max_trajectory_length = max_trajectory_length
         self.enable_reflection = enable_reflection
-        self._mcp_bridge = mcp_bridge
 
         self.reset()
 
@@ -80,7 +77,6 @@ class AgentS3(UIAgent):
         self.executor = Worker(
             worker_engine_params=self.worker_engine_params,
             grounding_agent=self.grounding_agent,
-            mcp_bridge=self._mcp_bridge,
             platform=self.platform,
             max_trajectory_length=self.max_trajectory_length,
             enable_reflection=self.enable_reflection,

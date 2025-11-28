@@ -692,8 +692,8 @@ def _ensure_account_bound_url(url: str, user_id: str, ca_id: str) -> str:
     Ensure MCP URL includes binding query parameters.
     
     Adds/merges:
-        - connected_account_ids=ca_id
-        - user_id=user_id
+        - connected_account_ids=ca_id (overwrites if different)
+        - user_id=user_id (overwrites if different)
     
     Args:
         url: Base MCP URL
@@ -706,8 +706,9 @@ def _ensure_account_bound_url(url: str, user_id: str, ca_id: str) -> str:
     try:
         pr = urlparse(url)
         q = dict(parse_qsl(pr.query, keep_blank_values=True))
-        q.setdefault("connected_account_ids", ca_id)
-        q.setdefault("user_id", user_id)
+        # Always bind to the latest CA/user (refresh flows may reuse existing URLs)
+        q["connected_account_ids"] = ca_id
+        q["user_id"] = user_id
         new_q = urlencode(q)
         return urlunparse((pr.scheme, pr.netloc, pr.path, pr.params, new_q, pr.fragment))
     except Exception:

@@ -361,12 +361,16 @@ class ToolSpec:
 
 @dataclass
 class ProviderSpec:
-    """Provider-level metadata (authorization + tool catalog)."""
+    """Provider-level metadata (authorization + tool catalog).
+
+    Note: The 'registered' field was removed as it was redundant with 'authorized'.
+    Both inventory view and search now use the same authorization logic from
+    OAuthManager.auth_status().
+    """
 
     provider: str
     display_name: str
     authorized: bool
-    registered: bool
     configured: bool
     mcp_url: Optional[str]
     actions: List[ToolSpec] = field(default_factory=list)
@@ -377,7 +381,6 @@ class ProviderSpec:
             "provider": self.provider,
             "display_name": self.display_name,
             "authorized": self.authorized,
-            "registered": self.registered,
             "configured": self.configured,
             "mcp_url": self.mcp_url,
             "tool_count": len(self.actions),
