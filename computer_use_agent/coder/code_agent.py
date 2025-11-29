@@ -6,6 +6,10 @@ from computer_use_agent.memory.procedural_memory import PROCEDURAL_MEMORY
 from computer_use_agent.utils.common_utils import call_llm_safe, split_thinking_response
 from computer_use_agent.core.mllm import LMMAgent
 from shared.streaming import emit_event
+from shared.hierarchical_logger import (
+    get_hierarchical_logger,
+    get_step_id,
+)
 
 logger = logging.getLogger("desktopenv.agent")
 
@@ -146,6 +150,18 @@ class CodeAgent:
         """Execute code for the given task with a budget of steps."""
         if env_controller is None:
             raise ValueError("env_controller is required for code execution")
+
+        # Get hierarchical logger if available
+        h_logger = get_hierarchical_logger()
+        step_id = get_step_id() or "cu-main"
+        code_logger = None
+        if h_logger:
+            cu_logger = h_logger.get_agent_logger("computer_use", step_id)
+            code_logger = cu_logger.get_sub_logger("code_agent")
+            code_logger.log_event("session.started", {
+                "task": task_instruction,
+                "budget": self.budget,
+            })
 
         print(f"\n🚀 STARTING CODE EXECUTION")
         print("=" * 60)
@@ -364,6 +380,16 @@ class CodeAgent:
         }
 
         logger.info(f"Code execution completed: steps={step_count}")
+
+        # Log session completion to hierarchical logger
+        if code_logger:
+            code_logger.log_event("session.completed", {
+                "completion_reason": completion_reason,
+                "steps_executed": step_count,
+                "budget": self.budget,
+                "summary": summary,
+            })
+
         emit_event(
             "code_agent.session.completed",
             {

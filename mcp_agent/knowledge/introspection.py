@@ -109,13 +109,34 @@ class ToolboxBuilder:
         self.generated_at = utcnow_iso()
         self.context = AgentContext.create(self.user_id)
 
-    def build(self) -> ToolboxManifest:
+    def build(self, *, tool_constraints: Optional[Dict[str, Any]] = None) -> ToolboxManifest:
+        """Build toolbox manifest with optional tool constraints filtering.
+
+        Args:
+            tool_constraints: Optional dict with:
+                - mode: "auto" | "custom"
+                - providers: List[str] (for custom mode)
+                - tools: List[str] (for custom mode)
+
+        Returns:
+            ToolboxManifest with filtered providers based on constraints
+        """
         providers: List[ProviderSpec] = []
         for provider, funcs in sorted(get_provider_action_map().items()):
             status = OAuthManager.auth_status(self.context, provider)
             # Only include providers that are authorized and not refresh-blocked
             if not status.get("authorized"):
                 continue
+
+            # Apply tool constraints filtering
+            if tool_constraints:
+                mode = tool_constraints.get("mode", "auto")
+                if mode == "custom":
+                    allowed_providers = tool_constraints.get("providers", [])
+                    # If providers list is specified and provider not in it, skip
+                    if allowed_providers and provider not in allowed_providers:
+                        continue
+
             providers.append(self._build_provider(provider, funcs, status))
 
         current_version = 0  # Registry versioning removed
@@ -255,8 +276,18 @@ def get_manifest(
     user_id: str,
     *,
     refresh: bool = False,
+    tool_constraints: Optional[Dict[str, Any]] = None,
 ) -> ToolboxManifest:
-    """Return (and cache) the toolbox manifest for a user."""
+    """Return (and cache) the toolbox manifest for a user with optional filtering.
+
+    Args:
+        user_id: User ID to get manifest for
+        refresh: Force refresh of manifest
+        tool_constraints: Optional tool constraints for filtering
+
+    Returns:
+        ToolboxManifest (filtered if constraints provided)
+    """
     user = normalize_user_id(user_id)
     key = user
     # Helper to compute currently authorized providers (refresh-aware)
@@ -269,6 +300,24 @@ def get_manifest(
                 auth.add(prov)
         return auth
 
+    # If tool_constraints specified, always rebuild (don't use cache)
+    # This ensures filtering is applied correctly
+    if tool_constraints:
+        builder = ToolboxBuilder(user_id=user)
+        manifest = builder.build(tool_constraints=tool_constraints)
+        emit_event(
+            "mcp.toolbox.generated",
+            {
+                "user_id": user,
+                "providers": len(manifest.providers),
+                "persisted": False,
+                "fingerprint": manifest.fingerprint,
+                "tool_constraints": tool_constraints,
+            },
+        )
+        return manifest
+
+    # Standard caching path (no constraints)
     with _MANIFEST_CACHE_LOCK:
         entry = _MANIFEST_CACHE.get(key)
         needs_refresh = (

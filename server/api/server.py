@@ -18,7 +18,7 @@ import time
 from dataclasses import asdict
 from typing import Any, Dict, Optional
 
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -31,7 +31,6 @@ from computer_use_agent.orchestrator.data_types import (
     GroundingConfig,
     ControllerConfig,
 )
-from computer_use_agent.orchestrator.runner import runner
 from shared.latency_logger import LATENCY_LOGGER
 from shared import agent_signal
 from shared.streaming import (
@@ -130,18 +129,20 @@ def _parse_orchestrate_request(payload: Dict[str, Any]) -> OrchestrateRequest:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _execute_runner(
-    request: OrchestrateRequest, emitter: Optional[StreamEmitter] = None
+async def _execute_orchestrator(
+    request: "OrchestratorRequest", emitter: Optional[StreamEmitter] = None
 ):
-    """Execute the runner with optional stream emission."""
-    # logger.info(f"GEMINI_DEBUG: Emitter received in thread: {emitter}")
+    """Execute the orchestrator agent with optional stream emission."""
+    from orchestrator_agent.runtime import OrchestratorRuntime
+
     token = None
     if emitter:
         token = set_current_emitter(emitter)
-        # logger.info(f"GEMINI_DEBUG: Emitter after set: {get_current_emitter()}")
+
     try:
         with LATENCY_LOGGER.measure("server", "orchestrate"):
-            return runner(request)
+            runtime = OrchestratorRuntime()
+            return await runtime.run_task(request)
     except BaseException as exc:  # pragma: no cover - runtime guard
         logger.exception("Orchestration failed: %s", exc)
         raise
@@ -161,7 +162,21 @@ def _format_sse_event(event: str, data: Optional[Any] = None) -> bytes:
     parts.append("")
     return ("\n".join(parts)).encode("utf-8")
 
-def _create_streaming_response(request: OrchestrateRequest) -> StreamingResponse:
+def _create_streaming_response(
+    request: OrchestrateRequest,
+    user_id: Optional[str] = None,
+    tool_constraints: Optional[Dict[str, Any]] = None,
+) -> StreamingResponse:
+    """Create streaming response using orchestrator agent.
+
+    Args:
+        request: OrchestrateRequest format
+        user_id: Optional user ID for multi-tenancy
+        tool_constraints: Optional tool constraints dict
+
+    Returns:
+        StreamingResponse with SSE events
+    """
     queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue()
     loop = asyncio.get_running_loop()
 
@@ -213,8 +228,25 @@ def _create_streaming_response(request: OrchestrateRequest) -> StreamingResponse
         heartbeat = None
         try:
             heartbeat = asyncio.create_task(_emit_keepalive())
-            logger.info(f"GEMINI_DEBUG: Emitter before thread: {emitter}")
-            result = await asyncio.to_thread(_execute_runner, request, emitter)
+
+            from server.api.orchestrator_adapter import orchestrate_to_orchestrator
+
+            orch_request = orchestrate_to_orchestrator(
+                request,
+                user_id=user_id,
+                tool_constraints=tool_constraints,
+            )
+            logger.info("Executing orchestrator_agent request")
+            result = await _execute_orchestrator(orch_request, emitter)
+
+            # Convert RunState to dict for response
+            result_dict = {
+                "task": orch_request.task,
+                "status": "success" if all(r.success for r in result.results) else "partial",
+                "completion_reason": "ok" if result.results else "no_steps",
+                "steps": [asdict(r) for r in result.results],
+            }
+
         except BaseException as exc:  # pragma: no cover - runtime guard
             if isinstance(exc, SystemExit) and exc.code == 0:
                 logger.info("Orchestration exited cleanly via agent_signal.")
@@ -233,7 +265,6 @@ def _create_streaming_response(request: OrchestrateRequest) -> StreamingResponse
                 await queue.put(_format_sse_event("response.failed", error_payload))
                 await queue.put(_format_sse_event("error", error_payload))
         else:
-            result_dict = asdict(result)
             await queue.put(_format_sse_event("response", result_dict))
             await queue.put(
                 _format_sse_event(
@@ -259,29 +290,49 @@ def _create_streaming_response(request: OrchestrateRequest) -> StreamingResponse
     )
 
 @app.post("/orchestrate")
-async def orchestrate(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
+async def orchestrate(
+    payload: Dict[str, Any] = Body(...),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+) -> Dict[str, Any]:
     """
-    Run a single orchestrator loop using the shared dataclass contracts.
-    Only the `task` field is required in the payload. Optional sections:
-      - worker: overrides worker configuration (engine params, reflection, etc.)
-      - grounding: overrides grounding/code agent configuration
-      - controller: overrides VM controller connection details
-      - platform / enable_code_execution: optional execution flags
+    Run a single orchestrator task (non-streaming).
 
-    Grounding defaults:
-      - `RUNPOD_ID` (from environment) is used to derive
-        `https://<RUNPOD_ID>-3005.proxy.runpod.net` as the base URL.
-      - `RUNPOD_API_KEY` (from environment) is added as a Bearer token when present.
-      - The `/call_llm` path is automatically appended for coordinate inference.
-      - No system prompt is sent for coordinate grounding unless supplied.
+    Headers:
+        X-User-Id: Optional user ID for multi-tenancy (falls back to TB_DEFAULT_USER_ID env var)
+
+    Payload:
+        task: Required task description string
+        worker: Optional worker configuration overrides
+        grounding: Optional grounding/code agent configuration
+        controller: Optional VM controller connection details
+        tool_constraints: Optional dict with:
+            - mode: "auto" | "custom"
+            - providers: List[str] (for custom mode)
+            - tools: List[str] (for custom mode)
     """
+    from server.api.orchestrator_adapter import orchestrate_to_orchestrator
+
     request = _parse_orchestrate_request(payload)
+    user_id = x_user_id or os.getenv("TB_DEFAULT_USER_ID")
+    tool_constraints = payload.get("tool_constraints")
+
+    orch_request = orchestrate_to_orchestrator(
+        request,
+        user_id=user_id,
+        tool_constraints=tool_constraints,
+    )
+
     try:
-        result = _execute_runner(request)
+        result = await _execute_orchestrator(orch_request)
     except Exception as exc:  # pragma: no cover - runtime guard
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    return asdict(result)
+    return {
+        "task": orch_request.task,
+        "status": "success" if all(r.success for r in result.results) else "partial",
+        "completion_reason": "ok" if result.results else "no_steps",
+        "steps": [asdict(r) for r in result.results],
+    }
 
 
 @app.get("/orchestrate/stream")
@@ -299,12 +350,31 @@ async def orchestrate_stream(task: str) -> StreamingResponse:
 
 
 @app.post("/orchestrate/stream")
-async def orchestrate_stream_post(payload: Dict[str, Any] = Body(...)) -> StreamingResponse:
+async def orchestrate_stream_post(
+    payload: Dict[str, Any] = Body(...),
+    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+) -> StreamingResponse:
     """
     Streaming endpoint with full payload support (tool constraints, controller overrides, etc.).
+
+    Headers:
+        X-User-Id: Optional user ID for multi-tenancy (falls back to TB_DEFAULT_USER_ID env var)
+
+    Payload:
+        tool_constraints: Optional dict with:
+            - mode: "auto" | "custom"
+            - providers: List[str] (for custom mode)
+            - tools: List[str] (for custom mode)
     """
     request = _parse_orchestrate_request(payload)
-    return _create_streaming_response(request)
+
+    # Extract user_id from header or env
+    user_id = x_user_id or os.getenv("TB_DEFAULT_USER_ID")
+
+    # Extract tool_constraints from payload
+    tool_constraints = payload.get("tool_constraints")
+
+    return _create_streaming_response(request, user_id, tool_constraints)
 
 
 @app.get("/config")

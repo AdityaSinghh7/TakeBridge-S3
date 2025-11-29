@@ -17,6 +17,10 @@ from computer_use_agent.memory.procedural_memory import PROCEDURAL_MEMORY
 from computer_use_agent.utils.common_utils import call_llm_safe, compress_image
 from shared.latency_logger import LATENCY_LOGGER
 from shared.streaming import emit_event
+from shared.hierarchical_logger import (
+    get_hierarchical_logger,
+    get_step_id,
+)
 import logging
 
 logger = logging.getLogger("desktopenv.agent")
@@ -296,6 +300,17 @@ class OSWorldACI(ACI):
         if screenshot_data is None:
             raise ValueError("Observation missing 'screenshot' for grounding call")
 
+        # Get hierarchical logger if available
+        h_logger = get_hierarchical_logger()
+        step_id = get_step_id() or "cu-main"
+        grounding_logger = None
+        if h_logger:
+            cu_logger = h_logger.get_agent_logger("computer_use", step_id)
+            grounding_logger = cu_logger.get_sub_logger("grounding")
+            grounding_logger.log_event("generate_coords.started", {
+                "ref_expr": ref_expr,
+            })
+
         emit_event(
             "grounding.generate_coords.started",
             {
@@ -357,6 +372,14 @@ class OSWorldACI(ACI):
 
         if coords is None:
             raise RuntimeError("Failed to generate grounding coordinates")
+
+        # Log completion to hierarchical logger
+        if grounding_logger:
+            grounding_logger.log_event("generate_coords.completed", {
+                "ref_expr": ref_expr,
+                "coords": coords,
+                "source": source,
+            })
 
         emit_event(
             "grounding.generate_coords.completed",
@@ -890,6 +913,14 @@ class OSWorldACI(ACI):
             # Return a harmless no-op snippet to satisfy validation
             return "import time; time.sleep(0.123)"
 
+        # Get hierarchical logger if available
+        h_logger = get_hierarchical_logger()
+        step_id = get_step_id() or "cu-main"
+        grounding_logger = None
+        if h_logger:
+            cu_logger = h_logger.get_agent_logger("computer_use", step_id)
+            grounding_logger = cu_logger.get_sub_logger("grounding")
+
         logger.info("=" * 50)
         logger.info("GROUNDING AGENT: Calling Code Agent")
         logger.info("=" * 50)
@@ -903,6 +934,13 @@ class OSWorldACI(ACI):
             # This is a full task - use the original task instruction to prevent hallucination
             task_to_execute = self.current_task_instruction
             logger.info(f"Executing FULL TASK: {task_to_execute}")
+
+        # Log code agent call to hierarchical logger
+        if grounding_logger:
+            grounding_logger.log_event("code_agent.call_started", {
+                "task": task_to_execute,
+                "is_subtask": task is not None,
+            })
 
         if task_to_execute:
             print("obs keys: ", self.obs.keys())
@@ -931,6 +969,15 @@ class OSWorldACI(ACI):
             logger.info("=" * 50)
             logger.info("GROUNDING AGENT: Code Agent Call Finished")
             logger.info("=" * 50)
+
+            # Log code agent completion to hierarchical logger
+            if grounding_logger:
+                grounding_logger.log_event("code_agent.call_completed", {
+                    "task": task_to_execute,
+                    "completion_reason": result["completion_reason"],
+                    "steps_executed": result["steps_executed"],
+                    "summary": result["summary"],
+                })
 
             # Return code to be executed in the environment
             emit_event(

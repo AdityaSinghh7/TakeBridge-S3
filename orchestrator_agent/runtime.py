@@ -31,6 +31,12 @@ from orchestrator_agent.system_prompt import build_system_prompt
 from shared.logger import StructuredLogger
 from shared.token_cost_tracker import TOKEN_TRACKER
 from shared import agent_signal
+from shared.streaming import emit_event
+from shared.hierarchical_logger import (
+    HierarchicalLogger,
+    set_hierarchical_logger,
+    get_hierarchical_logger,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +48,18 @@ class OrchestratorRuntime:
         self.logger = StructuredLogger("orchestrator")
         self.cost_tracker = TOKEN_TRACKER
         self._semaphore = asyncio.Semaphore(max_concurrency)
+        self.hierarchical_logger: Optional[HierarchicalLogger] = None
 
     async def run_task(self, request: OrchestratorRequest) -> RunState:
         """Process a single request with single-step planning."""
         agent_signal.register_signal_handlers()
         agent_signal.clear_signal_state()
+
+        # Initialize hierarchical logger and set in context
+        self.hierarchical_logger = HierarchicalLogger(request.task)
+        set_hierarchical_logger(self.hierarchical_logger)
+        orch_logger = self.hierarchical_logger.get_agent_logger("orchestrator")
+
         state = RunState(
             request=request,
             plan=[],  # No pre-planned steps - planning happens each iteration
@@ -60,6 +73,24 @@ class OrchestratorRuntime:
             f"Starting orchestration request_id={request_id} tenant={tenant_id}"
         )
 
+        # Emit SSE event: task started
+        emit_event("orchestrator.task.started", {
+            "request_id": request_id,
+            "tenant_id": tenant_id,
+            "task": request.task[:100],
+            "max_steps": request.budget.max_steps,
+            "tool_constraints": request.tool_constraints.to_dict() if request.tool_constraints else None,
+        })
+
+        # Log to hierarchical logger
+        orch_logger.log_event("task.started", {
+            "task": request.task,
+            "max_steps": request.budget.max_steps,
+            "tenant_id": tenant_id,
+            "request_id": request_id,
+            "tool_constraints": request.tool_constraints.to_dict() if request.tool_constraints else None,
+        })
+
         # Main planning loop - get next step, execute, repeat
         while state.within_limits(self.cost_tracker.total_cost_usd):
             agent_signal.raise_if_exit_requested()
@@ -70,15 +101,34 @@ class OrchestratorRuntime:
                 len(state.results) > 0 and state.results[-1].status == "failed"
             )
 
+            # Emit SSE event: planning started
+            emit_event("orchestrator.planning.started", {
+                "step_number": len(state.results) + 1,
+                "last_failed": last_failed,
+            })
+
             # Ask orchestrator: what's the next step?
             decision = self._get_next_step(request, state, last_failed)
 
+            # Emit SSE event: planning completed
+            emit_event("orchestrator.planning.completed", {
+                "decision_type": decision["type"],
+                "target": decision.get("target"),
+                "task_preview": decision.get("task", "")[:80],
+            })
+
             if decision["type"] == "task_complete":
                 self.logger.info(f"Task complete: {decision.get('reasoning')}")
+                orch_logger.log_event("task.complete", {
+                    "reasoning": decision.get("reasoning"),
+                })
                 break
 
             elif decision["type"] == "task_impossible":
                 self.logger.info(f"Task impossible: {decision.get('reasoning')}")
+                orch_logger.log_event("task.impossible", {
+                    "reasoning": decision.get("reasoning"),
+                })
                 # Record as a special terminal result
                 state.record_intermediate("completion_status", "impossible")
                 state.record_intermediate("impossible_reason", decision.get("reasoning"))
@@ -100,8 +150,22 @@ class OrchestratorRuntime:
                     f"Next step: {decision['target']} - {decision['task'][:80]}"
                 )
 
+                # Emit SSE event: step dispatching
+                emit_event("orchestrator.step.dispatching", {
+                    "step_id": step.step_id,
+                    "target": step.target,
+                    "task": step.next_task[:100],
+                })
+
                 result = await self._dispatch_step(step, state)
                 state.record_result(result)
+
+                # Emit SSE event: step completed
+                emit_event("orchestrator.step.completed", {
+                    "step_id": step.step_id,
+                    "status": result.status,
+                    "success": result.success,
+                })
 
             else:
                 logger.error(f"Unknown decision type: {decision.get('type')}")
@@ -118,6 +182,19 @@ class OrchestratorRuntime:
                     f"Step limit reached ({request.budget.max_steps}); stopping."
                 )
                 break
+
+        # Emit SSE event: task completed
+        emit_event("orchestrator.task.completed", {
+            "total_steps": len(state.results),
+            "status": "success" if all(r.success for r in state.results) else "partial",
+        })
+
+        # Log to hierarchical logger
+        orch_logger.log_event("task.completed", {
+            "total_steps": len(state.results),
+            "successful_steps": sum(1 for r in state.results if r.success),
+            "failed_steps": sum(1 for r in state.results if not r.success),
+        })
 
         return state
 
