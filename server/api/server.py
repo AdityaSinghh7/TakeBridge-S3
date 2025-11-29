@@ -4,6 +4,9 @@ FastAPI server that exposes the orchestrator loop.
 Input/output contracts are defined in `computer_use_agent.orchestrator.data_types`.
 The endpoint performs dataclass validation and returns JSON payloads that
 mirror those structures.
+
+Authentication: All endpoints require a valid Supabase JWT token in the
+Authorization header. User ID is extracted from the token (sub claim).
 """
 
 from __future__ import annotations
@@ -18,7 +21,7 @@ import time
 from dataclasses import asdict
 from typing import Any, Dict, Optional
 
-from fastapi import Body, FastAPI, Header, HTTPException
+from fastapi import Body, Depends, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -39,6 +42,10 @@ from shared.streaming import (
     reset_current_emitter,
     set_current_emitter,
 )
+
+# Import auth dependency
+from server.api.auth import get_current_user, CurrentUser
+
 try:
     from dotenv import load_dotenv  # type: ignore
 except Exception:  # pragma: no cover
@@ -87,6 +94,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "https://localhost:3000",
+        "*",  # Allow all origins for auth flow
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -120,6 +128,43 @@ try:
     logger.info("Mounted MCP tools (TEST-ONLY) routes")
 except Exception as _e:  # pragma: no cover
     logger.warning("Failed to mount MCP tools routes: %s", _e)
+
+# Mount App routes (run_task)
+try:
+    from server.api.routes_app import router as app_router  # type: ignore
+    app.include_router(app_router)
+    logger.info("Mounted App routes")
+except Exception as _e:  # pragma: no cover
+    logger.warning("Failed to mount App routes: %s", _e)
+
+# Mount Workspace routes
+try:
+    from server.api.routes_workspace import router as workspace_router  # type: ignore
+    app.include_router(workspace_router)
+    logger.info("Mounted Workspace routes")
+except Exception as _e:  # pragma: no cover
+    logger.warning("Failed to mount Workspace routes: %s", _e)
+
+
+# Health check endpoint (no auth required)
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
+# Debug auth endpoint (no auth required, for troubleshooting)
+@app.get("/debug/auth")
+async def debug_auth():
+    """
+    Debug endpoint to check auth configuration (without sensitive data).
+    Helps verify JWT secret is configured correctly.
+    """
+    from server.api.config import settings
+    return {
+        "jwt_secret_configured": bool(settings.SUPABASE_JWT_SECRET),
+        "jwt_secret_length": len(settings.SUPABASE_JWT_SECRET) if settings.SUPABASE_JWT_SECRET else 0,
+        "jwt_algorithm": settings.SUPABASE_JWT_ALG,
+    }
 
 
 def _parse_orchestrate_request(payload: Dict[str, Any]) -> OrchestrateRequest:
@@ -166,13 +211,15 @@ def _create_streaming_response(
     request: OrchestrateRequest,
     user_id: Optional[str] = None,
     tool_constraints: Optional[Dict[str, Any]] = None,
+    auto_resolve_workspace: bool = True,
 ) -> StreamingResponse:
     """Create streaming response using orchestrator agent.
 
     Args:
         request: OrchestrateRequest format
-        user_id: Optional user ID for multi-tenancy
+        user_id: User ID from JWT token
         tool_constraints: Optional tool constraints dict
+        auto_resolve_workspace: If True, automatically get/create workspace and use its controller_base_url
 
     Returns:
         StreamingResponse with SSE events
@@ -230,6 +277,20 @@ def _create_streaming_response(
             heartbeat = asyncio.create_task(_emit_keepalive())
 
             from server.api.orchestrator_adapter import orchestrate_to_orchestrator
+            from server.core.workspace_service import ensure_workspace
+
+            # Auto-resolve workspace if enabled and user_id is provided
+            if auto_resolve_workspace and user_id:
+                try:
+                    ws = ensure_workspace(user_id)
+                    # Override controller base_url with workspace's controller_base_url
+                    # unless it's already explicitly set in the request
+                    if ws.controller_base_url and not request.controller.base_url:
+                        request.controller.base_url = ws.controller_base_url
+                        logger.info(f"Using workspace controller_base_url: {ws.controller_base_url}")
+                except Exception as e:
+                    logger.warning(f"Failed to resolve workspace for user {user_id}: {e}")
+                    # Continue without workspace - controller might be set manually
 
             orch_request = orchestrate_to_orchestrator(
                 request,
@@ -289,22 +350,52 @@ def _create_streaming_response(
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
+
+def _ensure_workspace_controller(
+    payload: Dict[str, Any],
+    user_id: str,
+) -> Dict[str, Any]:
+    """Ensure controller base_url is set from workspace if not provided in payload."""
+    from server.core.workspace_service import ensure_workspace
+
+    # If controller base_url is already set, use it
+    controller_data = payload.get("controller", {})
+    if controller_data.get("base_url"):
+        return payload
+
+    # Otherwise, get/create workspace and use its controller_base_url
+    try:
+        ws = ensure_workspace(user_id)
+        if ws.controller_base_url:
+            if "controller" not in payload:
+                payload["controller"] = {}
+            payload["controller"]["base_url"] = ws.controller_base_url
+            logger.info(f"Using workspace controller_base_url: {ws.controller_base_url}")
+    except Exception as e:
+        logger.warning(f"Failed to resolve workspace for user {user_id}: {e}")
+        # Continue without workspace - controller might be set manually
+
+    return payload
+
 @app.post("/orchestrate")
 async def orchestrate(
     payload: Dict[str, Any] = Body(...),
-    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
     Run a single orchestrator task (non-streaming).
 
-    Headers:
-        X-User-Id: Optional user ID for multi-tenancy (falls back to TB_DEFAULT_USER_ID env var)
+    Authentication: Requires a valid Supabase JWT token in the Authorization header.
+    The user_id is extracted from the token (sub claim).
+
+    Automatically resolves workspace and uses its controller_base_url if controller.base_url
+    is not provided in the payload.
 
     Payload:
         task: Required task description string
         worker: Optional worker configuration overrides
         grounding: Optional grounding/code agent configuration
-        controller: Optional VM controller connection details
+        controller: Optional VM controller connection details (base_url auto-resolved from workspace if not provided)
         tool_constraints: Optional dict with:
             - mode: "auto" | "custom"
             - providers: List[str] (for custom mode)
@@ -312,8 +403,11 @@ async def orchestrate(
     """
     from server.api.orchestrator_adapter import orchestrate_to_orchestrator
 
+    user_id = current_user.sub
+    # Auto-resolve workspace controller if not provided
+    payload = _ensure_workspace_controller(payload, user_id)
+
     request = _parse_orchestrate_request(payload)
-    user_id = x_user_id or os.getenv("TB_DEFAULT_USER_ID")
     tool_constraints = payload.get("tool_constraints")
 
     orch_request = orchestrate_to_orchestrator(
@@ -336,9 +430,17 @@ async def orchestrate(
 
 
 @app.get("/orchestrate/stream")
-async def orchestrate_stream(task: str) -> StreamingResponse:
+async def orchestrate_stream(
+    task: str,
+    current_user: CurrentUser = Depends(get_current_user),
+) -> StreamingResponse:
     """
-    Backward-compatible streaming endpoint that only accepts a `task` query param.
+    Streaming endpoint that accepts a `task` query param.
+
+    Authentication: Requires a valid Supabase JWT token in the Authorization header.
+    The user_id is extracted from the token (sub claim).
+
+    Automatically resolves workspace and uses its controller_base_url.
     """
     request = OrchestrateRequest(
         task=task,
@@ -346,42 +448,62 @@ async def orchestrate_stream(task: str) -> StreamingResponse:
         grounding=GroundingConfig.from_dict({}),
         controller=ControllerConfig.from_dict({}),
     )
-    return _create_streaming_response(request)
+    return _create_streaming_response(
+        request,
+        user_id=current_user.sub,
+        auto_resolve_workspace=True,
+    )
 
 
 @app.post("/orchestrate/stream")
 async def orchestrate_stream_post(
     payload: Dict[str, Any] = Body(...),
-    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> StreamingResponse:
     """
     Streaming endpoint with full payload support (tool constraints, controller overrides, etc.).
 
-    Headers:
-        X-User-Id: Optional user ID for multi-tenancy (falls back to TB_DEFAULT_USER_ID env var)
+    Authentication: Requires a valid Supabase JWT token in the Authorization header.
+    The user_id is extracted from the token (sub claim).
+
+    Automatically resolves workspace and uses its controller_base_url if controller.base_url
+    is not provided in the payload.
 
     Payload:
+        task: Required task description string
+        controller: Optional VM controller connection details (base_url auto-resolved from workspace if not provided)
         tool_constraints: Optional dict with:
             - mode: "auto" | "custom"
             - providers: List[str] (for custom mode)
             - tools: List[str] (for custom mode)
     """
-    request = _parse_orchestrate_request(payload)
+    user_id = current_user.sub
 
-    # Extract user_id from header or env
-    user_id = x_user_id or os.getenv("TB_DEFAULT_USER_ID")
+    # Auto-resolve workspace controller if not provided
+    payload = _ensure_workspace_controller(payload, user_id)
+
+    request = _parse_orchestrate_request(payload)
 
     # Extract tool_constraints from payload
     tool_constraints = payload.get("tool_constraints")
 
-    return _create_streaming_response(request, user_id, tool_constraints)
+    return _create_streaming_response(
+        request,
+        user_id=user_id,
+        tool_constraints=tool_constraints,
+        auto_resolve_workspace=True,
+    )
 
 
 @app.get("/config")
-async def config_defaults() -> Dict[str, Any]:
+async def config_defaults(
+    current_user: CurrentUser = Depends(get_current_user),
+) -> Dict[str, Any]:
     """
     Return the default orchestrator configuration. Clients can merge overrides
     onto this structure when calling `/orchestrate`.
+
+    Authentication: Requires a valid Supabase JWT token in the Authorization header.
     """
     return {
         "controller": DEFAULT_CONTROLLER_CONFIG,
