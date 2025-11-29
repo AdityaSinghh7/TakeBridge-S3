@@ -620,14 +620,14 @@ def execute_mcp_task(
 
         # Emit SSE event: task completed
         emit_event("mcp.task.completed", {
-            "success": result.success,
+            "success": result.get("success", False),
             "step_id": step_id,
         })
 
         # Log to hierarchical logger
         mcp_logger.log_event("task.completed", {
-            "success": result.success,
-            "error": result.error if not result.success else None,
+            "success": result.get("success", False),
+            "error": result.get("error") if not result.get("success", False) else None,
         })
 
         return result

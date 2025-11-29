@@ -96,12 +96,13 @@ class HierarchicalLogger:
 
         self.task = task
         self.task_hash = task_hash
-        self.timestamp = timestamp or datetime.utcnow().isoformat()
-        self.run_dir = Path(base_dir) / f"{self.timestamp}_{task_hash}"
-        self.run_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create metadata file
-        self._write_metadata()
+        raw_timestamp = timestamp or datetime.utcnow().isoformat()
+        self.timestamp = raw_timestamp
+        safe_timestamp = raw_timestamp.replace(":", "-")
+
+        self.run_dir = Path(base_dir) / f"{safe_timestamp}_{task_hash}"
+        self.run_dir.mkdir(parents=True, exist_ok=True)
 
     def _write_metadata(self) -> None:
         """Write run metadata to metadata.json."""

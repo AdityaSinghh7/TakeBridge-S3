@@ -415,7 +415,10 @@ def _score_tool_heuristic_fallback(tool: ToolSpec, query: _Query) -> float:
 # ============================================================================
 
 
-def get_inventory_view(context: AgentContext) -> Dict[str, Any]:
+def get_inventory_view(
+    context: AgentContext,
+    tool_constraints: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """
     Generate inventory view: provider names + tool names only.
 
@@ -424,6 +427,10 @@ def get_inventory_view(context: AgentContext) -> Dict[str, Any]:
 
     Args:
         context: Agent context with user_id
+        tool_constraints: Optional dict with:
+            - mode: "auto" | "custom"
+            - providers: List[str] (for custom mode)
+            - tools: List[str] (for custom mode)
 
     Returns:
         Dict with providers list:
@@ -444,8 +451,24 @@ def get_inventory_view(context: AgentContext) -> Dict[str, Any]:
         if not provider_info.get("authorized"):
             continue
 
+        # Apply tool constraints filtering
+        if tool_constraints:
+            mode = tool_constraints.get("mode", "auto")
+            if mode == "custom":
+                allowed_providers = tool_constraints.get("providers", [])
+                # If providers list is specified and provider not in it, skip
+                if allowed_providers and provider_info["provider"] not in allowed_providers:
+                    continue
+
         funcs = action_map.get(provider_info["provider"], ())
         tool_names = [f.__name__ for f in funcs]
+
+        # Apply tool-level filtering if in custom mode
+        if tool_constraints and tool_constraints.get("mode") == "custom":
+            allowed_tools = tool_constraints.get("tools", [])
+            if allowed_tools:
+                # Filter to only allowed tools
+                tool_names = [name for name in tool_names if name in allowed_tools]
 
         providers.append({
             "provider": provider_info["provider"],
