@@ -18,6 +18,28 @@ StepStatus = Literal["pending", "running", "completed", "failed"]
 CompletionReason = Literal["ok", "max_steps", "budget_exceeded", "error", "cancelled"]
 
 
+@dataclass
+class ToolConstraints:
+    """Tool availability constraints for MCP agent.
+
+    Controls which tools are available during task execution:
+    - auto mode: Uses all tools from authorized providers (OAuth-verified)
+    - custom mode: Restricts to specific providers/tools from the allow list
+    """
+
+    mode: Literal["auto", "custom"] = "auto"
+    providers: List[str] = field(default_factory=list)
+    tools: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "mode": self.mode,
+            "providers": self.providers,
+            "tools": self.tools,
+        }
+
+
 def generate_step_id(prefix: str = "step") -> str:
     """Small helper to keep step IDs consistent across the orchestrator."""
     return f"{prefix}-{uuid.uuid4().hex[:8]}"
@@ -162,6 +184,8 @@ class ComputerUseAgentOutput:
 @dataclass
 class OrchestratorRequest(AgentTaskInput):
     """Concrete request used by the orchestrator runtime."""
+
+    tool_constraints: Optional[ToolConstraints] = None
 
     def __post_init__(self) -> None:
         # Keep budget max_steps aligned with the top-level field.
@@ -385,5 +409,6 @@ __all__ = [
     "StepResult",
     "StepStatus",
     "TenantContext",
+    "ToolConstraints",
     "generate_step_id",
 ]

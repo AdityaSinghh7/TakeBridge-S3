@@ -23,6 +23,10 @@ from computer_use_agent.utils.formatters import (
     CODE_VALID_FORMATTER,
 )
 from shared.streaming import emit_event
+from shared.hierarchical_logger import (
+    get_hierarchical_logger,
+    get_step_id,
+)
 
 logger = logging.getLogger("desktopenv.agent")
 
@@ -473,6 +477,19 @@ class Worker(BaseModule):
         """
 
         current_step = self.turn_count + 1
+
+        # Get hierarchical logger if available
+        h_logger = get_hierarchical_logger()
+        step_id = get_step_id() or "cu-main"
+        worker_logger = None
+        if h_logger:
+            cu_logger = h_logger.get_agent_logger("computer_use", step_id)
+            worker_logger = cu_logger.get_sub_logger("worker")
+            worker_logger.log_event("step.started", {
+                "step": current_step,
+                "turn_count": self.turn_count,
+            })
+
         emit_event(
             "worker.step.started",
             {
@@ -781,6 +798,16 @@ class Worker(BaseModule):
                 "previous_behavior_answer": executor_info["previous_behavior_answer"],
             },
         )
+
+        # Log step completion to hierarchical logger
+        if worker_logger:
+            worker_logger.log_event("step.completed", {
+                "step": current_step,
+                "plan": plan,
+                "has_reflection": reflection is not None,
+                "has_code_agent_output": executor_info.get("code_agent_output") is not None,
+            })
+
         self.turn_count += 1
         self.screenshot_inputs.append(
             obs.get("reflection_screenshot") or obs.get("screenshot")

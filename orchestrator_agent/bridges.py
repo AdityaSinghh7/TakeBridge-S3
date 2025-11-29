@@ -15,6 +15,7 @@ import logging
 from typing import Any, Dict
 
 from orchestrator_agent.data_types import AgentTarget, OrchestratorRequest, PlannedStep
+from shared.hierarchical_logger import set_step_id
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +135,9 @@ def run_mcp_agent(
     IMPORTANT: Returns ONLY trajectory string, not raw_result.
     The trajectory contains all necessary data.
     """
+    # Bind step_id to context for hierarchical logging
+    set_step_id(step.step_id)
+
     logger.info(
         "bridge.mcp.start task=%s user_id=%s step=%s",
         step.next_task,
@@ -143,12 +147,24 @@ def run_mcp_agent(
     try:
         from mcp_agent.agent import execute_mcp_task
 
+        # Extract tool constraints and pass in extra_context
+        tool_constraints = None
+        if request.tool_constraints:
+            tool_constraints = request.tool_constraints.to_dict()
+
+        # Build extra_context with step_id and tool_constraints
+        extra_context = {
+            "request_id": request.request_id,
+            "step_id": step.step_id,
+            "tool_constraints": tool_constraints,
+        }
+
         raw_result = execute_mcp_task(
             step.next_task,
             user_id=(request.user_id or request.tenant.user_id if request.tenant else None)
             or "orchestrator",
             budget=None,
-            extra_context={"request_id": request.request_id},
+            extra_context=extra_context,
         )
         raw_dict = dict(raw_result)
     except Exception as exc:  # pragma: no cover
@@ -181,6 +197,9 @@ def run_computer_use_agent(
     IMPORTANT: Returns ONLY trajectory string, not raw_result.
     The trajectory contains all necessary data.
     """
+    # Bind step_id to context for hierarchical logging
+    set_step_id(step.step_id)
+
     try:
         from computer_use_agent.orchestrator.runner import runner
         from computer_use_agent.orchestrator.data_types import OrchestrateRequest

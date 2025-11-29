@@ -75,6 +75,9 @@ class AgentState:
     run_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     task_id: str = field(init=False)
 
+    # Tool constraints for provider filtering
+    tool_constraints: Optional[Dict[str, Any]] = None
+
     # Provider inventory (lightweight tree view)
     provider_tree: List[Dict[str, Any]] = field(default_factory=list)
 
