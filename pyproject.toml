@@ -66,6 +66,8 @@ dependencies = [
   "psycopg2-binary>=2.9.11",
   "tiktoken>=0.12.0",
   "sentence-transformers>=2.2.0",
+  "boto3>=1.41.5",
+  "python-jose[cryptography]>=3.5.0",
 ]
 
 [project.optional-dependencies]
