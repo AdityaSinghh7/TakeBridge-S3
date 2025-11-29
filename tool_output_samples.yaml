@@ -83,7 +83,7 @@ shopify.shopify_update_order:
   mode: mutate
   success_examples:
     - args:
-        id: 12345
+        id: 1003
         phone: "+1-555-0000"
   error_examples:
     - args:
@@ -150,7 +150,7 @@ googledrive.googledrive_upload_file:
   success_examples:
     - args:
         file_to_upload:
-          name: "sample.txt"
+          name: "/Users/sohamlokhande/Desktop/IMG_5729.jpg"
           content: "Hello"
         folder_to_upload_to: ""
   error_examples:
@@ -292,9 +292,9 @@ googlesheets.googlesheets_batch_get:
   mode: read
   success_examples:
     - args:
-        spreadsheet_id: "sheet123"
+        spreadsheet_id: "1mHdvARBRoMg9OZGfAxpoGwzhWcTWvb6x9cVuWdc1u8U"
         ranges:
-          - "Sheet1!A1:B2"
+          - "A2:B3"
   error_examples:
     - args:
         spreadsheet_id: ""
@@ -361,8 +361,8 @@ mailchimp.mailchimp_create_a_survey_campaign:
   mode: mutate
   success_examples:
     - args:
-        list_id: "list1"
-        survey_id: "survey1"
+        list_id: "88e5466ec0"
+        survey_id: "fb8d0ebebc"
   error_examples:
     - args:
         list_id: ""
