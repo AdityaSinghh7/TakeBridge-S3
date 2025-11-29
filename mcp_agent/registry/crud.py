@@ -119,6 +119,15 @@ def upsert_connected_account(
     ).scalar_one_or_none()
     
     if existing:
+        # If Composio rotated the CA id, migrate in place and retarget connections
+        if existing.id != ca_id:
+            old_id = existing.id
+            db.execute(
+                update(MCPConnection)
+                .where(MCPConnection.connected_account_id == old_id)
+                .values(connected_account_id=ca_id)
+            )
+            existing.id = ca_id
         existing.status = status
         existing.provider = provider
         existing.provider_uid = provider_uid
@@ -268,17 +277,24 @@ def get_active_context_for_provider(
 def is_authorized(db: Session, user_id: str, provider: str) -> bool:
     """
     Check if a user is authorized for a provider.
-    
+
+    Uses OAuthManager.auth_status() to ensure consistent authorization logic
+    that includes refresh_required checks.
+
     Args:
         db: Database session
         user_id: User/tenant identifier
         provider: Provider name
-    
+
     Returns:
-        True if user has active MCP connection for provider
+        True if user has active MCP connection with no refresh required
     """
-    url, _ = get_active_mcp_for_provider(db, user_id, provider)
-    return bool(url)
+    from mcp_agent.core.context import AgentContext
+    from mcp_agent.registry.oauth import OAuthManager
+
+    context = AgentContext.create(user_id)
+    status = OAuthManager.auth_status(context, provider)
+    return status.get("authorized", False)
 
 
 def disconnect_provider(db: Session, user_id: str, provider: str) -> dict:
@@ -398,6 +414,9 @@ def get_available_providers(context: AgentContext) -> list[dict]:
     """
     Get list of available providers for the current user.
 
+    Uses OAuthManager.auth_status() to ensure consistent authorization logic
+    that includes refresh_required checks, matching the inventory view.
+
     Args:
         context: Agent context with user_id and db_session
 
@@ -405,23 +424,22 @@ def get_available_providers(context: AgentContext) -> list[dict]:
         List of provider info dicts with keys: provider, authorized, configured, mcp_url
     """
     from mcp_agent.actions import SUPPORTED_PROVIDERS
-    from mcp_agent.user_identity import normalize_user_id
+    from mcp_agent.registry.oauth import OAuthManager
 
-    user_id = normalize_user_id(context.user_id)
     providers = []
 
-    with context.get_db() as db:
-        for provider in SUPPORTED_PROVIDERS:
-            mcp_url, _ = get_active_mcp_for_provider(db, user_id, provider)
-            authorized = bool(mcp_url)
-            configured = bool(mcp_url)
+    for provider in SUPPORTED_PROVIDERS:
+        status = OAuthManager.auth_status(context, provider)
+        authorized = status.get("authorized", False)
+        mcp_url = status.get("mcp_url")
+        configured = bool(mcp_url)  # Keep backwards compatibility
 
-            providers.append({
-                "provider": provider,
-                "authorized": authorized,
-                "configured": configured,
-                "mcp_url": mcp_url,
-            })
+        providers.append({
+            "provider": provider,
+            "authorized": authorized,
+            "configured": configured,
+            "mcp_url": mcp_url,
+        })
 
     return providers
 

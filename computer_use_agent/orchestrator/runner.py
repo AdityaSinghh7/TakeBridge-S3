@@ -21,7 +21,6 @@ from computer_use_agent.utils.behavior_narrator import BehaviorNarrator
 from shared.latency_logger import LATENCY_LOGGER
 from shared.streaming import emit_event
 from shared import agent_signal
-from computer_use_agent.tools.mcp_proxy import MCPToolBridge, NullMCPToolBridge
 
 logger = logging.getLogger(__name__)
 
@@ -73,10 +72,119 @@ def _build_grounding_prompts(
     }
 
 
+def _build_trajectory_markdown(steps: List[RunnerStep], status: str, completion_reason: str) -> str:
+    """Build COMPLETE self-contained markdown trajectory for orchestrator.
+
+    CRITICAL: This trajectory must contain ALL relevant data.
+    NO raw outputs or telemetry should be needed - everything is in this markdown.
+
+    Args:
+        steps: List of execution steps
+        status: Final status (success, failed, timeout)
+        completion_reason: Reason for completion (DONE, FAIL, MAX_STEPS_REACHED)
+
+    Returns:
+        Rich markdown trajectory showing all steps with complete data
+    """
+    import json
+
+    lines = []
+
+    for step in steps:
+        lines.append(f"## Step {step.step_index}")
+        lines.append("")
+
+        # Worker output
+        if step.plan:
+            lines.append("### Worker Agent")
+            lines.append(f"**Plan**: {step.plan}")
+
+            if step.action:
+                # Truncate action for readability
+                action_display = step.action
+                if len(action_display) > 300:
+                    action_display = action_display[:300] + "... (truncated)"
+                lines.append(f"**Action**: `{action_display}`")
+
+            if step.execution_result:
+                result_json = json.dumps(step.execution_result, indent=2, ensure_ascii=False)
+                lines.append(f"**Execution Result**:\n```json\n{result_json}\n```")
+
+        # Reflection output
+        if step.reflection:
+            lines.append("")
+            lines.append("### Reflection Agent")
+            lines.append(f"**Reflection**: {step.reflection}")
+
+            if step.reflection_thoughts:
+                lines.append(f"**Thoughts**: {step.reflection_thoughts}")
+
+        # Behaviour narrator output
+        if step.behavior_fact_answer:
+            lines.append("")
+            lines.append("### Behaviour Narrator")
+            lines.append(f"**Observation**: {step.behavior_fact_answer}")
+
+            if step.behavior_fact_thoughts:
+                lines.append(f"**Analysis**: {step.behavior_fact_thoughts}")
+
+        # Code agent output (if present)
+        if step.info:
+            code_output = step.info.get("code_agent_output")
+            if code_output:
+                lines.append("")
+                lines.append("### Code Agent")
+
+                if isinstance(code_output, dict):
+                    # Extract code and result
+                    summary = code_output.get("summary", "")
+                    completion = code_output.get("completion_reason", "")
+                    exec_history = code_output.get("execution_history", [])
+
+                    if summary:
+                        lines.append(f"**Summary**: {summary}")
+                    if completion:
+                        lines.append(f"**Completion**: {completion}")
+
+                    # Show execution history (limit to last 3 steps)
+                    if exec_history:
+                        lines.append("**Execution History**:")
+                        for hist_step in exec_history[-3:]:  # Last 3 steps only
+                            step_num = hist_step.get("step", "?")
+                            action = hist_step.get("action", "")
+                            thoughts = hist_step.get("thoughts", "")
+
+                            lines.append(f"  Step {step_num}:")
+                            if action and action not in ("DONE", "FAIL"):
+                                # Truncate code
+                                code_display = action
+                                if len(code_display) > 400:
+                                    code_display = code_display[:400] + "... (truncated)"
+                                lines.append(f"    **Code**: ```\n{code_display}\n```")
+                            else:
+                                lines.append(f"    **Action**: {action}")
+                            if thoughts:
+                                thoughts_display = thoughts[:200]
+                                lines.append(f"    **Thoughts**: {thoughts_display}")
+                else:
+                    # Fallback: show as string
+                    output_str = str(code_output)
+                    if len(output_str) > 500:
+                        output_str = output_str[:500] + "... (truncated)"
+                    lines.append(f"**Output**: {output_str}")
+
+        lines.append("")  # Blank line between steps
+
+    # Final status
+    lines.append("## Final Status")
+    lines.append(f"**Status**: {status}")
+    lines.append(f"**Completion Reason**: {completion_reason}")
+
+    return "\n".join(lines)
+
+
 def runner(
     request: OrchestrateRequest,
-    *,
-    mcp_bridge_factory: Optional[Callable[[], MCPToolBridge]] = None,
 ) -> RunnerResult:
     agent_signal.clear_signal_state()
     controller = VMControllerClient(
@@ -112,9 +220,6 @@ def runner(
     grounding_cfg = request.grounding
     worker_cfg = request.worker
     worker_post_action_delay = max(worker_cfg.post_action_worker_delay, 0.0)
-    mcp_bridge: MCPToolBridge = (
-        mcp_bridge_factory() if mcp_bridge_factory else NullMCPToolBridge()
-    )
 
     def _perform_run() -> RunnerResult:
         grounding_agent = OSWorldACI(
@@ -136,7 +241,6 @@ def runner(
         agent = AgentS3(
             worker_cfg.engine_params,
             grounding_agent,
-            mcp_bridge=mcp_bridge,
             platform=platform.lower() if platform else "unknown",
             max_trajectory_length=worker_cfg.max_trajectory_length,
             enable_reflection=worker_cfg.enable_reflection,
@@ -165,12 +269,9 @@ def runner(
         agent_signal.wait_for_resume()
         reflection_screenshot_bytes = before_screenshot_bytes
 
-        info: Dict[str, Any] = {"action_kind": "gui"}
         for step_index in range(1, max_steps + 1):
             agent_signal.raise_if_exit_requested()
             agent_signal.wait_for_resume()
-
-            mcp_bridge.set_step(step_index)
 
             emit_event(
                 "runner.step.started",
@@ -179,13 +280,10 @@ def runner(
                 },
             )
 
-            action_kind = info.get("action_kind", "gui")
-
             observation = {
                 "screenshot": before_screenshot_bytes,
                 "previous_behavior": previous_behavior_result,
                 "reflection_screenshot": reflection_screenshot_bytes,
-                "last_action_kind": action_kind,
             }
 
             agent_signal.raise_if_exit_requested()
@@ -313,19 +411,12 @@ def runner(
             agent_signal.raise_if_exit_requested()
             agent_signal.wait_for_resume()
 
-            behavior = None
-            if action_kind != "mcp":
-                with LATENCY_LOGGER.measure("runner", "behavior_narrator", extra={"step": step_index}):
-                    behavior = behavior_narrator.judge(
-                        screenshot_num=step_index,
-                        before_img_bytes=before_screenshot_bytes,
-                        after_img_bytes=after_screenshot_bytes,
-                        pyautogui_action=action,
-                    )
-            else:
-                emit_event(
-                    "runner.behavior.skipped",
-                    {"step": step_index, "reason": "mcp_action"},
+            with LATENCY_LOGGER.measure("runner", "behavior_narrator", extra={"step": step_index}):
+                behavior = behavior_narrator.judge(
+                    screenshot_num=step_index,
+                    before_img_bytes=before_screenshot_bytes,
+                    after_img_bytes=after_screenshot_bytes,
+                    pyautogui_action=action,
                 )
 
             steps.append(
@@ -340,13 +431,11 @@ def runner(
                     info=info,
                     behavior_fact_thoughts=behavior.get("fact_thoughts") if behavior else None,
                     behavior_fact_answer=behavior.get("fact_answer") if behavior else None,
-                    action_kind=action_kind,
+                    action_kind="gui",
                 )
             )
 
-            previous_behavior_result = behavior if action_kind != "mcp" else None
-
-            mcp_bridge.finalize_step()
+            previous_behavior_result = behavior
 
             emit_event(
                 "runner.step.completed",
@@ -387,12 +476,16 @@ def runner(
             grounding_cfg.grounding_system_prompt
         )
 
+        # Generate rich markdown trajectory for orchestrator
+        trajectory_md = _build_trajectory_markdown(steps, status, completion_reason)
+
         result = RunnerResult(
             task=request.task,
             status=status,
             completion_reason=completion_reason,
             steps=steps,
             grounding_prompts=grounding_prompts,
+            trajectory_md=trajectory_md,
         )
 
         emit_event(
@@ -406,10 +499,6 @@ def runner(
 
         return result
 
-    try:
-        return _perform_run()
-    finally:
-        if revert_action_filter:
-            configure_mcp_action_filters(None, None)
+    return _perform_run()
 
 __all__ = ["runner"]

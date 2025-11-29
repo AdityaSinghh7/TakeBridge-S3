@@ -22,11 +22,6 @@ from computer_use_agent.utils.formatters import (
     SINGLE_ACTION_FORMATTER,
     CODE_VALID_FORMATTER,
 )
-from computer_use_agent.tools.mcp_proxy import (
-    MCPToolBridge,
-    NullMCPToolBridge,
-    ToolDescription,
-)
 from shared.streaming import emit_event
 
 logger = logging.getLogger("desktopenv.agent")
@@ -50,12 +45,10 @@ class Worker(BaseModule):
         cls,
         agent_class: type,
         skipped_actions: List[str],
-        connected_tools: Optional[List[ToolDescription]] = None,
     ) -> str:
-        """Load the worker system prompt and inject dynamic GUI + connected actions.
+        """Load the worker system prompt and inject dynamic GUI actions.
 
         - GUI actions: methods marked with `is_agent_action` on the grounding agent class.
-        - Connected actions: methods marked with `is_mcp_action` (registered per OAuth provider).
         """
         if not cls._SYSTEM_PROMPT_PATH.exists():
             raise FileNotFoundError(
@@ -89,34 +82,10 @@ class Worker(BaseModule):
         else:
             prompt = f"{base_prompt.rstrip()}\n{actions_block}"
 
-        connected_lines: List[str] = []
-        for tool in connected_tools or []:
-            raw_doc = (tool.doc or "").strip()
-            safe_doc = raw_doc or "No description provided."
-            for banned in ["MCP", "mcp", "API", "api", "server", "Server"]:
-                safe_doc = safe_doc.replace(banned, "connection")
-            connected_lines.append(
-                f"    - {tool.provider}.{tool.name}: {safe_doc}"
-            )
-
-        connected_block = "\n".join(connected_lines).rstrip()
+        # Remove connected actions placeholder if it exists
         connected_placeholder = "... connected actions section inserted dynamically ..."
         if connected_placeholder in prompt:
-            if connected_block:
-                section_header = (
-                    "Additional Connected Actions\n"
-                    "You also have access to the following actions for communication and information retrieval. "
-                    "Use them when needed to exchange short messages or locate information relevant to the task. "
-                    "Always prefer these connected tools over the code agent when they cover the user request—they run faster, are already authenticated, and return structured responses you can summarize with the GUI. "
-                    "Only fall back to the code agent if no connected tool applies or repeated tool attempts fail.\n\n"
-                )
-                prompt = prompt.replace(
-                    connected_placeholder,
-                    f"\n{section_header}{connected_block}\n",
-                )
-            else:
-                # Remove the section entirely when no connected actions exist
-                prompt = prompt.replace(connected_placeholder, "")
+            prompt = prompt.replace(connected_placeholder, "")
 
         return prompt.strip()
 
@@ -124,7 +93,6 @@ class Worker(BaseModule):
         self,
         worker_engine_params: Dict,
         grounding_agent: ACI,
-        mcp_bridge: Optional[MCPToolBridge] = None,
         platform: str = "ubuntu",
         max_trajectory_length: int = 8,
         enable_reflection: bool = True,
@@ -153,7 +121,6 @@ class Worker(BaseModule):
             "claude-sonnet-4-5-20250929",
         ]
         self.grounding_agent = grounding_agent
-        self.mcp_bridge = mcp_bridge or NullMCPToolBridge()
         self.max_trajectory_length = max_trajectory_length
         self.enable_reflection = enable_reflection
 
@@ -171,15 +138,9 @@ class Worker(BaseModule):
         ):
             skipped_actions.append("call_code_agent")
 
-        try:
-            connected_tools = self.mcp_bridge.available_actions()
-        except Exception:
-            connected_tools = []
-
         sys_prompt = self._load_system_prompt(
             type(self.grounding_agent),
             skipped_actions=skipped_actions,
-            connected_tools=connected_tools,
         ).replace("CURRENT_OS", self.platform)
 
         self.generator_agent = self._create_agent(sys_prompt)
@@ -208,45 +169,6 @@ class Worker(BaseModule):
                 if result is not None:
                     return result
         return None
-
-    def _build_last_mcp_summary(self) -> str:
-        bridge = self.mcp_bridge
-        if not bridge or bridge.last_action_type != "mcp":
-            return ""
-        entry = bridge.last_response or {}
-        response_payload = entry.get("response")
-        if not isinstance(response_payload, dict):
-            return ""
-
-        success_flag = self._extract_response_field(response_payload, "successful")
-        data_payload = self._extract_response_field(response_payload, "data")
-        error_payload = self._extract_response_field(response_payload, "error")
-        if success_flag is None:
-            return ""
-
-        provider = entry.get("provider", "unknown")
-        tool = entry.get("tool", "unknown")
-        step = entry.get("step")
-        lines = [
-            "\nLast Connected Action Outcome",
-            f"- Tool: `{provider}.{tool}` at step {step if step is not None else '?'}",
-        ]
-
-        if bool(success_flag):
-            lines.append("- Status: ✅ Successful")
-            if data_payload is not None:
-                try:
-                    formatted_data = json.dumps(data_payload, indent=2, ensure_ascii=False)
-                except TypeError:
-                    formatted_data = str(data_payload)
-                lines.append("  Response data:")
-                lines.append(textwrap.indent(formatted_data, "    "))
-        else:
-            lines.append("- Status: ❌ Unsuccessful")
-            err_text = error_payload or "Unknown error returned by tool."
-            lines.append(f"  Error: {err_text}")
-
-        return "\n".join(lines) + "\n"
 
     def _agent_has_image(self, agent) -> bool:
         if not agent or not getattr(agent, "messages", None):
@@ -437,12 +359,7 @@ class Worker(BaseModule):
                 )
             # Load the latest action
             else:
-                is_mcp_step = bool(
-                    self.mcp_bridge and self.mcp_bridge.last_action_type == "mcp"
-                )
-                image_bytes = None if is_mcp_step else (
-                    obs.get("reflection_screenshot") or obs.get("screenshot")
-                )
+                image_bytes = obs.get("reflection_screenshot") or obs.get("screenshot")
                 emit_event(
                     "worker.reflection.started",
                     {
@@ -450,12 +367,6 @@ class Worker(BaseModule):
                     },
                 )
                 reflection_text = self.worker_history[-1]
-                if is_mcp_step:
-                    mcp_summary = self._build_last_mcp_summary()
-                    if mcp_summary:
-                        reflection_text = (
-                            f"{mcp_summary}\nMost recent action plan:\n{reflection_text}"
-                        )
                 if image_bytes:
                     self.update_latest_screenshot(image_bytes)
                 self.reflection_agent.add_message(
@@ -603,10 +514,6 @@ class Worker(BaseModule):
         generator_message += (
             f"\nCurrent Text Buffer = [{','.join(self.grounding_agent.knowledge)}]\n"
         )
-
-        last_mcp_summary = self._build_last_mcp_summary()
-        if last_mcp_summary:
-            generator_message += last_mcp_summary
 
         # Add code agent result from previous step if available (from full task or subtask execution)
         if (
@@ -803,11 +710,6 @@ class Worker(BaseModule):
             {
                 "step": current_step,
                 "notes_count": len(getattr(self.grounding_agent, "knowledge", []) or []),
-                "mcp_history_count": (
-                    sum(len(entries) for entries in self.mcp_bridge.history.values())
-                    if self.mcp_bridge
-                    else 0
-                ),
                 "has_code_agent_context": bool(
                     hasattr(self.grounding_agent, "last_code_agent_result")
                     and self.grounding_agent.last_code_agent_result
@@ -836,20 +738,9 @@ class Worker(BaseModule):
 
         # Extract the next action from the plan
         plan_code = parse_code_from_string(plan)
-        action_kind = "gui"
-        if self.mcp_bridge and self.mcp_bridge.current_step_action_type == "mcp":
-            action_kind = "mcp"
         try:
             assert plan_code, "Plan code should not be empty"
             exec_code = create_pyautogui_code(self.grounding_agent, plan_code, obs)
-            if plan_code:
-                method_name = plan_code.split("(")[0].split(".")[-1].strip()
-                fn = getattr(self.grounding_agent, method_name, None)
-                if fn is not None:
-                    if self._has_action_flag(fn, "is_mcp_action"):
-                        action_kind = "mcp"
-                    elif self._has_action_flag(fn, "is_agent_action"):
-                        action_kind = "gui"
         except Exception as e:
             logger.error(
                 f"Could not evaluate the following plan code:\n{plan_code}\nError: {e}"
@@ -862,7 +753,6 @@ class Worker(BaseModule):
             "plan": plan,
             "plan_code": plan_code,
             "exec_code": exec_code,
-            "action_kind": action_kind,
             "reflection": reflection,
             "reflection_thoughts": reflection_thoughts,
             "code_agent_output": (

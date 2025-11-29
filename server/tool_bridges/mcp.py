@@ -8,8 +8,9 @@ from computer_use_agent.tools.mcp_proxy import (
     ToolCallContext,
     ToolDescription,
 )
-from computer_use_agent.tools.mcp_action_registry import sync_registered_actions
+from computer_use_agent.grounding.grounding_agent import ACI
 from computer_use_agent.orchestrator.data_types import ToolConstraints
+from mcp_agent.action_registry import sync_registered_actions
 from mcp_agent.actions import (
     configure_mcp_action_filters,
     describe_available_actions,
@@ -76,7 +77,7 @@ def configure_mcp_tools(constraints: Optional[ToolConstraints], *, user_id: str 
             providers = constraints.providers
             tools = constraints.tools
     configure_mcp_action_filters(providers, tools)
-    sync_registered_actions(user_id=active_user)
+    sync_registered_actions(user_id=active_user, aci_class=ACI)
     emit_event(
         "runner.tools.configured",
         {
@@ -89,4 +90,4 @@ def configure_mcp_tools(constraints: Optional[ToolConstraints], *, user_id: str 
         yield
     finally:
         configure_mcp_action_filters(None, None)
-        sync_registered_actions(user_id=active_user)
+        sync_registered_actions(user_id=active_user, aci_class=ACI)

@@ -143,16 +143,13 @@ class ToolboxBuilder:
         authorized = bool(status.get("authorized"))
         mcp_url = status.get("mcp_url") if isinstance(status, dict) else None
 
-        from mcp_agent.registry import is_provider_available
-        registered = authorized and is_provider_available(self.context, provider)
-
-        configured = bool(mcp_url) or registered
-        actions = [self._build_tool(provider, fn, authorized, registered) for fn in funcs]
+        # Simplified: registered field removed - redundant with authorized
+        configured = bool(mcp_url) or authorized
+        actions = [self._build_tool(provider, fn, authorized) for fn in funcs]
         return ProviderSpec(
             provider=provider,
             display_name=provider.capitalize(),
             authorized=authorized,
-            registered=registered,
             configured=configured,
             mcp_url=mcp_url,
             actions=actions,
@@ -164,7 +161,6 @@ class ToolboxBuilder:
         provider: str,
         func: Callable[..., object],
         authorized: bool,
-        registered: bool,
     ) -> ToolSpec:
         doc = inspect.getdoc(func) or ""
         description, param_docs = parse_action_docstring(doc)
@@ -191,11 +187,10 @@ class ToolboxBuilder:
 
         return_annotation = format_annotation(signature.return_annotation)
         provider_literal, mcp_tool = extract_call_tool_metadata(func)
-        available = authorized and registered
+        # Simplified: available now just means authorized
+        available = authorized
         if not authorized:
             reason = "unauthorized"
-        elif not registered:
-            reason = "not_registered"
         else:
             reason = None
         source_path, source_line = relative_source_path(func)

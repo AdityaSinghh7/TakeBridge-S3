@@ -6,7 +6,8 @@ import requests
 from mcp_agent.core.context import AgentContext
 from mcp_agent.registry.oauth import COMPOSIO_API_V3, OAuthManager, _headers
 from mcp_agent.user_identity import normalize_user_id
-from computer_use_agent.tools.mcp_action_registry import sync_registered_actions
+from mcp_agent.action_registry import sync_registered_actions
+from computer_use_agent.grounding.grounding_agent import ACI
 
 router = APIRouter()
 
@@ -93,7 +94,7 @@ def composio_redirect(request: Request):
         try:
             OAuthManager.finalize_connected_account(context, provider, ca_id)
             # Registry is DB-backed, no manual refresh needed
-            sync_registered_actions(user_id)
+            sync_registered_actions(user_id, aci_class=ACI)
         except Exception as e:
             # Attempt to surface upstream error body if available (requests HTTPError)
             detail = str(e)

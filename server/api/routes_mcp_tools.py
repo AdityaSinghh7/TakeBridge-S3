@@ -11,7 +11,8 @@ from mcp_agent.registry.oauth import OAuthManager
 from mcp_agent.registry.manager import RegistryManager
 from mcp_agent.core.context import AgentContext
 from mcp_agent.user_identity import normalize_user_id
-from computer_use_agent.tools.mcp_action_registry import sync_registered_actions
+from mcp_agent.action_registry import sync_registered_actions
+from computer_use_agent.grounding.grounding_agent import ACI
 
 
 router = APIRouter(prefix="/api/mcp/tools", tags=["mcp-tools (test-only)"])
@@ -53,7 +54,7 @@ def gmail_send_email_route(payload: dict, request: Request):
         pass
 
     # Registry is DB-backed, no manual refresh needed
-    sync_registered_actions(user_id)
+    sync_registered_actions(user_id, aci_class=ACI)
     
     registry = RegistryManager(context)
     client = registry.get_mcp_client("gmail")

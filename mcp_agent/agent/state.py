@@ -325,6 +325,118 @@ class AgentState:
             "trajectory": trajectory,
         }
 
+    # --- Markdown trajectory generation for orchestrator ---
+
+    def build_markdown_trajectory(self) -> str:
+        """Build COMPLETE self-contained markdown trajectory for orchestrator.
+
+        CRITICAL: This trajectory must contain ALL relevant data.
+        NO raw outputs or telemetry should be needed - everything is in this markdown.
+
+        Returns:
+            Rich markdown trajectory showing all steps with complete data
+        """
+        import json
+
+        lines = []
+
+        for step in self._execution_history.history:
+            step_type = step.action_type
+            step_num = step.action_step + 1  # 1-based for readability
+
+            if step_type == "search":
+                # Extract search info
+                action_input = step.action_input
+                query = action_input.get("search_query", "")
+                provider = action_input.get("provider", "")
+
+                # Get found tools from observation
+                observation = step.observation or []
+                tool_count = len(observation) if isinstance(observation, list) else 0
+
+                lines.append(f"### Step {step_num}: Search - {provider}")
+                lines.append(f"**Query**: {query}")
+                lines.append(f"**Found**: {tool_count} tool(s)")
+
+                if tool_count > 0 and isinstance(observation, list):
+                    lines.append("**Tools**:")
+                    for tool in observation[:20]:  # Limit to first 20 tools
+                        tool_id = tool.get("tool_id", "unknown")
+                        tool_desc = tool.get("description", "")[:150]  # Limit description length
+                        lines.append(f"- `{tool_id}`: {tool_desc}")
+
+                if not step.success and step.error:
+                    lines.append(f"**Error**: {step.error}")
+
+            elif step_type == "tool":
+                # Extract tool info
+                action_input = step.action_input
+                tool_id = action_input.get("tool_id", "unknown")
+                args = action_input.get("args", {})
+
+                lines.append(f"### Step {step_num}: Tool Call - {tool_id}")
+
+                args_json = json.dumps(args, indent=2, ensure_ascii=False)
+                lines.append(f"**Arguments**:\n```json\n{args_json}\n```")
+
+                if step.success:
+                    # Show unwrapped response
+                    observation = step.observation
+                    if observation is not None:
+                        obs_json = json.dumps(observation, indent=2, ensure_ascii=False)
+                        lines.append(f"**Response**:\n```json\n{obs_json}\n```")
+
+                    # Note if smart summary was used
+                    if step.is_smart_summary:
+                        lines.append("*(Response summarized via LLM)*")
+                else:
+                    lines.append(f"**Error**: {step.error or 'Unknown error'}")
+
+            elif step_type == "sandbox":
+                # Extract sandbox info
+                action_input = step.action_input
+                code = action_input.get("sandbox_code", "")
+
+                lines.append(f"### Step {step_num}: Sandbox Execution")
+
+                lines.append(f"**Code**:\n```python\n{code}\n```")
+
+                if step.success:
+                    # Show output
+                    observation = step.observation
+                    if observation:
+                        if isinstance(observation, dict):
+                            result_data = observation.get("result") or observation.get("data") or observation
+                        else:
+                            result_data = observation
+
+                        result_json = json.dumps(result_data, indent=2, ensure_ascii=False)
+                        lines.append(f"**Output**:\n```json\n{result_json}\n```")
+
+                    # Note if smart summary was used
+                    if step.is_smart_summary:
+                        lines.append("*(Output summarized via LLM)*")
+                else:
+                    lines.append(f"**Error**: {step.error or 'Unknown error'}")
+
+            elif step_type in ("finish", "fail"):
+                # Extract completion info
+                action_outcome = step.action_outcome
+                summary = action_outcome.get("final_summary") or action_outcome.get("summary", "")
+                reasoning = step.action_reasoning
+
+                step_label = "Completion" if step_type == "finish" else "Failure"
+                lines.append(f"### Step {step_num}: {step_label}")
+                lines.append(f"**Reasoning**: {reasoning}")
+                lines.append(f"**Summary**: {summary}")
+
+                if not step.success or step.error:
+                    lines.append(f"**Error**: {step.error or 'Task failed'}")
+
+            lines.append("")  # Blank line between steps
+
+        return "\n".join(lines)
+
     # --- Serialization ---
 
     def to_dict(self) -> Dict[str, Any]:

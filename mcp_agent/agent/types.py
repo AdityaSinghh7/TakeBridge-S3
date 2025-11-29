@@ -37,3 +37,4 @@ class MCPTaskResult(TypedDict, total=False):
     budget_usage: dict[str, Any]
     logs: list[dict[str, Any]]
     steps: list[dict[str, Any]]
+    trajectory_md: str  # Rich self-contained markdown trajectory for orchestrator

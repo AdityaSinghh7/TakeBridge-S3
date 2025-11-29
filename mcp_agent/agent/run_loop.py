@@ -10,6 +10,7 @@ from mcp_agent.actions import SUPPORTED_PROVIDERS
 from mcp_agent.env_sync import ensure_env_for_provider
 from mcp_agent.user_identity import normalize_user_id
 from mcp_agent.sandbox.ephemeral import generate_ephemeral_toolbox
+from shared import agent_signal
 
 from .budget import Budget
 from .llm import PlannerLLM
@@ -45,6 +46,8 @@ class AgentOrchestrator:
              - Ask the LLM for the next command and parse it.
              - Dispatch the command to the appropriate handler.
         """
+        agent_signal.raise_if_exit_requested()
+        agent_signal.wait_for_resume()
         failure = self._ensure_llm_enabled()
         if failure:
             return failure
@@ -52,6 +55,8 @@ class AgentOrchestrator:
         self._load_inventory()
 
         while True:
+            agent_signal.raise_if_exit_requested()
+            agent_signal.wait_for_resume()
             failure = self._check_budget()
             if failure:
                 return failure
@@ -433,6 +438,10 @@ class AgentOrchestrator:
         """Build a terminal success result snapshot."""
         snapshot = self.agent_state.budget_tracker.snapshot()
         steps = [step.to_dict() for step in self.agent_state.history]
+
+        # Generate rich markdown trajectory for orchestrator
+        trajectory_md = self.agent_state.build_markdown_trajectory()
+
         return MCPTaskResult(
             success=True,
             final_summary=summary,
@@ -442,6 +451,7 @@ class AgentOrchestrator:
             budget_usage=snapshot.to_dict(),
             logs=self.agent_state.logs,
             steps=steps,
+            trajectory_md=trajectory_md,
         )
 
     def _failure(
@@ -479,6 +489,10 @@ class AgentOrchestrator:
                 error=reason,
             )
         steps = [step.to_dict() for step in self.agent_state.history]
+
+        # Generate rich markdown trajectory for orchestrator
+        trajectory_md = self.agent_state.build_markdown_trajectory()
+
         result: MCPTaskResult = MCPTaskResult(
             success=False,
             final_summary=summary,
@@ -491,6 +505,7 @@ class AgentOrchestrator:
             error_code=reason,
             error_message=summary,
             steps=steps,
+            trajectory_md=trajectory_md,
         )
         if details is not None:
             result["error_details"] = details

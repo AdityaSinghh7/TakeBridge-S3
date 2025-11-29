@@ -1,9 +1,11 @@
 from fastapi import APIRouter, Request, HTTPException
 from typing import Any, Optional
 from fastapi.responses import JSONResponse, RedirectResponse
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode, urlparse, parse_qsl
 
 import os
+import requests
+from sqlalchemy import select
 from shared.db.engine import session_scope
 from shared.db import crud
 from mcp_agent.core.context import AgentContext
@@ -19,7 +21,9 @@ from mcp_agent.knowledge.search import search_tools as toolbox_search_tools, lis
 from mcp_agent.knowledge.utils import safe_filename
 from shared.settings import build_redirect, OAUTH_REDIRECT_BASE
 from mcp_agent.mcp_client import MCPClient
-from computer_use_agent.tools.mcp_action_registry import sync_registered_actions
+from mcp_agent.action_registry import sync_registered_actions
+from mcp_agent.actions import SUPPORTED_PROVIDERS, get_provider_action_map
+from computer_use_agent.grounding.grounding_agent import ACI
 
 
 router = APIRouter(prefix="/api/mcp/auth", tags=["mcp-auth"])
@@ -28,11 +32,26 @@ router = APIRouter(prefix="/api/mcp/auth", tags=["mcp-auth"])
 def _require_user_id(request: Request) -> str:
     raw = (request.headers.get("X-User-Id") or "").strip()
     if not raw:
-        raise HTTPException(400, "Missing X-User-Id header.")
+        raw = (request.query_params.get("user_id") or "").strip()
+    if not raw:
+        raw = os.getenv("TB_DEFAULT_USER_ID", "dev-local").strip()
+    if not raw:
+        raise HTTPException(400, "Missing X-User-Id header or user_id query parameter.")
     try:
         return normalize_user_id(raw)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+
+
+def _redirect_with_user(url: str, user_id: str) -> str:
+    """Ensure redirect URL carries the user_id for browser callbacks."""
+    try:
+        pr = urlparse(url)
+        q = dict(parse_qsl(pr.query, keep_blank_values=True))
+        q["user_id"] = user_id
+        return pr._replace(query=urlencode(q)).geturl()
+    except Exception:
+        return url
 
 def _normalize_provider(provider: str) -> str:
     return (provider or "").strip().lower()
@@ -42,6 +61,23 @@ def _attach_error(url: str | None, error_message: str) -> str | None:
         return None
     separator = "&" if "?" in url else "?"
     return f"{url}{separator}error={quote_plus(error_message[:400])}"
+
+
+def _latest_connected_account_id(context: AgentContext, provider: str) -> str | None:
+    """Return the most recently updated connected account id for a provider/user."""
+    from mcp_agent.registry.db_models import ConnectedAccount
+    with context.get_db() as db:
+        return (
+            db.execute(
+                select(ConnectedAccount.id)
+                .where(
+                    ConnectedAccount.user_id == context.user_id,
+                    ConnectedAccount.provider == provider,
+                )
+                .order_by(ConnectedAccount.updated_at.desc(), ConnectedAccount.created_at.desc())
+                .limit(1)
+            ).scalar_one_or_none()
+        )
 
 
 @router.get("/{provider}/start")
@@ -56,7 +92,7 @@ def start(
     user_id = _require_user_id(request)
     context = AgentContext.create(user_id)
     # Build redirect deterministically from environment configuration
-    redirect_uri = build_redirect(provider)
+    redirect_uri = _redirect_with_user(build_redirect(provider), user_id)
     provider_fields: dict[str, str] | None = None
     if provider == "shopify":
         sd = (
@@ -90,6 +126,100 @@ def start(
         )
 
 
+@router.post("/{provider}/refresh")
+def refresh(
+    provider: str,
+    request: Request,
+    redirect_success: Optional[str] = None,
+    redirect_error: Optional[str] = None,
+    subdomain: Optional[str] = None,
+):
+    """Attempt an in-place refresh for the latest connected account; fall back to new OAuth URL."""
+    provider = _normalize_provider(provider)
+    user_id = _require_user_id(request)
+    context = AgentContext.create(user_id)
+    redirect_uri = _redirect_with_user(build_redirect(provider), user_id)
+    provider_fields: dict[str, str] | None = None
+    if provider == "shopify":
+        sd = (
+            subdomain
+            or request.query_params.get("subdomain")
+            or request.query_params.get("store_subdomain")
+            or request.query_params.get("shop")
+        )
+        if sd:
+            provider_fields = {"subdomain": sd.strip()}
+
+    ca_id = _latest_connected_account_id(context, provider)
+
+    # Try Composio in-place refresh first if we have an existing connection
+    if ca_id:
+        try:
+            resp = requests.post(
+                f"{_COMPOSIO_API_V3}/connected_accounts/{ca_id}/refresh",
+                headers={"x-api-key": os.getenv("COMPOSIO_API_KEY", ""), "content-type": "application/json"},
+                params={"redirect_url": redirect_uri} if redirect_uri else None,
+                json={},
+                timeout=20,
+            )
+            resp.raise_for_status()
+            data = resp.json() if "application/json" in resp.headers.get("content-type", "") else {}
+            # If Composio returns a redirect_url, surface it to the caller to complete OAuth again
+            redirect_url = data.get("redirect_url") or data.get("redirectUrl")
+            if redirect_url:
+                return JSONResponse(
+                    {
+                        "authorization_url": redirect_url,
+                        "refreshed": True,
+                        "connected_account_id": ca_id,
+                        "method": "connected_account_refresh",
+                    }
+                )
+            # If status is ACTIVE with no redirect, finalize to refresh MCP URL/headers locally
+            status_val = (data.get("status") or "").upper()
+            if status_val == "ACTIVE":
+                summary = OAuthManager.finalize_connected_account(context, provider, ca_id)
+                sync_registered_actions(user_id, aci_class=ACI)
+                return JSONResponse(
+                    {
+                        **summary,
+                        "refreshed": True,
+                        "connected_account_id": ca_id,
+                        "method": "connected_account_refresh",
+                    }
+                )
+        except Exception:
+            # Fall back to generating a brand new OAuth URL
+            pass
+
+    # Fallback: start a new OAuth flow
+    try:
+        if redirect_success or redirect_error:
+            OAuthManager.set_redirect_hints(
+                provider,
+                user_id,
+                success_url=redirect_success,
+                error_url=redirect_error,
+            )
+        url = OAuthManager.start_oauth(context, provider, redirect_uri, provider_fields=provider_fields)
+        return JSONResponse(
+            {
+                "authorization_url": url,
+                "refreshed": True,
+                "connected_account_id": ca_id,
+                "method": "new_oauth",
+            }
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"OAuth refresh failed: {e}. Check COMPOSIO_API_BASE, DNS/connectivity, and that your white-label"
+                f" redirect (/api/composio-redirect) is configured in your Composio Auth Config."
+            ),
+        )
+
+
 @router.get("/{provider}/callback", name="oauth_callback")
 def callback(provider: str, request: Request, code: Optional[str] = None, state: Optional[str] = None):
     provider = _normalize_provider(provider)
@@ -105,7 +235,7 @@ def callback(provider: str, request: Request, code: Optional[str] = None, state:
             raise HTTPException(400, f"Composio reported status={status}")
         try:
             OAuthManager.finalize_connected_account(context, provider, ca_id)
-            sync_registered_actions(user_id)
+            sync_registered_actions(user_id, aci_class=ACI)
             redirect_url = OAuthManager.consume_redirect_hint(provider, user_id, success=True)
             target = redirect_url or f"/settings/integrations?connected={provider}"
             return RedirectResponse(url=target, status_code=302)
@@ -129,24 +259,45 @@ def callback(provider: str, request: Request, code: Optional[str] = None, state:
 def list_providers(request: Request):
     """List configured providers plus caller-specific authorization flags."""
     user_id = _require_user_id(request)
-    summaries = toolbox_list_providers(user_id=user_id)
+    context = AgentContext.create(user_id)
+    summaries = {entry["provider"]: entry for entry in toolbox_list_providers(user_id=user_id)}
+    action_map = get_provider_action_map()
     providers: list[dict[str, Any]] = []
-    for entry in summaries:
-        prov = entry["provider"]
+    for prov in SUPPORTED_PROVIDERS:
+        entry = summaries.get(prov, {})
+        status = OAuthManager.auth_status(context, prov)
+        has_ca = bool(status.get("connected_account_id"))
+        has_mcp = bool(status.get("mcp_url"))
+        actions = entry.get("all_actions") or [fn.__name__ for fn in action_map.get(prov, ())]
         env_key = f"COMPOSIO_{prov.upper()}_AUTH_CONFIG_ID"
+        configured_env = bool(os.getenv(env_key))
+        if status.get("authorized"):
+            state = "connected"
+        elif status.get("refresh_required"):
+            state = "expired"
+        elif not has_ca:
+            state = "not_connected"
+        elif not configured_env and not has_mcp:
+            state = "not_configured"
+        else:
+            state = "error"
         providers.append(
             {
                 "provider": prov,
                 "display_name": entry.get("display_name") or prov.capitalize(),
-                "authorized": entry.get("authorized", False),
+                "authorized": status.get("authorized", False),
+                "refresh_required": status.get("refresh_required", False),
+                "reason": status.get("reason"),
+                "state": state,
+                "has_connected_account": has_ca,
                 "registered": entry.get("registered", False),
-                "configured": entry.get("configured", False),
-                "auth_config_present": bool(os.getenv(env_key)),
-                "mcp_url": entry.get("mcp_url"),
-                "tool_count": entry.get("tool_count", 0),
-                "actions": entry.get("all_actions", []),
-                "available_tools": entry.get("available_tools", []),
-                "manifest_path": entry.get("path"),
+                "configured": entry.get("configured", has_mcp),
+                "auth_config_present": configured_env,
+                "mcp_url": status.get("mcp_url") or entry.get("mcp_url"),
+                "tool_count": entry.get("tool_count") or len(actions),
+                "actions": entry.get("all_actions") or actions,
+                "available_tools": entry.get("available_tools") or actions,
+                "manifest_path": entry.get("path") or f"providers/{prov}/provider.json",
             }
         )
     return {"providers": providers}
@@ -255,7 +406,7 @@ def finalize(provider: str, payload: dict, request: Request):
     try:
         summary = OAuthManager.finalize_connected_account(context, provider, ca_id)
         # Registry is DB-backed, no manual refresh needed
-        sync_registered_actions(user_id)
+        sync_registered_actions(user_id, aci_class=ACI)
         return summary
     except Exception as e:
         raise HTTPException(400, f"Finalize failed: {e}")
@@ -282,7 +433,7 @@ def disconnect(provider: str, request: Request, connected_account_id: str | None
 
     # Re-register actions (removes tools from ACI)
     # Registry is DB-backed, no manual refresh needed
-    sync_registered_actions(user_id)
+    sync_registered_actions(user_id, aci_class=ACI)
 
     return {"status": "disconnected", "provider": provider, **summary}
 
