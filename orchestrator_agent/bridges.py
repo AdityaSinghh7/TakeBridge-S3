@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 """
-Agent bridges that call MCP and computer-use agents, returning raw results and
-text-only trajectories for translation.
+Agent bridges that call MCP and computer-use agents, returning only self-contained
+markdown trajectories.
+
+CRITICAL CHANGE: Bridges now return ONLY trajectory_md strings, not raw results.
+The trajectory contains all necessary data - no raw outputs are sent to orchestrator.
 
 These bridges are intentionally thin and catch failures to keep the orchestrator
 resilient in environments where downstream agents are not fully wired.
 """
 
 import logging
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict
 
 from orchestrator_agent.data_types import AgentTarget, OrchestratorRequest, PlannedStep
 
@@ -52,14 +55,29 @@ def _build_controller_payload(metadata: Dict[str, Any]) -> Dict[str, Any]:
     return {}
 
 
-def _extract_mcp_trajectory(raw_result: Dict[str, Any]) -> List[str]:
+def _extract_mcp_trajectory(raw_result: Dict[str, Any]) -> str:
+    """Extract markdown trajectory from MCP agent result.
+
+    IMPORTANT: Only trajectory_md is returned. NO raw outputs.
+    The trajectory is self-contained with all data.
+    """
+    # Try to get the new trajectory_md field
+    trajectory_md = raw_result.get("trajectory_md", "")
+
+    if trajectory_md:
+        return trajectory_md
+
+    # Fallback for backward compatibility (legacy format without trajectory_md)
+    # This preserves old behavior during migration
     logs = raw_result.get("logs") or []
     steps = raw_result.get("steps") or []
-    messages: List[str] = []
+    messages = []
+
     for entry in logs:
         text = entry.get("message") or entry.get("text")
         if text:
             messages.append(str(text))
+
     for step in steps:
         desc = step.get("description") or step.get("action") or step.get("type")
         outcome = step.get("result") or step.get("outcome") or step.get("observation")
@@ -67,34 +85,54 @@ def _extract_mcp_trajectory(raw_result: Dict[str, Any]) -> List[str]:
             messages.append(str(desc))
         if outcome:
             messages.append(str(outcome))
-    return messages
+
+    return "\n".join(messages) if messages else "No trajectory available"
 
 
-def _extract_computer_use_trajectory(raw_result: Dict[str, Any]) -> List[str]:
+def _extract_computer_use_trajectory(raw_result: Dict[str, Any]) -> str:
+    """Extract markdown trajectory from computer-use agent result.
+
+    IMPORTANT: Only trajectory_md is returned. NO raw outputs.
+    The trajectory is self-contained with all data.
+    """
+    # Try to get the new trajectory_md field
+    trajectory_md = raw_result.get("trajectory_md", "")
+
+    if trajectory_md:
+        return trajectory_md
+
+    # Fallback for backward compatibility (legacy format without trajectory_md)
+    # This preserves old behavior during migration
     steps = raw_result.get("steps") or []
-    messages: List[str] = []
+    messages = []
+
     for step in steps:
         if not isinstance(step, dict):
             # Attempt to coerce objects to dict for safety
             step = step.__dict__ if hasattr(step, "__dict__") else {}
+
         plan = step.get("plan") or step.get("action")
         result = step.get("execution_result") or step.get("result")
         reflection = step.get("reflection") or step.get("notes")
+
         if plan:
             messages.append(str(plan))
         if result:
             messages.append(str(result))
         if reflection:
             messages.append(str(reflection))
-    return messages
+
+    return "\n".join(messages) if messages else "No trajectory available"
 
 
 def run_mcp_agent(
     request: OrchestratorRequest,
     step: PlannedStep,
-) -> Tuple[Dict[str, Any], List[str]]:
-    """
-    Execute the MCP agent. Falls back to a stub result if the agent fails or is unavailable.
+) -> str:
+    """Execute MCP agent and return self-contained trajectory.
+
+    IMPORTANT: Returns ONLY trajectory string, not raw_result.
+    The trajectory contains all necessary data.
     """
     logger.info(
         "bridge.mcp.start task=%s user_id=%s step=%s",
@@ -121,24 +159,27 @@ def run_mcp_agent(
             "error": None,
             "steps": [],
             "logs": [],
+            "trajectory_md": "### Error\n**Message**: MCP agent failed to execute\n**Details**: " + str(exc),
         }
 
     trajectory = _extract_mcp_trajectory(raw_dict)
     logger.info(
-        "bridge.mcp.done success=%s steps=%s raw_outputs_keys=%s",
+        "bridge.mcp.done success=%s steps=%s trajectory_length=%s",
         raw_dict.get("success"),
         len(raw_dict.get("steps") or []),
-        list(raw_dict.get("raw_outputs", {}).keys()),
+        len(trajectory),
     )
-    return raw_dict, trajectory
+    return trajectory
 
 
 def run_computer_use_agent(
     request: OrchestratorRequest,
     step: PlannedStep,
-) -> Tuple[Dict[str, Any], List[str]]:
-    """
-    Execute the computer-use agent. Falls back to a stub result if unavailable.
+) -> str:
+    """Execute computer-use agent and return self-contained trajectory.
+
+    IMPORTANT: Returns ONLY trajectory string, not raw_result.
+    The trajectory contains all necessary data.
     """
     try:
         from computer_use_agent.orchestrator.runner import runner
@@ -158,44 +199,38 @@ def run_computer_use_agent(
         )
         raw_result_obj = runner(cu_request)
         raw_dict = raw_result_obj.__dict__ if hasattr(raw_result_obj, "__dict__") else dict(raw_result_obj)
-
-        # Normalize steps to plain dicts so downstream processing is stable
-        steps = raw_dict.get("steps") or []
-        normalized_steps = []
-        for s in steps:
-            if isinstance(s, dict):
-                normalized_steps.append(s)
-            elif hasattr(s, "__dict__"):
-                normalized_steps.append(dict(s.__dict__))
-            else:
-                # Fallback to string representation to avoid attribute errors
-                normalized_steps.append({"plan": str(s)})
-        raw_dict["steps"] = normalized_steps
     except Exception as exc:  # pragma: no cover
         logger.info("Computer-use agent fallback due to error: %s", exc)
         raw_dict = {
             "task": step.next_task,
-            "status": "stub",
-            "completion_reason": "stubbed",
+            "status": "failed",
+            "completion_reason": "error",
             "steps": [],
             "grounding_prompts": {},
-            "error": None,
+            "error": str(exc),
+            "trajectory_md": "### Error\n**Message**: Computer-use agent failed to execute\n**Details**: " + str(exc),
         }
 
     trajectory = _extract_computer_use_trajectory(raw_dict)
     logger.info(
-        "bridge.computer_use.done status=%s steps=%s",
+        "bridge.computer_use.done status=%s steps=%s trajectory_length=%s",
         raw_dict.get("status"),
         len(raw_dict.get("steps") or []),
+        len(trajectory),
     )
-    return raw_dict, trajectory
+    return trajectory
 
 
 def run_agent_bridge(
     target: AgentTarget,
     request: OrchestratorRequest,
     step: PlannedStep,
-) -> Tuple[Dict[str, Any], List[str]]:
+) -> str:
+    """Execute agent bridge and return self-contained trajectory.
+
+    IMPORTANT: Returns ONLY trajectory string, not raw_result.
+    The trajectory contains all necessary data.
+    """
     if target == "mcp":
         return run_mcp_agent(request, step)
     if target == "computer_use":

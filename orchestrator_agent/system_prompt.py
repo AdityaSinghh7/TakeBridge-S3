@@ -297,7 +297,9 @@ def format_previous_results(
     results: List["StepResult"], task: Optional[str] = None
 ) -> str:
     """
-    Format previous step results for context.
+    Format previous step results for context using translator output as the single
+    source of truth. Presents a clean, structured view with no truncation of
+    translator-derived content.
 
     Args:
         results: List of StepResult objects
@@ -315,75 +317,109 @@ def format_previous_results(
 
     lines = []
     for i, r in enumerate(results, 1):  # Show all steps with numbering
-        status_icon = "✅" if r.success else "❌"
-
-        # Get the translated output if available
         output = r.output or {}
         translated = output.get("translated", {})
 
-        # Get summary
-        summary = translated.get("summary", output.get("summary", "No summary"))
+        overall_success = translated.get("overall_success")
+        success_flag = overall_success if isinstance(overall_success, bool) else bool(r.success)
+        total_steps = translated.get("total_steps")
+        steps_summary = translated.get("steps_summary") or []
+        data_block = translated.get("data")
+        artifacts = translated.get("artifacts") or {}
+        error_text = translated.get("error") or r.error
+        summary = translated.get("summary") or output.get("summary") or "No summary"
 
-        # Build step result
-        step_text = (
-            f"{i}. {status_icon} {r.target.upper()}: {r.next_task}\n"
-            f"   Result: {summary}"
-        )
+        header = f"### {r.target.upper()} step – Task: {r.next_task}"
+        status_line = f"Overall result: {'Completed' if success_flag else 'Failed'}"
+        run_length_line = f"Agent reported total steps: {total_steps if total_steps is not None else 'unknown'}"
 
-        # CRITICAL: Include retrieved data from artifacts
-        artifacts = translated.get("artifacts", {})
-        retrieved_data = artifacts.get("retrieved_data", {})
+        step_lines = [f"{i}. {header}", f"   {status_line}", f"   {run_length_line}", f"   Summary: {summary}"]
 
-        # Special handling for MCP search/discovery results
-        # For search actions, only show tool names (not full specs)
-        is_search_result = False
-        if r.target == "mcp" and retrieved_data:
-            # Check if this was a search action by looking for "found_tools"
-            search_tools = retrieved_data.get("found_tools")
-            tool_count = retrieved_data.get("count")
+        if steps_summary:
+            step_lines.append("   Stepwise summary:")
+            for entry in steps_summary:
+                step_lines.append(f"     - {entry}")
+        else:
+            step_lines.append("   Stepwise summary: not provided")
 
-            if search_tools and isinstance(search_tools, list):
-                is_search_result = True
-                # Extract just the tool IDs/names
-                tool_names = []
-                for tool in search_tools[:10]:  # Limit to first 10
-                    if isinstance(tool, dict):
-                        tool_id = tool.get("tool_id", "")
-                        if tool_id:
-                            tool_names.append(tool_id)
+        if data_block and isinstance(data_block, dict):
+            step_lines.append("   Data:")
+            for key, value in list(data_block.items())[:5]:
+                value_str = _render_json(value, max_chars=None)
+                step_lines.append(f"     - {key}: {value_str}")
+            if len(data_block) > 5:
+                step_lines.append(f"     ... ({len(data_block) - 5} more)")
 
-                if tool_names:
-                    step_text += f"\n   Tools Found: {tool_count or len(tool_names)} tool(s)"
-                    step_text += f"\n     {', '.join(tool_names)}"
+        # Artifacts
+        tool_calls = artifacts.get("tool_calls") or []
+        search_results = artifacts.get("search_results") or []
+        ui_observations = artifacts.get("ui_observations") or []
+        code_executions = artifacts.get("code_executions") or []
 
-        # Include tool call count for actual tool invocations (not searches)
-        tool_outputs = artifacts.get("tool_outputs", [])
-        if tool_outputs and r.target == "mcp" and not is_search_result:
-            step_text += f"\n   Tools Called: {len(tool_outputs)} tool call(s)"
+        if any([tool_calls, search_results, ui_observations, code_executions]):
+            step_lines.append("   Artifacts:")
 
-        # Surface UI observations for computer-use steps
-        ui_observations = artifacts.get("ui_observations", [])
+        if tool_calls:
+            step_lines.append(f"     Tool calls ({len(tool_calls)}):")
+            for call in tool_calls[:5]:
+                tool_id = call.get("tool_id", "unknown")
+                call_status = call.get("success")
+                status_label = (
+                    "success" if call_status is True else "fail" if call_status is False else "unknown"
+                )
+                args_str = _render_json(call.get("arguments"), max_chars=None)
+                resp_str = _render_json(call.get("response"), max_chars=None)
+                step_lines.append(f"       - {tool_id} ({status_label})")
+                step_lines.append(f"         arguments: {args_str}")
+                step_lines.append(f"         response: {resp_str}")
+            if len(tool_calls) > 5:
+                step_lines.append(f"       ... ({len(tool_calls) - 5} more)")
+
+        if search_results:
+            step_lines.append(f"     Search results ({len(search_results)}):")
+            for sr in search_results[:5]:
+                query = sr.get("query", "")
+                count = sr.get("tools_found")
+                tool_names = sr.get("tool_names") or []
+                count_text = count if count is not None else len(tool_names)
+                step_lines.append(f"       - query: {query} | tools_found: {count_text} | tool_names: {', '.join(tool_names)}")
+            if len(search_results) > 5:
+                step_lines.append(f"       ... ({len(search_results) - 5} more)")
+
         if ui_observations:
-            step_text += "\n   UI Observations:"
-            for obs in ui_observations[:3]:
-                obs_str = _render_json(obs, max_chars=1000)
-                step_text += f"\n     - {obs_str}"
-            if len(ui_observations) > 3:
-                step_text += f"\n     ... ({len(ui_observations) - 3} more)"
+            step_lines.append(f"     UI observations ({len(ui_observations)}):")
+            for obs in ui_observations[:5]:
+                obs_str = _render_json(obs, max_chars=None)
+                step_lines.append(f"       - {obs_str}")
+            if len(ui_observations) > 5:
+                step_lines.append(f"       ... ({len(ui_observations) - 5} more)")
 
-        # Include file information
-        files_created = artifacts.get("files_created", [])
-        if files_created:
-            step_text += f"\n   Files Created: {', '.join(files_created[:5])}"
+        if code_executions:
+            step_lines.append(f"     Code executions ({len(code_executions)}):")
+            for exec_entry in code_executions[:5]:
+                code_str = _render_json(exec_entry.get("code"), max_chars=None)
+                output_str = _render_json(exec_entry.get("output"), max_chars=None)
+                exec_status = exec_entry.get("success")
+                exec_label = (
+                    "success" if exec_status is True else "fail" if exec_status is False else "unknown"
+                )
+                step_lines.append(f"       - {exec_label}")
+                step_lines.append(f"         code: {code_str}")
+                step_lines.append(f"         output: {output_str}")
+            if len(code_executions) > 5:
+                step_lines.append(f"       ... ({len(code_executions) - 5} more)")
+
+        if error_text:
+            step_lines.append(f"   Error: {error_text}")
 
         # Provide a full translated JSON block for downstream planners
         if translated:
-            # Show the full translated payload as the primary data block.
             full_json = _render_json(translated, max_chars=None)
             indented = "\n".join(f"     {line}" for line in full_json.splitlines())
-            step_text += f"\n   Translated data:\n{indented}"
+            step_lines.append("   Full translated payload:")
+            step_lines.append(indented)
 
-        lines.append(step_text)
+        lines.append("\n".join(step_lines))
 
     return "\n\n".join(lines)
 

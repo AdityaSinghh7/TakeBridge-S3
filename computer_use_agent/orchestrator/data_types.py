@@ -244,3 +244,4 @@ class RunnerResult:
     completion_reason: str
     steps: List[RunnerStep] = field(default_factory=list)
     grounding_prompts: Dict[str, Any] = field(default_factory=dict)
+    trajectory_md: str = ""  # Rich self-contained markdown trajectory for orchestrator

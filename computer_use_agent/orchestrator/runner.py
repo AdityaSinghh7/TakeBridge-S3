@@ -72,6 +72,117 @@ def _build_grounding_prompts(
     }
 
 
+def _build_trajectory_markdown(steps: List[RunnerStep], status: str, completion_reason: str) -> str:
+    """Build COMPLETE self-contained markdown trajectory for orchestrator.
+
+    CRITICAL: This trajectory must contain ALL relevant data.
+    NO raw outputs or telemetry should be needed - everything is in this markdown.
+
+    Args:
+        steps: List of execution steps
+        status: Final status (success, failed, timeout)
+        completion_reason: Reason for completion (DONE, FAIL, MAX_STEPS_REACHED)
+
+    Returns:
+        Rich markdown trajectory showing all steps with complete data
+    """
+    import json
+
+    lines = []
+
+    for step in steps:
+        lines.append(f"## Step {step.step_index}")
+        lines.append("")
+
+        # Worker output
+        if step.plan:
+            lines.append("### Worker Agent")
+            lines.append(f"**Plan**: {step.plan}")
+
+            if step.action:
+                # Truncate action for readability
+                action_display = step.action
+                if len(action_display) > 300:
+                    action_display = action_display[:300] + "... (truncated)"
+                lines.append(f"**Action**: `{action_display}`")
+
+            if step.execution_result:
+                result_json = json.dumps(step.execution_result, indent=2, ensure_ascii=False)
+                lines.append(f"**Execution Result**:\n```json\n{result_json}\n```")
+
+        # Reflection output
+        if step.reflection:
+            lines.append("")
+            lines.append("### Reflection Agent")
+            lines.append(f"**Reflection**: {step.reflection}")
+
+            if step.reflection_thoughts:
+                lines.append(f"**Thoughts**: {step.reflection_thoughts}")
+
+        # Behaviour narrator output
+        if step.behavior_fact_answer:
+            lines.append("")
+            lines.append("### Behaviour Narrator")
+            lines.append(f"**Observation**: {step.behavior_fact_answer}")
+
+            if step.behavior_fact_thoughts:
+                lines.append(f"**Analysis**: {step.behavior_fact_thoughts}")
+
+        # Code agent output (if present)
+        if step.info:
+            code_output = step.info.get("code_agent_output")
+            if code_output:
+                lines.append("")
+                lines.append("### Code Agent")
+
+                if isinstance(code_output, dict):
+                    # Extract code and result
+                    summary = code_output.get("summary", "")
+                    completion = code_output.get("completion_reason", "")
+                    exec_history = code_output.get("execution_history", [])
+
+                    if summary:
+                        lines.append(f"**Summary**: {summary}")
+                    if completion:
+                        lines.append(f"**Completion**: {completion}")
+
+                    # Show execution history (limit to last 3 steps)
+                    if exec_history:
+                        lines.append("**Execution History**:")
+                        for hist_step in exec_history[-3:]:  # Last 3 steps only
+                            step_num = hist_step.get("step", "?")
+                            action = hist_step.get("action", "")
+                            thoughts = hist_step.get("thoughts", "")
+
+                            lines.append(f"  Step {step_num}:")
+                            if action and action not in ("DONE", "FAIL"):
+                                # Truncate code
+                                code_display = action
+                                if len(code_display) > 400:
+                                    code_display = code_display[:400] + "... (truncated)"
+                                lines.append(f"    **Code**: ```\n{code_display}\n```")
+                            else:
+                                lines.append(f"    **Action**: {action}")
+                            if thoughts:
+                                thoughts_display = thoughts[:200]
+                                lines.append(f"    **Thoughts**: {thoughts_display}")
+                else:
+                    # Fallback: show as string
+                    output_str = str(code_output)
+                    if len(output_str) > 500:
+                        output_str = output_str[:500] + "... (truncated)"
+                    lines.append(f"**Output**: {output_str}")
+
+        lines.append("")  # Blank line between steps
+
+    # Final status
+    lines.append("## Final Status")
+    lines.append(f"**Status**: {status}")
+    lines.append(f"**Completion Reason**: {completion_reason}")
+
+    return "\n".join(lines)
+
+
 def runner(
     request: OrchestrateRequest,
 ) -> RunnerResult:
@@ -365,12 +476,16 @@ def runner(
             grounding_cfg.grounding_system_prompt
         )
 
+        # Generate rich markdown trajectory for orchestrator
+        trajectory_md = _build_trajectory_markdown(steps, status, completion_reason)
+
         result = RunnerResult(
             task=request.task,
             status=status,
             completion_reason=completion_reason,
             steps=steps,
             grounding_prompts=grounding_prompts,
+            trajectory_md=trajectory_md,
         )
 
         emit_event(

@@ -2,11 +2,9 @@
 """
 Test script to validate orchestrator data flow for hybrid workflows.
 
-This script tests the complete data preservation chain:
-1. MCP agent searches for tools → returns found_tools in observation
-2. Translator extracts found_tools to artifacts.retrieved_data
-3. System prompt shows tool names (not full specs) to orchestrator LLM
-4. Orchestrator can see and use the tool names in subsequent steps
+This script validates that translator-style canonical outputs with
+search_results, tool_calls, and optional data blocks render correctly
+in the orchestrator's previous-results context.
 
 Run with:
     python scripts/test_orchestrator_data_flow.py
@@ -14,91 +12,74 @@ Run with:
 
 from __future__ import annotations
 
-import json
-from typing import Any, Dict, List
-
-from orchestrator_agent.data_types import AgentTarget, PlannedStep, StepResult
-from orchestrator_agent.translator import translate_step_output
+from orchestrator_agent.data_types import StepResult
 from orchestrator_agent.system_prompt import format_previous_results
 
 
 def test_mcp_search_result_handling():
-    """Test that MCP search results are correctly handled."""
+    """Test that MCP search results are correctly surfaced from translator output."""
     print("=" * 80)
     print("TEST 1: MCP Search Result Handling")
     print("=" * 80)
 
-    # Simulate MCP agent search result (as returned by execute_mcp_task)
-    raw_mcp_result = {
-        "success": True,
-        "final_summary": "Found 5 Gmail tools matching the search query",
+    translated = {
+        "task": "Find Gmail tools and send an email",
+        "overall_success": True,
+        "summary": "Searched provider registry for Gmail and found 5 tools to use for email tasks.",
         "error": None,
         "error_code": None,
-        "raw_outputs": {},
-        "steps": [
-            {
-                "action_type": "search",
-                "success": True,
-                "observation": [
-                    {"tool_id": "gmail.gmail_search", "name": "Search emails"},
-                    {"tool_id": "gmail.gmail_get_thread", "name": "Get email thread"},
-                    {"tool_id": "gmail.gmail_get_attachment", "name": "Get attachment"},
-                    {"tool_id": "gmail.gmail_send_email", "name": "Send email"},
-                    {"tool_id": "gmail.gmail_create_draft", "name": "Create draft"},
-                ],
-                "action_outcome": {
-                    "total_found": 5,
-                    "query": "gmail email tools"
+        "last_step_failed": False,
+        "failed_step_index": None,
+        "total_steps": 1,
+        "steps_summary": [
+            "Step 1: Searched provider registry for Gmail email tools. Found gmail.gmail_search, gmail.gmail_get_thread, gmail.gmail_get_attachment, gmail.gmail_send_email, gmail.gmail_create_draft."
+        ],
+        "artifacts": {
+            "tool_calls": [],
+            "ui_observations": [],
+            "code_executions": [],
+            "search_results": [
+                {
+                    "query": "gmail email tools",
+                    "tools_found": 5,
+                    "tool_names": [
+                        "gmail.gmail_search",
+                        "gmail.gmail_get_thread",
+                        "gmail.gmail_get_attachment",
+                        "gmail.gmail_send_email",
+                        "gmail.gmail_create_draft",
+                    ],
                 }
-            }
-        ]
+            ],
+        },
     }
 
-    # Test translation (deterministic fallback)
-    step = PlannedStep(
-        target="mcp",
-        next_task="Search for Gmail tools",
-        max_steps=5,
-        verification="Tools should be found",
-        description="Search provider registry for Gmail tools"
-    )
-
-    translated = translate_step_output(
-        task="Find Gmail tools and send an email",
-        step=step,
-        target="mcp",
-        trajectory=["Searching for tools..."],
-        raw_result=raw_mcp_result,
-        llm_client=None,  # Force fallback
-    )
-
     print("\n1. Translation Output:")
-    print(f"   Success: {translated['success']}")
+    print(f"   Overall success: {translated['overall_success']}")
     print(f"   Summary: {translated['summary']}")
 
-    # Check artifacts.retrieved_data contains found_tools
     artifacts = translated.get("artifacts", {})
-    retrieved_data = artifacts.get("retrieved_data", {})
-    found_tools = retrieved_data.get("found_tools")
+    search_results = artifacts.get("search_results", [])
+    tool_names = search_results[0].get("tool_names", []) if search_results else []
 
     print(f"\n2. Artifacts Check:")
-    print(f"   Has retrieved_data: {bool(retrieved_data)}")
-    print(f"   Has found_tools: {bool(found_tools)}")
-    print(f"   Tool count: {retrieved_data.get('count', 0)}")
+    print(f"   Has search_results: {bool(search_results)}")
+    print(f"   Tool count: {search_results[0].get('tools_found', 0) if search_results else 0}")
 
-    if found_tools:
+    if tool_names:
         print(f"   Tool IDs:")
-        for tool in found_tools[:5]:
-            print(f"     - {tool.get('tool_id', 'unknown')}")
+        for tool in tool_names[:5]:
+            print(f"     - {tool}")
 
     # Test system prompt formatting
     step_result = StepResult(
-        step_id=1,
+        step_id="step-1",
         target="mcp",
         next_task="Search for Gmail tools",
         verification="Tools should be found",
         description="Search provider registry for Gmail tools",
         status="completed",
+        success=translated["overall_success"],
         output={"translated": translated},
     )
 
@@ -112,17 +93,14 @@ def test_mcp_search_result_handling():
     print("   " + "-" * 70)
 
     # Validate expectations
-    assert found_tools is not None, "found_tools should be in retrieved_data"
-    assert len(found_tools) == 5, f"Expected 5 tools, got {len(found_tools)}"
-    assert retrieved_data.get("count") == 5, "count should be 5"
-    assert "gmail.gmail_search" in [t.get("tool_id") for t in found_tools], "Should include gmail_search"
+    assert search_results, "search_results should be present"
+    assert len(tool_names) == 5, f"Expected 5 tools, got {len(tool_names)}"
+    assert "gmail.gmail_search" in tool_names, "Should include gmail_search"
 
-    # Validate that formatted output shows tool names but NOT full specs
-    assert "Tools Found:" in formatted, "Should show 'Tools Found:' header"
+    # Validate that formatted output shows tool names
+    assert "Search Results:" in formatted, "Should show 'Search Results:' header"
     assert "gmail.gmail_search" in formatted, "Should show tool IDs"
     assert "gmail.gmail_get_attachment" in formatted, "Should show tool IDs"
-    # The actual tool specs should not be in the formatted output
-    # (they're in found_tools but only IDs are extracted)
 
     print("\n✅ TEST 1 PASSED: Search results correctly handled")
     print()
@@ -134,78 +112,68 @@ def test_mcp_regular_tool_call_handling():
     print("TEST 2: MCP Regular Tool Call Handling")
     print("=" * 80)
 
-    # Simulate MCP agent downloading an attachment
-    raw_mcp_result = {
-        "success": True,
-        "final_summary": "Downloaded attachment invoice_march_2024.pdf from email",
+    translated = {
+        "task": "Download attachment and open it",
+        "overall_success": True,
+        "summary": "Downloaded invoice_march_2024.pdf from Gmail to the local Downloads folder.",
         "error": None,
         "error_code": None,
-        "raw_outputs": {
-            "gmail.gmail_get_attachment": {
-                "filename": "invoice_march_2024.pdf",
-                "download_url": "https://mail.google.com/...",
-                "size_bytes": 245678,
-                "mime_type": "application/pdf"
-            }
-        },
-        "steps": [
-            {
-                "action_type": "tool",
-                "success": True,
-                "observation": {"result": "Attachment downloaded"},
-                "action_outcome": {
+        "last_step_failed": False,
+        "failed_step_index": None,
+        "total_steps": 2,
+        "steps_summary": [
+            "Step 1: Called gmail.gmail_get_attachment for thread abc123 and message msg-1.",
+            "Step 2: Completion - Saved invoice_march_2024.pdf to ~/Downloads/invoice_march_2024.pdf.",
+        ],
+        "data": {
+            "files": [
+                {
                     "filename": "invoice_march_2024.pdf",
                     "local_path": "~/Downloads/invoice_march_2024.pdf",
-                    "size_bytes": 245678
+                    "size_bytes": 245678,
                 }
-            }
-        ]
+            ]
+        },
+        "artifacts": {
+            "tool_calls": [
+                {
+                    "tool_id": "gmail.gmail_get_attachment",
+                    "arguments": {"thread_id": "abc123", "message_id": "msg-1"},
+                    "response": {
+                        "filename": "invoice_march_2024.pdf",
+                        "local_path": "~/Downloads/invoice_march_2024.pdf",
+                        "size_bytes": 245678,
+                    },
+                    "success": True,
+                }
+            ],
+            "ui_observations": [],
+            "code_executions": [],
+            "search_results": [],
+        },
     }
 
-    step = PlannedStep(
-        target="mcp",
-        next_task="Download email attachment",
-        max_steps=5,
-        verification="Attachment should be downloaded",
-        description="Use Gmail to get attachment from most recent email"
-    )
-
-    translated = translate_step_output(
-        task="Download attachment and open it",
-        step=step,
-        target="mcp",
-        trajectory=["Calling gmail_get_attachment..."],
-        raw_result=raw_mcp_result,
-        llm_client=None,
-    )
-
     print("\n1. Translation Output:")
-    print(f"   Success: {translated['success']}")
+    print(f"   Overall success: {translated['overall_success']}")
     print(f"   Summary: {translated['summary']}")
 
     artifacts = translated.get("artifacts", {})
-    retrieved_data = artifacts.get("retrieved_data", {})
-    tool_outputs = artifacts.get("tool_outputs", [])
+    tool_calls = artifacts.get("tool_calls", [])
+    data_block = translated.get("data", {})
 
     print(f"\n2. Artifacts Check:")
-    print(f"   Has retrieved_data: {bool(retrieved_data)}")
-    print(f"   Retrieved data keys: {list(retrieved_data.keys())}")
-    print(f"   Tool outputs count: {len(tool_outputs)}")
-
-    if retrieved_data:
-        print(f"   Retrieved data:")
-        for key, value in retrieved_data.items():
-            value_str = str(value)[:100]
-            print(f"     - {key}: {value_str}")
+    print(f"   Tool calls count: {len(tool_calls)}")
+    print(f"   Data keys: {list(data_block.keys()) if isinstance(data_block, dict) else []}")
 
     # Test system prompt formatting
     step_result = StepResult(
-        step_id=1,
+        step_id="step-2",
         target="mcp",
         next_task="Download email attachment",
         verification="Attachment should be downloaded",
         description="Use Gmail to get attachment",
         status="completed",
+        success=translated["overall_success"],
         output={"translated": translated},
     )
 
@@ -219,13 +187,13 @@ def test_mcp_regular_tool_call_handling():
     print("   " + "-" * 70)
 
     # Validate expectations
-    assert retrieved_data is not None, "Should have retrieved_data"
-    assert "filename" in retrieved_data, "Should preserve filename"
-    assert retrieved_data.get("filename") == "invoice_march_2024.pdf", "Filename should match"
-    assert "local_path" in retrieved_data, "Should preserve local_path"
+    assert tool_calls, "Should have tool_calls"
+    assert tool_calls[0]["tool_id"] == "gmail.gmail_get_attachment", "Tool ID should match"
+    assert "files" in data_block, "Data block should include files"
+    assert data_block["files"][0]["filename"] == "invoice_march_2024.pdf", "Filename should match"
 
     # Validate formatted output shows actual data
-    assert "Retrieved Data:" in formatted, "Should show 'Retrieved Data:' header"
+    assert "Data:" in formatted, "Should show 'Data:' header"
     assert "invoice_march_2024.pdf" in formatted, "Should show filename"
     assert "Downloads" in formatted or "local_path" in formatted, "Should show path info"
 
@@ -239,95 +207,151 @@ def test_hybrid_workflow_sequence():
     print("TEST 3: Hybrid Workflow Sequence")
     print("=" * 80)
 
-    # Step 1: MCP searches for tools
+    search_translated = {
+        "task": "Find Gmail tools that can search emails",
+        "overall_success": True,
+        "summary": "Found 3 Gmail search tools in the provider registry.",
+        "error": None,
+        "error_code": None,
+        "last_step_failed": False,
+        "failed_step_index": None,
+        "total_steps": 1,
+        "steps_summary": [
+            "Step 1: Searched registry for gmail search. Found gmail.gmail_search, gmail.gmail_get_thread, gmail.gmail_list_labels."
+        ],
+        "artifacts": {
+            "tool_calls": [],
+            "ui_observations": [],
+            "code_executions": [],
+            "search_results": [
+                {
+                    "query": "gmail search",
+                    "tools_found": 3,
+                    "tool_names": [
+                        "gmail.gmail_search",
+                        "gmail.gmail_get_thread",
+                        "gmail.gmail_list_labels",
+                    ],
+                }
+            ],
+        },
+    }
     search_result = StepResult(
-        step_id=1,
+        step_id="step-3a",
         target="mcp",
         next_task="Find Gmail tools that can search emails",
         verification="Tools should be found",
         description="Search provider registry",
         status="completed",
-        output={
-            "translated": {
-                "summary": "Found 3 Gmail search tools",
-                "success": True,
-                "error": None,
-                "error_code": None,
-                "details": ["Searched provider registry for 'gmail search'"],
-                "artifacts": {
-                    "retrieved_data": {
-                        "found_tools": [
-                            {"tool_id": "gmail.gmail_search"},
-                            {"tool_id": "gmail.gmail_get_thread"},
-                            {"tool_id": "gmail.gmail_list_labels"}
-                        ],
-                        "count": 3
-                    }
-                },
-                "raw_ref": None
-            }
-        }
+        success=search_translated["overall_success"],
+        output={"translated": search_translated},
     )
 
-    # Step 2: MCP retrieves data using one of the found tools
+    retrieve_translated = {
+        "task": "Search Gmail for emails with PDF attachments",
+        "overall_success": True,
+        "summary": "Found 5 Gmail emails with PDF attachments and identified the most recent invoice.",
+        "error": None,
+        "error_code": None,
+        "last_step_failed": False,
+        "failed_step_index": None,
+        "total_steps": 2,
+        "steps_summary": [
+            "Step 1: Called gmail.gmail_search with query 'has:attachment filename:pdf'.",
+            "Step 2: Completion - Found 5 messages; most recent is March Invoice from john@example.com with attachment invoice_march_2024.pdf.",
+        ],
+        "data": {
+            "emails": [
+                {
+                    "subject": "March Invoice",
+                    "from": "john@example.com",
+                    "attachment_name": "invoice_march_2024.pdf",
+                    "thread_id": "abc123",
+                }
+            ]
+        },
+        "artifacts": {
+            "tool_calls": [
+                {
+                    "tool_id": "gmail.gmail_search",
+                    "arguments": {"query": "has:attachment filename:pdf"},
+                    "response": {
+                        "count": 5,
+                        "most_recent": {
+                            "subject": "March Invoice",
+                            "from": "john@example.com",
+                            "attachment_name": "invoice_march_2024.pdf",
+                            "thread_id": "abc123",
+                        },
+                    },
+                    "success": True,
+                }
+            ],
+            "ui_observations": [],
+            "code_executions": [],
+            "search_results": [],
+        },
+    }
     retrieve_result = StepResult(
-        step_id=2,
+        step_id="step-3b",
         target="mcp",
         next_task="Search Gmail for emails with PDF attachments",
         verification="Emails should be found",
         description="Use gmail.gmail_search to find emails",
         status="completed",
-        output={
-            "translated": {
-                "summary": "Found 5 emails with PDF attachments",
-                "success": True,
-                "error": None,
-                "error_code": None,
-                "details": ["Called gmail_search with query 'has:attachment filename:pdf'"],
-                "artifacts": {
-                    "retrieved_data": {
-                        "emails_found": 5,
-                        "most_recent": {
-                            "subject": "March Invoice",
-                            "from": "john@example.com",
-                            "attachment_name": "invoice_march_2024.pdf",
-                            "thread_id": "abc123"
-                        }
-                    },
-                    "tool_outputs": [
-                        {"tool": "gmail.gmail_search", "result": {"count": 5}}
-                    ]
-                },
-                "raw_ref": None
-            }
-        }
+        success=retrieve_translated["overall_success"],
+        output={"translated": retrieve_translated},
     )
 
-    # Step 3: MCP downloads the attachment
+    download_translated = {
+        "task": "Download the most recent PDF attachment",
+        "overall_success": True,
+        "summary": "Downloaded invoice_march_2024.pdf to ~/Downloads for later opening in Preview.",
+        "error": None,
+        "error_code": None,
+        "last_step_failed": False,
+        "failed_step_index": None,
+        "total_steps": 2,
+        "steps_summary": [
+            "Step 1: Called gmail.gmail_get_attachment for thread abc123.",
+            "Step 2: Completion - Saved invoice_march_2024.pdf to ~/Downloads/invoice_march_2024.pdf.",
+        ],
+        "data": {
+            "files": [
+                {
+                    "filename": "invoice_march_2024.pdf",
+                    "local_path": "~/Downloads/invoice_march_2024.pdf",
+                    "size_bytes": 245678,
+                }
+            ]
+        },
+        "artifacts": {
+            "tool_calls": [
+                {
+                    "tool_id": "gmail.gmail_get_attachment",
+                    "arguments": {"thread_id": "abc123"},
+                    "response": {
+                        "filename": "invoice_march_2024.pdf",
+                        "local_path": "~/Downloads/invoice_march_2024.pdf",
+                        "size_bytes": 245678,
+                    },
+                    "success": True,
+                }
+            ],
+            "ui_observations": [],
+            "code_executions": [],
+            "search_results": [],
+        },
+    }
     download_result = StepResult(
-        step_id=3,
+        step_id="step-3c",
         target="mcp",
         next_task="Download the most recent PDF attachment",
         verification="File should be downloaded",
         description="Use gmail.gmail_get_attachment",
         status="completed",
-        output={
-            "translated": {
-                "summary": "Downloaded invoice_march_2024.pdf to ~/Downloads",
-                "success": True,
-                "error": None,
-                "error_code": None,
-                "details": ["Called gmail_get_attachment for thread abc123"],
-                "artifacts": {
-                    "retrieved_data": {
-                        "filename": "invoice_march_2024.pdf",
-                        "local_path": "~/Downloads/invoice_march_2024.pdf",
-                        "size_bytes": 245678
-                    }
-                },
-                "raw_ref": None
-            }
-        }
+        success=download_translated["overall_success"],
+        output={"translated": download_translated},
     )
 
     # Format all previous results for the next step
@@ -348,11 +372,11 @@ def test_hybrid_workflow_sequence():
     # - Retrieve showed email metadata
     # - Download showed file path
 
-    assert "Tools Found:" in formatted, "Step 1 should show tools found"
+    assert "Search Results:" in formatted, "Step 1 should show search results"
     assert "gmail.gmail_search" in formatted, "Step 1 should show tool IDs"
 
-    assert "emails_found" in formatted or "5" in formatted, "Step 2 should show email count"
-    assert "March Invoice" in formatted or "most_recent" in formatted, "Step 2 should show email details"
+    assert "March Invoice" in formatted, "Step 2 should show email details"
+    assert "john@example.com" in formatted, "Step 2 should show sender context"
 
     assert "invoice_march_2024.pdf" in formatted, "Step 3 should show filename"
     assert "Downloads" in formatted or "local_path" in formatted, "Step 3 should show file path"
@@ -384,10 +408,10 @@ def main():
         print("=" * 80)
         print()
         print("Data flow validation complete:")
-        print("  • MCP search results correctly show tool names (not full specs)")
-        print("  • MCP tool calls preserve all retrieved data")
-        print("  • Hybrid workflows maintain data across steps")
-        print("  • Orchestrator LLM receives appropriate context for planning")
+        print("  • MCP search results surface tool names via search_results artifacts")
+        print("  • MCP tool calls preserve arguments, responses, and data blocks")
+        print("  • Hybrid workflows maintain email + file context across steps")
+        print("  • Previous-results formatting passes translator JSON to the planner")
         print()
         return 0
 

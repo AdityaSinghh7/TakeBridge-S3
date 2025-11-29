@@ -206,7 +206,7 @@ class OrchestratorRuntime:
 
         cost_snapshot = self._snapshot_costs()
         try:
-            raw_result, trajectory = await self._call_agent(step, state.request)
+            trajectory = await self._call_agent(step, state.request)
             logger.info(
                 "runtime.translate.start target=%s step=%s trajectory_len=%s",
                 step.target,
@@ -214,18 +214,19 @@ class OrchestratorRuntime:
                 len(trajectory),
             )
             translated = translate_step_output(
-                task=state.request.task,
-                step=step,
+                task=step.next_task,
+                step_id=step.step_id,
                 target=step.target,
                 trajectory=trajectory,
-                raw_result=raw_result,
-                raw_ref=f"{step.step_id}:raw",
+            )
+            overall_success = bool(
+                translated.get("overall_success", translated.get("success", True))
             )
             logger.info(
                 "runtime.translate.done target=%s step=%s success=%s artifacts_keys=%s",
                 step.target,
                 step.step_id,
-                translated.get("success", True),
+                overall_success,
                 list((translated.get("artifacts") or {}).keys()),
             )
             usage = self._compute_usage(cost_snapshot)
@@ -241,8 +242,8 @@ class OrchestratorRuntime:
                 "raw_ref": translated.get("raw_ref") or f"{step.step_id}:raw",
                 "usage": usage,
             }
-            status: StepStatus = "completed" if translated.get("success", True) else "failed"
-            success = bool(translated.get("success", True))
+            status: StepStatus = "completed" if overall_success else "failed"
+            success = overall_success
             error: Optional[str] = translated.get("error")
         except Exception as exc:
             payload = {
@@ -397,7 +398,12 @@ class OrchestratorRuntime:
 
     async def _call_agent(
         self, step: PlannedStep, request: OrchestratorRequest
-    ) -> Tuple[Dict[str, Any], List[str]]:
+    ) -> str:
+        """Call agent bridge and return self-contained trajectory.
+
+        IMPORTANT: Returns ONLY trajectory string, not raw_result.
+        The trajectory contains all necessary data.
+        """
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None, lambda: run_agent_bridge(step.target, request, step)

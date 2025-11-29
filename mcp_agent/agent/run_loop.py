@@ -438,6 +438,10 @@ class AgentOrchestrator:
         """Build a terminal success result snapshot."""
         snapshot = self.agent_state.budget_tracker.snapshot()
         steps = [step.to_dict() for step in self.agent_state.history]
+
+        # Generate rich markdown trajectory for orchestrator
+        trajectory_md = self.agent_state.build_markdown_trajectory()
+
         return MCPTaskResult(
             success=True,
             final_summary=summary,
@@ -447,6 +451,7 @@ class AgentOrchestrator:
             budget_usage=snapshot.to_dict(),
             logs=self.agent_state.logs,
             steps=steps,
+            trajectory_md=trajectory_md,
         )
 
     def _failure(
@@ -484,6 +489,10 @@ class AgentOrchestrator:
                 error=reason,
             )
         steps = [step.to_dict() for step in self.agent_state.history]
+
+        # Generate rich markdown trajectory for orchestrator
+        trajectory_md = self.agent_state.build_markdown_trajectory()
+
         result: MCPTaskResult = MCPTaskResult(
             success=False,
             final_summary=summary,
@@ -496,6 +505,7 @@ class AgentOrchestrator:
             error_code=reason,
             error_message=summary,
             steps=steps,
+            trajectory_md=trajectory_md,
         )
         if details is not None:
             result["error_details"] = details
