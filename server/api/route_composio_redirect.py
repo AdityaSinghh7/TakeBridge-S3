@@ -1,9 +1,10 @@
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import RedirectResponse, JSONResponse, HTMLResponse
 from urllib.parse import quote_plus
+import requests
 
 from mcp_agent.core.context import AgentContext
-from mcp_agent.registry.oauth import COMPOSIO_API_V3, OAuthManager
+from mcp_agent.registry.oauth import COMPOSIO_API_V3, OAuthManager, _headers
 from mcp_agent.user_identity import normalize_user_id
 from computer_use_agent.tools.mcp_action_registry import sync_registered_actions
 
@@ -58,7 +59,36 @@ def composio_redirect(request: Request):
         if status and status != "success":
             raise HTTPException(400, f"Composio reported status={status}")
         user_id = _require_user_id(request)
-        provider = (app_name or "gmail").lower()
+        
+        # Try to get provider from query params first
+        provider = app_name.lower() if app_name else None
+        
+        # If not in query params, try to fetch from connected account details
+        if not provider:
+            try:
+                r = requests.get(
+                    f"{COMPOSIO_API_V3}/connected_accounts/{ca_id}",
+                    headers=_headers(),
+                    timeout=10,
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    # Try multiple possible fields for provider name
+                    provider = (
+                        data.get("provider")
+                        or (data.get("app") or {}).get("name")
+                        or (data.get("app") or {}).get("key")
+                        or (data.get("auth_config") or {}).get("app_name")
+                        or (data.get("authConfig") or {}).get("app_name")
+                    )
+                    if provider:
+                        provider = provider.lower()
+            except Exception:
+                pass  # Fallback to default if fetch fails
+        
+        # Final fallback to gmail (for backward compatibility)
+        provider = provider or "gmail"
+        
         context = AgentContext.create(user_id=user_id)
         try:
             OAuthManager.finalize_connected_account(context, provider, ca_id)

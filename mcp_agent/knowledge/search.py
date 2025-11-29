@@ -327,13 +327,21 @@ def _score_tool_semantic(
         semantic_score += desc_boost
 
     # Apply provider boost/filter
-    known_providers = ["gmail", "slack", "github", "google", "microsoft", "composio"]
+    known_providers = ["gmail", "slack", "github", "google", "microsoft", "composio", 
+                       "googlesheets", "shopify", "dropbox", "stripe"]
     query_lower = query.raw.lower()
     mentioned_providers = [p for p in known_providers if p in query_lower]
     tool_provider = tool.provider.lower()
 
     if mentioned_providers:
-        if tool_provider in mentioned_providers:
+        # Check for exact match or if tool provider is a more specific version of mentioned provider
+        # (e.g., "googlesheets" matches "google", "googlesheets" matches "googlesheets")
+        # But "google" does NOT match when query mentions "googlesheets" (too generic)
+        provider_matches = any(
+            tool_provider == mp or tool_provider.startswith(mp)
+            for mp in mentioned_providers
+        )
+        if provider_matches:
             # Provider match - boost score
             semantic_score *= 1.5
         else:
@@ -365,13 +373,21 @@ def _score_tool_heuristic_fallback(tool: ToolSpec, query: _Query) -> float:
         return 0.5 if tool.available else 0.3
 
     # Provider alignment check
-    known_providers = ["gmail", "slack", "github", "google", "microsoft", "composio"]
+    known_providers = ["gmail", "slack", "github", "google", "microsoft", "composio",
+                       "googlesheets", "shopify", "dropbox", "stripe"]
     query_lower = query.raw.lower()
     mentioned_providers = [p for p in known_providers if p in query_lower]
 
     if mentioned_providers:
         tool_provider = tool.provider.lower()
-        if tool_provider not in mentioned_providers:
+        # Check for exact match or if tool provider is a more specific version of mentioned provider
+        # (e.g., "googlesheets" matches "google", "googlesheets" matches "googlesheets")
+        # But "google" does NOT match when query mentions "googlesheets" (too generic)
+        provider_matches = any(
+            tool_provider == mp or tool_provider.startswith(mp)
+            for mp in mentioned_providers
+        )
+        if not provider_matches:
             # Provider mismatch - return zero to filter out
             return 0.0
         # Provider match - start with higher base score

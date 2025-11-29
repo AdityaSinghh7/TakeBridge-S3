@@ -28,6 +28,14 @@ def main() -> None:
         "--shopify-subdomain",
         help="Shopify store subdomain (e.g., your-store-name). Required for provider=shopify unless provided via env.",
     )
+    parser.add_argument(
+        "--jira-subdomain",
+        help="Jira subdomain (e.g., your-subdomain for 'your-subdomain.atlassian.net'). Required for provider=jira.",
+    )
+    parser.add_argument(
+        "--mailchimp-subdomain",
+        help="Mailchimp datacenter subdomain (e.g., us16, us21). Optional - if not provided, will be determined from OAuth token.",
+    )
     args = parser.parse_args()
 
     provider = args.provider.strip().lower()
@@ -43,6 +51,10 @@ def main() -> None:
     provider_fields = None
     if provider == "shopify" and args.shopify_subdomain:
         provider_fields = {"subdomain": args.shopify_subdomain.strip()}
+    elif provider == "jira" and args.jira_subdomain:
+        provider_fields = {"subdomain": args.jira_subdomain.strip()}
+    elif provider == "mailchimp" and args.mailchimp_subdomain:
+        provider_fields = {"subdomain": args.mailchimp_subdomain.strip()}
 
     try:
         url = OAuthManager.start_oauth(context, provider, redirect_uri="", provider_fields=provider_fields)

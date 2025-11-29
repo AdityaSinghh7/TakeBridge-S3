@@ -242,6 +242,27 @@ class OAuthManager:
             for key in {env_key, "subdomain", "store_subdomain"}:
                 _add_field(key or "subdomain", shop_subdomain)
 
+        if provider == "jira":
+            jira_subdomain = (
+                provider_fields.get("subdomain")
+                or os.getenv("JIRA_SUBDOMAIN", "").strip()
+            )
+            if not jira_subdomain:
+                raise RuntimeError(
+                    "Jira OAuth requires a subdomain (e.g., 'your-subdomain' for 'your-subdomain.atlassian.net'). "
+                    "Provide it per-user (e.g., --jira-subdomain) or set JIRA_SUBDOMAIN for local development."
+                )
+            _add_field("subdomain", jira_subdomain)
+
+        if provider == "mailchimp":
+            # Mailchimp datacenter (subdomain) is optional - if not provided, Composio will determine it from OAuth token
+            mailchimp_subdomain = (
+                provider_fields.get("subdomain")
+                or os.getenv("MAILCHIMP_SUBDOMAIN", "").strip()
+            )
+            if mailchimp_subdomain:
+                _add_field("subdomain", mailchimp_subdomain)
+
         # Attach any other provider-specific fields provided by caller
         for k, v in provider_fields.items():
             _add_field(k, v)
@@ -319,13 +340,30 @@ class OAuthManager:
         
         # Verify auth config matches
         auth_cfg = detail.get("auth_config") or detail.get("authConfig") or {}
-        auth_config_id = auth_cfg.get("id") or _require_auth_config(provider)
-        expected_ac = _require_auth_config(provider)
-        if auth_config_id and expected_ac and auth_config_id != expected_ac:
+        auth_config_id = auth_cfg.get("id")
+        
+        # Try to get expected auth config from env, but don't fail if not set
+        # (we can use the one from the connected account if available)
+        expected_ac = AUTH_CONFIG_IDS.get(provider) or ""
+        
+        # If we have auth_config_id from the account, use it
+        if auth_config_id:
+            # Only validate against env var if both are set
+            if expected_ac and auth_config_id != expected_ac:
+                raise RuntimeError(
+                    f"Connected account auth_config_id mismatch: "
+                    f"got={auth_config_id} expected={expected_ac}"
+                )
+        elif not expected_ac:
+            # If neither is available, we need at least one
             raise RuntimeError(
-                f"Connected account auth_config_id mismatch: "
-                f"got={auth_config_id} expected={expected_ac}"
+                f"Missing COMPOSIO_*_AUTH_CONFIG_ID for provider={provider}. "
+                f"Either set COMPOSIO_{provider.upper()}_AUTH_CONFIG_ID environment variable, "
+                f"or ensure the connected account has an auth_config_id."
             )
+        else:
+            # Use the expected one from env
+            auth_config_id = expected_ac
         
         # Get or generate MCP URL
         mcp_info = (

@@ -13,7 +13,7 @@ from mcp_agent.env_sync import ensure_env_for_provider
 
 DEFAULT_RECIPIENT = "adityadevsinghs@gmail.com"
 DEFAULT_TASK_TEMPLATE = (
-    "Use Shopify update order tool to update order id 6842801783067 and set its phone number to '+1-415-555-1212'."
+    "Create a new Google Slides presentation titled 'Project Alpha Kickoff'. The content should be generated from the following Markdown: # Introduction to Project Alpha\nThis project will overhaul our current billing system.\n## Key Milestones\n* Phase 1: Planning and Discovery\n* Phase 2: Implementation and Testing\n## Team Contacts\nContact Jane for billing questions or John for technical issues."
 )
 
 
