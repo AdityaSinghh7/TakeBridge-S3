@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Depends
 from typing import Any, Optional
 from fastapi.responses import JSONResponse, RedirectResponse
 from urllib.parse import quote_plus, urlencode, urlparse, parse_qsl
@@ -25,22 +25,101 @@ from mcp_agent.action_registry import sync_registered_actions
 from mcp_agent.actions import SUPPORTED_PROVIDERS, get_provider_action_map
 from computer_use_agent.grounding.grounding_agent import ACI
 
+# Import JWT auth (optional dependency for backward compatibility)
+try:
+    from server.api.auth import CurrentUser
+    from fastapi.security import HTTPBearer
+    from fastapi import Depends as FastAPIDepends
+    from jose import jwt, JWTError
+    from server.api.config import settings
+    
+    _jwt_security = HTTPBearer(auto_error=False)
+    
+    def get_current_user_optional(
+        creds = FastAPIDepends(_jwt_security),
+    ) -> Optional["CurrentUser"]:
+        """
+        Optional JWT auth - returns CurrentUser if valid token provided, None otherwise.
+        This allows fallback to X-User-Id header for OAuth callbacks.
+        """
+        if creds is None:
+            return None
+        try:
+            token = creds.credentials
+            payload = jwt.decode(
+                token,
+                settings.SUPABASE_JWT_SECRET,
+                algorithms=[settings.SUPABASE_JWT_ALG],
+                options={
+                    "verify_signature": True,
+                    "verify_exp": True,
+                    "verify_iat": True,
+                    "verify_aud": False,
+                },
+            )
+            sub = payload.get("sub") or payload.get("user_id")
+            email = payload.get("email")
+            if sub:
+                return CurrentUser(sub=sub, email=email)
+        except (JWTError, Exception):
+            # If JWT validation fails, return None to allow fallback to X-User-Id
+            pass
+        return None
+    
+    JWT_AUTH_AVAILABLE = True
+except ImportError:
+    JWT_AUTH_AVAILABLE = False
+    def get_current_user_optional():
+        return None
+    CurrentUser = None
+
 
 router = APIRouter(prefix="/api/mcp/auth", tags=["mcp-auth"])
 
 
-def _require_user_id(request: Request) -> str:
+def _get_user_id_from_jwt_or_header(
+    request: Request,
+    current_user: Optional["CurrentUser"] = None,
+) -> str:
+    """
+    Get user_id from JWT token (preferred) or fall back to X-User-Id header/query param.
+    
+    This supports both:
+    1. New JWT-based auth (from Supabase)
+    2. Legacy X-User-Id header (for OAuth callbacks from external providers)
+    
+    OAuth callbacks from external providers (like Composio) can't include JWT tokens,
+    so they use user_id in query parameters or state.
+    """
+    # Try JWT auth first (if available and provided)
+    if JWT_AUTH_AVAILABLE and current_user:
+        return current_user.sub
+    
+    # Fallback to legacy methods (for OAuth callbacks)
     raw = (request.headers.get("X-User-Id") or "").strip()
     if not raw:
         raw = (request.query_params.get("user_id") or "").strip()
     if not raw:
         raw = os.getenv("TB_DEFAULT_USER_ID", "dev-local").strip()
     if not raw:
-        raise HTTPException(400, "Missing X-User-Id header or user_id query parameter.")
+        raise HTTPException(
+            400,
+            "Missing authentication. Provide either: "
+            "1) JWT token in Authorization header, or "
+            "2) X-User-Id header/user_id query parameter (for OAuth callbacks)"
+        )
     try:
         return normalize_user_id(raw)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+
+
+def _require_user_id(request: Request) -> str:
+    """
+    Legacy function for backward compatibility.
+    Prefer using _get_user_id_from_jwt_or_header with JWT auth.
+    """
+    return _get_user_id_from_jwt_or_header(request)
 
 
 def _redirect_with_user(url: str, user_id: str) -> str:
@@ -87,9 +166,15 @@ def start(
     redirect_success: Optional[str] = None,
     redirect_error: Optional[str] = None,
     subdomain: Optional[str] = None,
+    current_user: Optional["CurrentUser"] = Depends(get_current_user_optional),
 ):
+    """
+    Start OAuth flow for a provider.
+    
+    Authentication: JWT token preferred, but X-User-Id header/query param supported for backward compatibility.
+    """
     provider = _normalize_provider(provider)
-    user_id = _require_user_id(request)
+    user_id = _get_user_id_from_jwt_or_header(request, current_user)
     context = AgentContext.create(user_id)
     # Build redirect deterministically from environment configuration
     redirect_uri = _redirect_with_user(build_redirect(provider), user_id)
@@ -133,10 +218,15 @@ def refresh(
     redirect_success: Optional[str] = None,
     redirect_error: Optional[str] = None,
     subdomain: Optional[str] = None,
+    current_user: Optional["CurrentUser"] = Depends(get_current_user_optional),
 ):
-    """Attempt an in-place refresh for the latest connected account; fall back to new OAuth URL."""
+    """
+    Attempt an in-place refresh for the latest connected account; fall back to new OAuth URL.
+    
+    Authentication: JWT token preferred, but X-User-Id header/query param supported for backward compatibility.
+    """
     provider = _normalize_provider(provider)
-    user_id = _require_user_id(request)
+    user_id = _get_user_id_from_jwt_or_header(request, current_user)
     context = AgentContext.create(user_id)
     redirect_uri = _redirect_with_user(build_redirect(provider), user_id)
     provider_fields: dict[str, str] | None = None
@@ -221,9 +311,24 @@ def refresh(
 
 
 @router.get("/{provider}/callback", name="oauth_callback")
-def callback(provider: str, request: Request, code: Optional[str] = None, state: Optional[str] = None):
+def callback(
+    provider: str,
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    current_user: Optional["CurrentUser"] = Depends(get_current_user_optional),
+):
+    """
+    OAuth callback endpoint. Called by external OAuth providers (Composio, etc.).
+    
+    This endpoint is special - it must work without JWT tokens since it's called by external services.
+    It uses user_id from query parameters (embedded in redirect URL) or state parameter.
+    
+    Authentication: JWT token optional (if available), otherwise uses user_id from query/state.
+    """
     provider = _normalize_provider(provider)
-    user_id = _require_user_id(request)
+    # OAuth callbacks from external providers may not have JWT, so we allow fallback
+    user_id = _get_user_id_from_jwt_or_header(request, current_user)
     context = AgentContext.create(user_id)
     qp = request.query_params
     ca_id = qp.get("connectedAccountId")
@@ -256,9 +361,16 @@ def callback(provider: str, request: Request, code: Optional[str] = None, state:
 
 
 @router.get("/providers")
-def list_providers(request: Request):
-    """List configured providers plus caller-specific authorization flags."""
-    user_id = _require_user_id(request)
+def list_providers(
+    request: Request,
+    current_user: Optional["CurrentUser"] = Depends(get_current_user_optional),
+):
+    """
+    List configured providers plus caller-specific authorization flags.
+    
+    Authentication: JWT token preferred, but X-User-Id header/query param supported for backward compatibility.
+    """
+    user_id = _get_user_id_from_jwt_or_header(request, current_user)
     context = AgentContext.create(user_id)
     summaries = {entry["provider"]: entry for entry in toolbox_list_providers(user_id=user_id)}
     action_map = get_provider_action_map()
@@ -304,9 +416,17 @@ def list_providers(request: Request):
 
 
 @router.get("/tools/available")
-def available_tools(request: Request, provider: Optional[str] = None):
-    """Surface detailed action metadata per provider for UI presentation."""
-    user_id = _require_user_id(request)
+def available_tools(
+    request: Request,
+    provider: Optional[str] = None,
+    current_user: Optional["CurrentUser"] = Depends(get_current_user_optional),
+):
+    """
+    Surface detailed action metadata per provider for UI presentation.
+    
+    Authentication: JWT token preferred, but X-User-Id header/query param supported for backward compatibility.
+    """
+    user_id = _get_user_id_from_jwt_or_header(request, current_user)
     requested = _normalize_provider(provider) if provider else None
     manifest = get_toolbox_manifest(user_id=user_id)
     providers_out: list[dict[str, Any]] = []
@@ -347,8 +467,14 @@ def search_tools(
     provider: Optional[str] = None,
     detail: str = "summary",
     limit: int = 20,
+    current_user: Optional["CurrentUser"] = Depends(get_current_user_optional),
 ):
-    user_id = _require_user_id(request)
+    """
+    Search for tools across providers.
+    
+    Authentication: JWT token preferred, but X-User-Id header/query param supported for backward compatibility.
+    """
+    user_id = _get_user_id_from_jwt_or_header(request, current_user)
     try:
         results = toolbox_search_tools(
             query=q,
@@ -363,8 +489,16 @@ def search_tools(
 
 
 @router.get("/status")
-def status(request: Request):
-    user_id = _require_user_id(request)
+def status(
+    request: Request,
+    current_user: Optional["CurrentUser"] = Depends(get_current_user_optional),
+):
+    """
+    Get authorization status for common providers (Slack, Gmail).
+    
+    Authentication: JWT token preferred, but X-User-Id header/query param supported for backward compatibility.
+    """
+    user_id = _get_user_id_from_jwt_or_header(request, current_user)
     context = AgentContext.create(user_id)
     slack = OAuthManager.auth_status(context, "slack")
     gmail = OAuthManager.auth_status(context, "gmail")
@@ -379,10 +513,18 @@ def status(request: Request):
 
 
 @router.get("/{provider}/status/live")
-def live_status(provider: str, request: Request):
-    """Force-refresh provider status directly from Composio before responding."""
+def live_status(
+    provider: str,
+    request: Request,
+    current_user: Optional["CurrentUser"] = Depends(get_current_user_optional),
+):
+    """
+    Force-refresh provider status directly from Composio before responding.
+    
+    Authentication: JWT token preferred, but X-User-Id header/query param supported for backward compatibility.
+    """
     provider = _normalize_provider(provider)
-    user_id = _require_user_id(request)
+    user_id = _get_user_id_from_jwt_or_header(request, current_user)
     context = AgentContext.create(user_id)
 
     status = OAuthManager.auth_status(context, provider)
@@ -391,14 +533,22 @@ def live_status(provider: str, request: Request):
 
 
 @router.post("/{provider}/finalize")
-def finalize(provider: str, payload: dict, request: Request):
-    provider = _normalize_provider(provider)
-    """Finalize a connected account manually (hosted link flows that skip callback).
+def finalize(
+    provider: str,
+    payload: dict,
+    request: Request,
+    current_user: Optional["CurrentUser"] = Depends(get_current_user_optional),
+):
+    """
+    Finalize a connected account manually (hosted link flows that skip callback).
 
     Body:
       - connected_account_id (str): e.g., "ca_..."
+    
+    Authentication: JWT token preferred, but X-User-Id header/query param supported for backward compatibility.
     """
-    user_id = _require_user_id(request)
+    provider = _normalize_provider(provider)
+    user_id = _get_user_id_from_jwt_or_header(request, current_user)
     context = AgentContext.create(user_id)
     ca_id = payload.get("connected_account_id") or payload.get("id") or payload.get("ca_id")
     if not ca_id:
@@ -413,8 +563,12 @@ def finalize(provider: str, payload: dict, request: Request):
 
 
 @router.delete("/{provider}")
-def disconnect(provider: str, request: Request, connected_account_id: str | None = None):
-    provider = _normalize_provider(provider)
+def disconnect(
+    provider: str,
+    request: Request,
+    connected_account_id: str | None = None,
+    current_user: Optional["CurrentUser"] = Depends(get_current_user_optional),
+):
     """
     Disconnect a provider for the current user.
 
@@ -422,8 +576,11 @@ def disconnect(provider: str, request: Request, connected_account_id: str | None
       - If ?connected_account_id=... is supplied, only that CA is deactivated.
       - Else, all CAs for (user, provider) are deactivated.
       - Clears MCP URLs/headers so is_authorized() flips to False immediately.
+    
+    Authentication: JWT token preferred, but X-User-Id header/query param supported for backward compatibility.
     """
-    user_id = _require_user_id(request)
+    provider = _normalize_provider(provider)
+    user_id = _get_user_id_from_jwt_or_header(request, current_user)
 
     with session_scope() as db:
         if connected_account_id:

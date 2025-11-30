@@ -277,20 +277,17 @@ def _create_streaming_response(
             heartbeat = asyncio.create_task(_emit_keepalive())
 
             from server.api.orchestrator_adapter import orchestrate_to_orchestrator
-            from server.core.workspace_service import ensure_workspace
 
-            # Auto-resolve workspace if enabled and user_id is provided
-            if auto_resolve_workspace and user_id:
-                try:
-                    ws = ensure_workspace(user_id)
-                    # Override controller base_url with workspace's controller_base_url
-                    # unless it's already explicitly set in the request
-                    if ws.controller_base_url and not request.controller.base_url:
-                        request.controller.base_url = ws.controller_base_url
-                        logger.info(f"Using workspace controller_base_url: {ws.controller_base_url}")
-                except Exception as e:
-                    logger.warning(f"Failed to resolve workspace for user {user_id}: {e}")
-                    # Continue without workspace - controller might be set manually
+            # Note: Workspace should already be resolved in _ensure_workspace_controller
+            # before this function is called. The controller.base_url should already be set.
+            # We only check here as a fallback if auto_resolve_workspace is True but
+            # controller wasn't set (shouldn't happen in normal flow).
+            if auto_resolve_workspace and user_id and not request.controller.base_url:
+                logger.warning(
+                    f"Workspace not resolved for user {user_id} - controller.base_url is missing. "
+                    "This should have been set in _ensure_workspace_controller."
+                )
+                # Don't try to resolve here as it would block - workspace should be resolved upfront
 
             orch_request = orchestrate_to_orchestrator(
                 request,
@@ -351,11 +348,15 @@ def _create_streaming_response(
     )
 
 
-def _ensure_workspace_controller(
+async def _ensure_workspace_controller(
     payload: Dict[str, Any],
     user_id: str,
 ) -> Dict[str, Any]:
-    """Ensure controller base_url is set from workspace if not provided in payload."""
+    """Ensure controller base_url is set from workspace if not provided in payload.
+    
+    Runs workspace resolution in thread pool to avoid blocking the event loop,
+    since ensure_workspace can take a long time (EC2 instance creation + health checks).
+    """
     from server.core.workspace_service import ensure_workspace
 
     # If controller base_url is already set, use it
@@ -364,8 +365,10 @@ def _ensure_workspace_controller(
         return payload
 
     # Otherwise, get/create workspace and use its controller_base_url
+    # Run in thread pool to avoid blocking async event loop
     try:
-        ws = ensure_workspace(user_id)
+        loop = asyncio.get_event_loop()
+        ws = await loop.run_in_executor(None, ensure_workspace, user_id)
         if ws.controller_base_url:
             if "controller" not in payload:
                 payload["controller"] = {}
@@ -405,7 +408,7 @@ async def orchestrate(
 
     user_id = current_user.sub
     # Auto-resolve workspace controller if not provided
-    payload = _ensure_workspace_controller(payload, user_id)
+    payload = await _ensure_workspace_controller(payload, user_id)
 
     request = _parse_orchestrate_request(payload)
     tool_constraints = payload.get("tool_constraints")
@@ -480,7 +483,7 @@ async def orchestrate_stream_post(
     user_id = current_user.sub
 
     # Auto-resolve workspace controller if not provided
-    payload = _ensure_workspace_controller(payload, user_id)
+    payload = await _ensure_workspace_controller(payload, user_id)
 
     request = _parse_orchestrate_request(payload)
 

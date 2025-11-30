@@ -119,15 +119,28 @@ def upsert_connected_account(
     ).scalar_one_or_none()
     
     if existing:
-        # If Composio rotated the CA id, migrate in place and retarget connections
+        # If Composio rotated the CA id, migrate to new ID
         if existing.id != ca_id:
-            old_id = existing.id
-            db.execute(
-                update(MCPConnection)
-                .where(MCPConnection.connected_account_id == old_id)
-                .values(connected_account_id=ca_id)
+            # Delete the old ConnectedAccount first (cascades to delete MCPConnection)
+            # This frees up the unique constraint on (user_id, auth_config_id)
+            # The caller will recreate MCPConnection with fresh data anyway
+            db.delete(existing)
+            db.flush()  # Flush to ensure old account is deleted before creating new one
+            
+            # Now create the new ConnectedAccount with the new ca_id
+            new_account = ConnectedAccount(
+                id=ca_id,
+                user_id=user_id,
+                auth_config_id=auth_config_id,
+                provider=provider,
+                status=status,
+                provider_uid=provider_uid,
             )
-            existing.id = ca_id
+            db.add(new_account)
+            db.flush()  # Flush to ensure new account exists in DB
+            return new_account
+        
+        # Same ID, just update fields
         existing.status = status
         existing.provider = provider
         existing.provider_uid = provider_uid

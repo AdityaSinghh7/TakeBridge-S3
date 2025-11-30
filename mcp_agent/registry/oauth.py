@@ -615,22 +615,158 @@ def _ensure_mcp_server(provider: str, auth_config_id: str) -> str:
         if srv_id:
             return srv_id
     
-    # Try to list and reuse by name
-    try:
-        r2 = requests.get(f"{COMPOSIO_API_V3}/mcp/servers", headers=_headers(), timeout=20)
-        if 200 <= r2.status_code < 300:
-            body = r2.json()
-            items = body.get("items") or body.get("data") or body
-            if isinstance(items, list):
-                for s in items:
-                    if (s.get("name") or "") == name:
-                        sid = s.get("id") or s.get("server_id")
-                        if sid:
-                            return sid
-    except Exception:
-        pass
+    # Check if error is about server already existing
+    server_exists_error = False
+    if r.status_code == 400:
+        try:
+            error_body = r.json()
+            error_info = error_body.get("error", {})
+            error_code = error_info.get("code")
+            error_msg = error_info.get("message", "")
+            # Composio error code 1142 = server already exists
+            if error_code == 1142 or "already exists" in error_msg.lower():
+                server_exists_error = True
+        except Exception:
+            # If we can't parse the error, assume it might be a server exists error
+            pass
     
-    # If all else fails, raise
+    # If server already exists (400 with code 1142), or any 400/error, try to list and reuse by name
+    if server_exists_error or r.status_code == 400 or r.status_code not in (200, 201):
+        # Try multiple approaches to find the existing server
+        found_server_id = None
+        
+        # Approach 1: Try querying by name (if API supports it)
+        try:
+            r2 = requests.get(
+                f"{COMPOSIO_API_V3}/mcp/servers",
+                headers=_headers(),
+                params={"name": name},  # Try filtering by name
+                timeout=20,
+            )
+            if 200 <= r2.status_code < 300:
+                body = r2.json()
+                items = body.get("items") or body.get("data") or body
+                if isinstance(items, list):
+                    for s in items:
+                        if (s.get("name") or "") == name:
+                            found_server_id = s.get("id") or s.get("server_id")
+                            if found_server_id:
+                                break
+                elif isinstance(items, dict):
+                    items_list = items.get("items") or items.get("data") or []
+                    if isinstance(items_list, list):
+                        for s in items_list:
+                            if (s.get("name") or "") == name:
+                                found_server_id = s.get("id") or s.get("server_id")
+                                if found_server_id:
+                                    break
+        except Exception:
+            pass
+        
+        # Approach 2: List all servers and search (handle pagination)
+        if not found_server_id:
+            try:
+                all_items = []
+                page = 1
+                max_pages = 10  # Safety limit
+                
+                while page <= max_pages:
+                    r2 = requests.get(
+                        f"{COMPOSIO_API_V3}/mcp/servers",
+                        headers=_headers(),
+                        params={"page": page, "limit": 100} if page > 1 else {"limit": 100},
+                        timeout=20,
+                    )
+                    if 200 <= r2.status_code < 300:
+                        body = r2.json()
+                        items = body.get("items") or body.get("data") or []
+                        
+                        # Handle different response formats
+                        if isinstance(items, list):
+                            all_items.extend(items)
+                        elif isinstance(items, dict):
+                            items_list = items.get("items") or items.get("data") or []
+                            if isinstance(items_list, list):
+                                all_items.extend(items_list)
+                        
+                        # Check if there are more pages
+                        has_more = body.get("has_more") or body.get("hasMore") or False
+                        if not has_more or len(items) == 0:
+                            break
+                        page += 1
+                    else:
+                        break
+                
+                # Search through all collected items
+                for s in all_items:
+                    if (s.get("name") or "") == name:
+                        found_server_id = s.get("id") or s.get("server_id")
+                        if found_server_id:
+                            break
+            except Exception:
+                pass
+        
+        # Approach 3: Try querying by auth_config_id (servers might be associated with auth configs)
+        if not found_server_id:
+            try:
+                r2 = requests.get(
+                    f"{COMPOSIO_API_V3}/mcp/servers",
+                    headers=_headers(),
+                    params={"auth_config_id": auth_config_id},
+                    timeout=20,
+                )
+                if 200 <= r2.status_code < 300:
+                    body = r2.json()
+                    items = body.get("items") or body.get("data") or body
+                    if isinstance(items, list):
+                        for s in items:
+                            if (s.get("name") or "") == name:
+                                found_server_id = s.get("id") or s.get("server_id")
+                                if found_server_id:
+                                    break
+                    elif isinstance(items, dict):
+                        items_list = items.get("items") or items.get("data") or []
+                        if isinstance(items_list, list):
+                            for s in items_list:
+                                if (s.get("name") or "") == name:
+                                    found_server_id = s.get("id") or s.get("server_id")
+                                    if found_server_id:
+                                        break
+            except Exception:
+                pass
+        
+        if found_server_id:
+            return found_server_id
+        
+        # If server exists but we can't find it (permissions issue?), create a unique server instead
+        if server_exists_error:
+            # Generate a unique name by adding a timestamp suffix
+            unique_suffix = str(int(time.time()))[-6:]  # Last 6 digits of timestamp
+            unique_name = f"{name}-{unique_suffix}"[:30]  # Ensure it's still <= 30 chars
+            
+            try:
+                r3 = requests.post(
+                    f"{COMPOSIO_API_V3}/mcp/servers",
+                    headers=_headers(),
+                    json={"name": unique_name, "auth_config_ids": [auth_config_id]},
+                    timeout=20,
+                )
+                if r3.status_code in (200, 201):
+                    data = r3.json()
+                    srv_id = data.get("id") or data.get("server_id")
+                    if srv_id:
+                        return srv_id
+            except Exception:
+                pass
+            
+            # If unique creation also fails, raise the original error
+            raise RuntimeError(
+                f"MCP server '{name}' already exists according to Composio, but could not be found in server list. "
+                f"Attempted to create unique server '{unique_name}' but that also failed. "
+                f"This may indicate a permissions or API issue."
+            )
+    
+    # If all else fails, raise the original error
     r.raise_for_status()
     raise RuntimeError("Unable to provision MCP server")
 
