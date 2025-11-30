@@ -514,7 +514,7 @@ def _get_connected_account(ca_id: str) -> Dict[str, Any]:
     r = requests.get(
         f"{COMPOSIO_API_V3}/connected_accounts/{ca_id}",
         headers=_headers(),
-        timeout=15,
+        timeout=15,  # Keep reasonable timeout - won't affect speed if Composio is working fine
     )
     r.raise_for_status()
     return r.json()

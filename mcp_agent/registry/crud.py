@@ -274,6 +274,72 @@ def get_active_context_for_provider(
     return row[0], row[1], row[2], row[3] or {}
 
 
+def get_active_contexts_for_all_providers(
+    db: Session, user_id: str, providers: list[str]
+) -> Dict[str, Tuple[Optional[str], Optional[str], Optional[str], Dict[str, Any]]]:
+    """
+    Batch get full context for all providers in a single query.
+    
+    Args:
+        db: Database session
+        user_id: User/tenant identifier
+        providers: List of provider names
+    
+    Returns:
+        Dict mapping provider -> (connected_account_id, auth_config_id, mcp_url, headers)
+        Providers without connections will have (None, None, None, {})
+    """
+    if not providers:
+        return {}
+    
+    # Initialize all providers with None values
+    provider_contexts = {provider: (None, None, None, {}) for provider in providers}
+    
+    # Get all active connections for this user and these providers
+    # Use a subquery approach to get the latest connection per provider
+    from sqlalchemy import func
+    
+    # For each provider, get the latest connection
+    # We'll use a simpler approach: query all and pick the latest per provider in Python
+    stmt = (
+        select(
+            ConnectedAccount.provider,
+            ConnectedAccount.id,
+            ConnectedAccount.auth_config_id,
+            MCPConnection.mcp_url,
+            MCPConnection.headers_json,
+            ConnectedAccount.updated_at,
+            ConnectedAccount.created_at,
+            MCPConnection.id.label("mcp_id"),
+        )
+        .join(MCPConnection, MCPConnection.connected_account_id == ConnectedAccount.id)
+        .where(
+            ConnectedAccount.user_id == user_id,
+            ConnectedAccount.provider.in_(providers),
+            ConnectedAccount.status == STATUS_ACTIVE,
+            MCPConnection.mcp_url.is_not(None),
+        )
+        .order_by(
+            ConnectedAccount.provider,
+            ConnectedAccount.updated_at.desc(),
+            ConnectedAccount.created_at.desc(),
+            MCPConnection.id.desc(),
+        )
+    )
+    
+    results = db.execute(stmt).all()
+    
+    # Group by provider and take the first (latest) for each
+    seen_providers = set()
+    for row in results:
+        provider = row[0]
+        if provider not in seen_providers:
+            provider_contexts[provider] = (row[1], row[2], row[3], row[4] or {})
+            seen_providers.add(provider)
+    
+    return provider_contexts
+
+
 def is_authorized(db: Session, user_id: str, provider: str) -> bool:
     """
     Check if a user is authorized for a provider.

@@ -5,6 +5,7 @@ from urllib.parse import quote_plus, urlencode, urlparse, parse_qsl
 
 import os
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from sqlalchemy import select
 from shared.db.engine import session_scope
 from shared.db import crud
@@ -259,13 +260,89 @@ def callback(provider: str, request: Request, code: Optional[str] = None, state:
 def list_providers(request: Request):
     """List configured providers plus caller-specific authorization flags."""
     user_id = _require_user_id(request)
-    context = AgentContext.create(user_id)
     summaries = {entry["provider"]: entry for entry in toolbox_list_providers(user_id=user_id)}
     action_map = get_provider_action_map()
+    
+    # Batch fetch all provider contexts in a single database query
+    context = AgentContext.create(user_id)
+    with context.get_db() as db:
+        from mcp_agent.registry import crud
+        provider_contexts = crud.get_active_contexts_for_all_providers(
+            db, user_id, list(SUPPORTED_PROVIDERS)
+        )
+    
+    # Only make API calls for providers that have connected accounts
+    providers_with_accounts = {
+        prov: (ca_id, ac_id, url, headers)
+        for prov, (ca_id, ac_id, url, headers) in provider_contexts.items()
+        if ca_id and url
+    }
+    
+    # Parallelize API calls only for providers with connected accounts
+    def check_refresh_status(prov: str, ca_id: str) -> dict[str, Any]:
+        """Check refresh status for a provider with connected account."""
+        try:
+            from mcp_agent.registry.oauth import _get_connected_account
+            detail = _get_connected_account(ca_id)
+            status = (detail.get("status") or "").upper()
+            refresh_required = (status and status != "ACTIVE") or detail.get("auth_refresh_required", False)
+            reason = None
+            if refresh_required:
+                if status and status != "ACTIVE":
+                    reason = f"connected_account_status={status}"
+                elif detail.get("auth_refresh_required"):
+                    reason = "auth_refresh_required"
+            return {
+                "refresh_required": refresh_required,
+                "reason": reason,
+            }
+        except Exception as exc:
+            return {
+                "refresh_required": False,
+                "reason": f"status_check_failed: {exc}",
+            }
+    
+    refresh_statuses = {}
+    if providers_with_accounts:
+        max_workers = max(1, min(len(providers_with_accounts), 30))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_provider = {
+                executor.submit(check_refresh_status, prov, ca_id): prov
+                for prov, (ca_id, _, _, _) in providers_with_accounts.items()
+            }
+            for future in as_completed(future_to_provider):
+                prov = future_to_provider[future]
+                refresh_statuses[prov] = future.result()
+    
+    # Build provider statuses from batch query results
+    provider_statuses = {}
+    for prov in SUPPORTED_PROVIDERS:
+        ca_id, ac_id, url, headers = provider_contexts.get(prov, (None, None, None, {}))
+        
+        if not url or not ca_id:
+            provider_statuses[prov] = {
+                "authorized": False,
+                "connected_account_id": ca_id,
+                "auth_config_id": ac_id,
+                "mcp_url": url,
+                "refresh_required": False,
+                "reason": "missing mcp_url" if not url else "missing connected_account_id",
+            }
+        else:
+            refresh_info = refresh_statuses.get(prov, {"refresh_required": False, "reason": None})
+            provider_statuses[prov] = {
+                "authorized": not refresh_info["refresh_required"],
+                "connected_account_id": ca_id,
+                "auth_config_id": ac_id,
+                "mcp_url": url,
+                "refresh_required": refresh_info["refresh_required"],
+                "reason": refresh_info["reason"],
+            }
+    
     providers: list[dict[str, Any]] = []
     for prov in SUPPORTED_PROVIDERS:
         entry = summaries.get(prov, {})
-        status = OAuthManager.auth_status(context, prov)
+        status = provider_statuses[prov]
         has_ca = bool(status.get("connected_account_id"))
         has_mcp = bool(status.get("mcp_url"))
         actions = entry.get("all_actions") or [fn.__name__ for fn in action_map.get(prov, ())]

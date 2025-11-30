@@ -121,9 +121,37 @@ class ToolboxBuilder:
         Returns:
             ToolboxManifest with filtered providers based on constraints
         """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        action_map = get_provider_action_map()
         providers: List[ProviderSpec] = []
-        for provider, funcs in sorted(get_provider_action_map().items()):
-            status = OAuthManager.auth_status(self.context, provider)
+        
+        # Parallelize auth_status calls for better performance
+        def get_provider_status(provider: str) -> tuple[str, dict[str, Any]]:
+            """Get auth status for a provider with its own context."""
+            context = AgentContext.create(self.user_id)
+            try:
+                status = OAuthManager.auth_status(context, provider)
+                return provider, status
+            except Exception:
+                return provider, {"authorized": False}
+        
+        # Collect all provider statuses in parallel
+        provider_statuses = {}
+        # Increase workers to handle many providers efficiently (ensure at least 1)
+        max_workers = max(1, min(len(action_map), 30))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_provider = {
+                executor.submit(get_provider_status, provider): provider
+                for provider in action_map.keys()
+            }
+            for future in as_completed(future_to_provider):
+                provider, status = future.result()
+                provider_statuses[provider] = status
+        
+        # Build providers list from parallel results
+        for provider, funcs in sorted(action_map.items()):
+            status = provider_statuses[provider]
             # Only include providers that are authorized and not refresh-blocked
             if not status.get("authorized"):
                 continue
@@ -292,12 +320,34 @@ def get_manifest(
     key = user
     # Helper to compute currently authorized providers (refresh-aware)
     def _current_authorized_set() -> set[str]:
-        ctx = AgentContext.create(user)
+        """Compute authorized providers in parallel for better performance."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from mcp_agent.actions import get_provider_action_map
+        
+        providers = list(get_provider_action_map().keys())
         auth = set()
-        for prov in get_provider_action_map().keys():
-            status = OAuthManager.auth_status(ctx, prov)
-            if status.get("authorized"):
-                auth.add(prov)
+        
+        # Parallelize auth_status calls to avoid sequential API requests
+        def check_auth(prov: str) -> tuple[str, bool]:
+            """Check if a provider is authorized."""
+            ctx = AgentContext.create(user)
+            try:
+                status = OAuthManager.auth_status(ctx, prov)
+                return prov, status.get("authorized", False)
+            except Exception:
+                return prov, False
+        
+        # Increase workers to handle many providers efficiently (ensure at least 1)
+        max_workers = max(1, min(len(providers), 30))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_provider = {
+                executor.submit(check_auth, prov): prov
+                for prov in providers
+            }
+            for future in as_completed(future_to_provider):
+                prov, is_authorized = future.result()
+                if is_authorized:
+                    auth.add(prov)
         return auth
 
     # If tool_constraints specified, always rebuild (don't use cache)
