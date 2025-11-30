@@ -13,5 +13,4 @@ def build_redirect(provider: str) -> str:
     This avoids deriving scheme/host/port from inbound requests which may be
     inconsistent when behind proxies or using different hosts.
     """
-    return f"{OAUTH_REDIRECT_BASE}/api/mcp/auth/{provider}/callback"
-
+    return f"{OAUTH_REDIRECT_BASE}/api/composio-redirect?provider={provider}"

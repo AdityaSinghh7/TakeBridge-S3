@@ -5,14 +5,16 @@ Minimal utility module - global user ID lookups have been replaced by AgentConte
 
 from __future__ import annotations
 import os
-
+from typing import TYPE_CHECKING, Optional
 
 _DEFAULT_USER_ID = "dev-local"
 DEV_DEFAULT_USER_ID = _DEFAULT_USER_ID
 DEV_USER_ENV_VAR = "TB_USER_ID"
 
+if TYPE_CHECKING:
+    from server.api.auth import CurrentUser
 
-def normalize_user_id(user_id: str | None) -> str:
+def normalize_user_id(user_id: Optional[str] = None) -> str:
     """
     Normalize a user ID, stripping whitespace and lowercasing.
     
@@ -22,15 +24,10 @@ def normalize_user_id(user_id: str | None) -> str:
     Returns:
         Normalized user ID (defaults to 'dev-local' if empty)
     """
-    if not user_id:
-        return _DEFAULT_USER_ID
-    if not isinstance(user_id, str):
-        return _DEFAULT_USER_ID
-    normalized = user_id.strip().lower()
-    return normalized if normalized else _DEFAULT_USER_ID
+    raw = (user_id or os.getenv(DEV_USER_ENV_VAR) or DEV_DEFAULT_USER_ID or "").strip()
+    return raw.lower() if raw else DEV_DEFAULT_USER_ID
 
-
-def resolve_dev_user_id() -> str:
+def resolve_dev_user_id(current_user: Optional["CurrentUser"] = None) -> str:
     """
     Resolve a user identifier for local development.
     
@@ -39,5 +36,6 @@ def resolve_dev_user_id() -> str:
     Returns:
         Normalized user ID from environment or default
     """
-    env_user = os.getenv(DEV_USER_ENV_VAR)
-    return normalize_user_id(env_user)
+    if current_user and getattr(current_user, "sub", None):
+        return normalize_user_id(current_user.sub)
+    return normalize_user_id(os.getenv(DEV_USER_ENV_VAR, DEV_DEFAULT_USER_ID))

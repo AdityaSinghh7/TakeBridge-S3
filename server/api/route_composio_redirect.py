@@ -1,39 +1,20 @@
 from fastapi import APIRouter, Request, HTTPException
-from fastapi.responses import RedirectResponse, JSONResponse, HTMLResponse
+from fastapi.responses import RedirectResponse, HTMLResponse
 from urllib.parse import quote_plus
 
 from mcp_agent.core.context import AgentContext
 from mcp_agent.registry.oauth import COMPOSIO_API_V3, OAuthManager
-from mcp_agent.user_identity import normalize_user_id
 from mcp_agent.action_registry import sync_registered_actions
 from computer_use_agent.grounding.grounding_agent import ACI
-
+from server.api.routes_mcp_auth import _require_user_id
+import os
 router = APIRouter()
 
 COMPOSIO_CALLBACK = f"{COMPOSIO_API_V3}/toolkits/auth/callback"
 
 
-def _require_user_id(request: Request) -> str:
-    # Try header first (for API calls)
-    raw = (request.headers.get("X-User-Id") or "").strip()
-    
-    # Fallback to query parameter (for browser redirects)
-    if not raw:
-        raw = (request.query_params.get("user_id") or "").strip()
-    
-    # For local development, default to dev-local if neither is present
-    if not raw:
-        import os
-        raw = os.getenv("TB_DEFAULT_USER_ID", "dev-local")
-    
-    if not raw:
-        raise HTTPException(400, "Missing X-User-Id header or user_id query parameter.")
-    
-    try:
-        return normalize_user_id(raw)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
 
+FRONTEND_URL = os.getenv("FRONTEND_BASE_URL", "http://localhost:5173")
 
 def _attach_error(url: str | None, message: str) -> str | None:
     if not url:
@@ -58,7 +39,7 @@ def composio_redirect(request: Request):
     if ca_id:
         if status and status != "success":
             raise HTTPException(400, f"Composio reported status={status}")
-        user_id = _require_user_id(request)
+        user_id = _require_user_id(request, None)
         provider = (app_name or "gmail").lower()
         context = AgentContext.create(user_id=user_id)
         try:
@@ -82,7 +63,7 @@ def composio_redirect(request: Request):
             raise HTTPException(400, f"Finalize failed: {detail}")
         # Bounce to UI success page
         success_redirect = OAuthManager.consume_redirect_hint(provider, user_id, success=True)
-        target = success_redirect or f"/settings/integrations?connected={provider}"
+        target = success_redirect or f"{FRONTEND_URL}/oauth/success"
         return RedirectResponse(url=target, status_code=302)
 
     # Phase 1: provider -> your redirect: forward to Composio callback

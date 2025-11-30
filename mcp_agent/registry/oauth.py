@@ -11,10 +11,12 @@ import time
 import threading
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
-
+from sqlalchemy import select, update
+from mcp_agent.registry.db_models import ConnectedAccount, MCPConnection
+from datetime import datetime, timezone
 import requests
 
-from mcp_agent.user_identity import normalize_user_id
+from mcp_agent.user_identity import normalize_user_id, DEV_DEFAULT_USER_ID
 
 from . import crud
 
@@ -247,6 +249,8 @@ class OAuthManager:
             }
         """
         from mcp_agent.user_identity import normalize_user_id
+        # Prefer the user_id we carried through OAuth start; fall back to the
+        # connected account detail (Composio echoes back the user we passed).
         user_id = normalize_user_id(context.user_id)
         
         # Check cache first
@@ -466,6 +470,12 @@ class OAuthManager:
         
         # Wait for account to become ACTIVE
         detail = _wait_connected_account_active(connected_account_id)
+        detail_user = (
+            detail.get("user_id")
+            or (detail.get("connection") or {}).get("user_id")
+        )
+        if detail_user and (not context.user_id or user_id == DEV_DEFAULT_USER_ID):
+            user_id = normalize_user_id(detail_user)
         
         # Extract provider UID (email or team ID)
         provider_uid = (
@@ -537,6 +547,35 @@ class OAuthManager:
         
         # Persist to DB
         with context.get_db() as db:
+            # If Composio rotated the connected_account_id for this user/provider,
+            # clear any old CA/MCP rows to avoid FK violations and keep a single source of truth.
+            old_ca_ids = [
+                r[0]
+                for r in db.execute(
+                    select(ConnectedAccount.id).where(
+                        ConnectedAccount.user_id == user_id,
+                        ConnectedAccount.provider == provider,
+                        ConnectedAccount.id != connected_account_id,
+                    )
+                ).all()
+            ]
+            if old_ca_ids:
+                db.execute(
+                    update(MCPConnection)
+                    .where(MCPConnection.connected_account_id.in_(old_ca_ids))
+                    .values(
+                        mcp_url=None,
+                        headers_json={},
+                        last_error="replaced connected account",
+                        last_synced_at=datetime.now(timezone.utc),
+                    )
+                )
+                db.execute(
+                    ConnectedAccount.__table__.delete().where(
+                        ConnectedAccount.id.in_(old_ca_ids)
+                    )
+                )
+
             crud.upsert_user(db, user_id)
             ac = detail.get("auth_config") or detail.get("authConfig") or {}
             ac_id = ac.get("id") or auth_config_id
@@ -727,6 +766,35 @@ def _ensure_mcp_server(provider: str, auth_config_id: str) -> str:
     if len(name) < 4:
         name = "tb-srv1"
     
+    def _find_by_name() -> str | None:
+        """Return server id if a server with this name already exists."""
+        try:
+            r2 = requests.get(
+                f"{COMPOSIO_API_V3}/mcp/servers",
+                headers=_headers(),
+                params={"name": name},
+                timeout=20,
+            )
+            if 200 <= r2.status_code < 300:
+                body = r2.json()
+                items = body.get("items") or body.get("data") or body
+                if isinstance(items, dict):
+                    items = items.get("items") or items.get("data") or []
+                if isinstance(items, list):
+                    for s in items:
+                        if (s.get("name") or "") == name:
+                            sid = s.get("id") or s.get("server_id")
+                            if sid:
+                                return sid
+        except Exception:
+            return None
+        return None
+
+    # If a server with this name already exists, reuse it
+    existing = _find_by_name()
+    if existing:
+        return existing
+
     # Try to create server
     r = requests.post(
         f"{COMPOSIO_API_V3}/mcp/servers",
@@ -739,22 +807,23 @@ def _ensure_mcp_server(provider: str, auth_config_id: str) -> str:
         srv_id = data.get("id") or data.get("server_id")
         if srv_id:
             return srv_id
-    
-    # Try to list and reuse by name
+
+    # If name already exists, fall back to lookup
     try:
-        r2 = requests.get(f"{COMPOSIO_API_V3}/mcp/servers", headers=_headers(), timeout=20)
-        if 200 <= r2.status_code < 300:
-            body = r2.json()
-            items = body.get("items") or body.get("data") or body
-            if isinstance(items, list):
-                for s in items:
-                    if (s.get("name") or "") == name:
-                        sid = s.get("id") or s.get("server_id")
-                        if sid:
-                            return sid
+        body = r.json()
+        err_msg = str(body)
+        if (isinstance(body, dict) and (body.get("error") or {})) or "already exists" in err_msg:
+            sid = _find_by_name()
+            if sid:
+                return sid
     except Exception:
         pass
-    
+
+    # Try to list and reuse by name as a final fallback
+    sid = _find_by_name()
+    if sid:
+        return sid
+
     # If all else fails, raise
     r.raise_for_status()
     raise RuntimeError("Unable to provision MCP server")
