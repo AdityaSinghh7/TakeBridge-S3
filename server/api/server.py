@@ -42,6 +42,7 @@ from shared.streaming import (
 )
 from vm_manager.vm_wrapper import ensure_workspace
 from vm_manager.config import settings
+from shared.db.schemas import WorkspaceOut
 from .auth import get_current_user, CurrentUser
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -90,7 +91,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",
-        "https://localhost:5173",
+        "https://localhost:5174",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -453,6 +454,21 @@ async def config_defaults() -> Dict[str, Any]:
         "worker": DEFAULT_WORKER_CONFIG,
         "grounding": DEFAULT_GROUNDING_CONFIG,
     }
+
+
+@app.get("/app/workspace")
+async def get_workspace(
+    current_user: CurrentUser = Depends(get_current_user),
+) -> WorkspaceOut:
+    """
+    Get or create workspace for current user.
+    
+    Returns workspace information including VNC URL for the Monitor tab.
+    If no workspace exists, a new one will be created.
+    """
+    user_id = current_user.sub
+    workspace_obj = ensure_workspace(user_id)
+    return WorkspaceOut.model_validate(workspace_obj)
 
 
 __all__ = ["app"]

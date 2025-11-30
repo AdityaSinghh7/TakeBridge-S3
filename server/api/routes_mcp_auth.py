@@ -24,19 +24,76 @@ from mcp_agent.mcp_client import MCPClient
 from mcp_agent.action_registry import sync_registered_actions
 from mcp_agent.actions import SUPPORTED_PROVIDERS, get_provider_action_map
 from computer_use_agent.grounding.grounding_agent import ACI
-
+from jose import jwt, JWTError
+from vm_manager.config import settings
 
 router = APIRouter(prefix="/api/mcp/auth", tags=["mcp-auth"])
 
 
+def _extract_user_from_jwt(request: Request) -> Optional[str]:
+    """
+    Extract user_id from JWT token in Authorization header.
+    Returns None if no valid token is present (allows fallback to other methods).
+    """
+    auth_header = request.headers.get("Authorization", "").strip()
+    if not auth_header.startswith("Bearer "):
+        return None
+    
+    try:
+        token = auth_header.split(" ", 1)[1]
+        payload = jwt.decode(
+            token,
+            settings.SUPABASE_JWT_SECRET,
+            algorithms=[settings.SUPABASE_JWT_ALG],
+            options={
+                "verify_signature": True,
+                "verify_exp": True,
+                "verify_iat": True,
+                "verify_aud": False,
+            },
+        )
+        sub = payload.get("sub") or payload.get("user_id")
+        if sub:
+            return normalize_user_id(sub)
+    except (JWTError, Exception):
+        # If JWT validation fails, return None to allow fallback
+        pass
+    return None
+
+
 def _require_user_id(request: Request) -> str:
+    """
+    Get user_id from JWT token (preferred) or fall back to X-User-Id header/query param.
+    
+    This supports both:
+    1. JWT-based auth (from Supabase) - preferred for authenticated requests
+    2. X-User-Id header (for backward compatibility)
+    3. Query parameter (for OAuth callbacks from external providers)
+    4. dev-local fallback (only for local development - should be removed in production)
+    
+    OAuth callbacks from external providers (like Composio) can't include JWT tokens,
+    so they use user_id in query parameters (embedded in redirect URL).
+    """
+    # Try JWT auth first (if available and provided)
+    user_id = _extract_user_from_jwt(request)
+    if user_id:
+        return user_id
+    
+    # Fallback to legacy methods (for OAuth callbacks)
     raw = (request.headers.get("X-User-Id") or "").strip()
     if not raw:
         raw = (request.query_params.get("user_id") or "").strip()
     if not raw:
-        raw = os.getenv("TB_DEFAULT_USER_ID", "dev-local").strip()
+        # Only use dev-local as last resort for local development
+        # TODO: Remove this fallback in production - require proper auth
+        raw = os.getenv("TB_DEFAULT_USER_ID", "").strip()
     if not raw:
-        raise HTTPException(400, "Missing X-User-Id header or user_id query parameter.")
+        raise HTTPException(
+            400,
+            "Missing authentication. Provide either: "
+            "1) JWT token in Authorization header, or "
+            "2) X-User-Id header/user_id query parameter (for OAuth callbacks)"
+        )
     try:
         return normalize_user_id(raw)
     except ValueError as exc:
@@ -80,6 +137,132 @@ def _latest_connected_account_id(context: AgentContext, provider: str) -> str | 
         )
 
 
+# Non-parameterized routes must come BEFORE parameterized routes like /{provider}/...
+# to avoid path conflicts (e.g., /providers vs /{provider}/start)
+
+@router.get("/providers")
+def list_providers(request: Request):
+    """List configured providers plus caller-specific authorization flags."""
+    user_id = _require_user_id(request)
+    context = AgentContext.create(user_id)
+    summaries = {entry["provider"]: entry for entry in toolbox_list_providers(user_id=user_id)}
+    action_map = get_provider_action_map()
+    providers: list[dict[str, Any]] = []
+    for prov in SUPPORTED_PROVIDERS:
+        entry = summaries.get(prov, {})
+        status = OAuthManager.auth_status(context, prov)
+        has_ca = bool(status.get("connected_account_id"))
+        has_mcp = bool(status.get("mcp_url"))
+        actions = entry.get("all_actions") or [fn.__name__ for fn in action_map.get(prov, ())]
+        env_key = f"COMPOSIO_{prov.upper()}_AUTH_CONFIG_ID"
+        configured_env = bool(os.getenv(env_key))
+        if status.get("authorized"):
+            state = "connected"
+        elif status.get("refresh_required"):
+            state = "expired"
+        elif not has_ca:
+            state = "not_connected"
+        elif not configured_env and not has_mcp:
+            state = "not_configured"
+        else:
+            state = "error"
+        providers.append(
+            {
+                "provider": prov,
+                "display_name": entry.get("display_name") or prov.capitalize(),
+                "authorized": status.get("authorized", False),
+                "refresh_required": status.get("refresh_required", False),
+                "reason": status.get("reason"),
+                "state": state,
+                "has_connected_account": has_ca,
+                "registered": entry.get("registered", False),
+                "configured": entry.get("configured", has_mcp),
+                "auth_config_present": configured_env,
+                "mcp_url": status.get("mcp_url") or entry.get("mcp_url"),
+                "tool_count": entry.get("tool_count") or len(actions),
+                "actions": entry.get("all_actions") or actions,
+                "available_tools": entry.get("available_tools") or actions,
+                "manifest_path": entry.get("path") or f"providers/{prov}/provider.json",
+            }
+        )
+    return {"providers": providers}
+
+
+@router.get("/tools/available")
+def available_tools(request: Request, provider: Optional[str] = None):
+    """Surface detailed action metadata per provider for UI presentation."""
+    user_id = _require_user_id(request)
+    requested = _normalize_provider(provider) if provider else None
+    manifest = get_toolbox_manifest(user_id=user_id)
+    providers_out: list[dict[str, Any]] = []
+    for prov in manifest.providers:
+        if requested and prov.provider != requested:
+            continue
+        providers_out.append(
+            {
+                "provider": prov.provider,
+                "authorized": prov.authorized,
+                "registered": prov.registered,
+                "configured": prov.configured,
+                "mcp_url": prov.mcp_url,
+                "actions": [
+                    {
+                        "name": tool.name,
+                        "provider": prov.provider,
+                        "description": tool.description,
+                        "doc": tool.docstring,
+                        "short_description": tool.short_description,
+                        "available": tool.available,
+                        "path": f"providers/{prov.provider}/tools/{safe_filename(tool.name)}.json",
+                        "mcp_tool_name": tool.mcp_tool_name,
+                    }
+                    for tool in prov.actions
+                ],
+            }
+        )
+    if requested and not providers_out:
+        raise HTTPException(404, f"Unknown provider '{provider}'")
+    return {"providers": providers_out}
+
+
+@router.get("/tools/search")
+def search_tools(
+    request: Request,
+    q: Optional[str] = None,
+    provider: Optional[str] = None,
+    detail: str = "summary",
+    limit: int = 20,
+):
+    user_id = _require_user_id(request)
+    try:
+        results = toolbox_search_tools(
+            query=q,
+            provider=provider,
+            detail_level=detail,
+            limit=limit,
+            user_id=user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return {"results": results, "detail_level": detail}
+
+
+@router.get("/status")
+def status(request: Request):
+    user_id = _require_user_id(request)
+    context = AgentContext.create(user_id)
+    slack = OAuthManager.auth_status(context, "slack")
+    gmail = OAuthManager.auth_status(context, "gmail")
+    return {
+        "slack": slack["authorized"],
+        "gmail": gmail["authorized"],
+        "details": {
+            "slack": slack,
+            "gmail": gmail,
+        },
+    }
+
+
 @router.get("/{provider}/start")
 def start(
     provider: str,
@@ -114,6 +297,18 @@ def start(
             )
 
         url = OAuthManager.start_oauth(context, provider, redirect_uri, provider_fields=provider_fields)
+        
+        # Extract state parameter from the OAuth URL to store user_id mapping
+        # The state parameter will be preserved through the OAuth flow
+        try:
+            from urllib.parse import urlparse, parse_qs
+            parsed = urlparse(url)
+            state = parse_qs(parsed.query).get("state", [None])[0]
+            if state:
+                OAuthManager.store_oauth_user_id(state, user_id)
+        except Exception:
+            pass  # Best effort - if we can't extract state, fall back to other methods
+        
         return JSONResponse({"authorization_url": url})
     except Exception as e:
         # Surface likely misconfig or connectivity problems clearly
@@ -253,129 +448,6 @@ def callback(provider: str, request: Request, code: Optional[str] = None, state:
     url = callback_url if not qs else f"{callback_url}?{qs}"
     return RedirectResponse(url=url, status_code=302)
     
-
-
-@router.get("/providers")
-def list_providers(request: Request):
-    """List configured providers plus caller-specific authorization flags."""
-    user_id = _require_user_id(request)
-    context = AgentContext.create(user_id)
-    summaries = {entry["provider"]: entry for entry in toolbox_list_providers(user_id=user_id)}
-    action_map = get_provider_action_map()
-    providers: list[dict[str, Any]] = []
-    for prov in SUPPORTED_PROVIDERS:
-        entry = summaries.get(prov, {})
-        status = OAuthManager.auth_status(context, prov)
-        has_ca = bool(status.get("connected_account_id"))
-        has_mcp = bool(status.get("mcp_url"))
-        actions = entry.get("all_actions") or [fn.__name__ for fn in action_map.get(prov, ())]
-        env_key = f"COMPOSIO_{prov.upper()}_AUTH_CONFIG_ID"
-        configured_env = bool(os.getenv(env_key))
-        if status.get("authorized"):
-            state = "connected"
-        elif status.get("refresh_required"):
-            state = "expired"
-        elif not has_ca:
-            state = "not_connected"
-        elif not configured_env and not has_mcp:
-            state = "not_configured"
-        else:
-            state = "error"
-        providers.append(
-            {
-                "provider": prov,
-                "display_name": entry.get("display_name") or prov.capitalize(),
-                "authorized": status.get("authorized", False),
-                "refresh_required": status.get("refresh_required", False),
-                "reason": status.get("reason"),
-                "state": state,
-                "has_connected_account": has_ca,
-                "registered": entry.get("registered", False),
-                "configured": entry.get("configured", has_mcp),
-                "auth_config_present": configured_env,
-                "mcp_url": status.get("mcp_url") or entry.get("mcp_url"),
-                "tool_count": entry.get("tool_count") or len(actions),
-                "actions": entry.get("all_actions") or actions,
-                "available_tools": entry.get("available_tools") or actions,
-                "manifest_path": entry.get("path") or f"providers/{prov}/provider.json",
-            }
-        )
-    return {"providers": providers}
-
-
-@router.get("/tools/available")
-def available_tools(request: Request, provider: Optional[str] = None):
-    """Surface detailed action metadata per provider for UI presentation."""
-    user_id = _require_user_id(request)
-    requested = _normalize_provider(provider) if provider else None
-    manifest = get_toolbox_manifest(user_id=user_id)
-    providers_out: list[dict[str, Any]] = []
-    for prov in manifest.providers:
-        if requested and prov.provider != requested:
-            continue
-        providers_out.append(
-            {
-                "provider": prov.provider,
-                "authorized": prov.authorized,
-                "registered": prov.registered,
-                "configured": prov.configured,
-                "mcp_url": prov.mcp_url,
-                "actions": [
-                    {
-                        "name": tool.name,
-                        "provider": prov.provider,
-                        "description": tool.description,
-                        "doc": tool.docstring,
-                        "short_description": tool.short_description,
-                        "available": tool.available,
-                        "path": f"providers/{prov.provider}/tools/{safe_filename(tool.name)}.json",
-                        "mcp_tool_name": tool.mcp_tool_name,
-                    }
-                    for tool in prov.actions
-                ],
-            }
-        )
-    if requested and not providers_out:
-        raise HTTPException(404, f"Unknown provider '{provider}'")
-    return {"providers": providers_out}
-
-
-@router.get("/tools/search")
-def search_tools(
-    request: Request,
-    q: Optional[str] = None,
-    provider: Optional[str] = None,
-    detail: str = "summary",
-    limit: int = 20,
-):
-    user_id = _require_user_id(request)
-    try:
-        results = toolbox_search_tools(
-            query=q,
-            provider=provider,
-            detail_level=detail,
-            limit=limit,
-            user_id=user_id,
-        )
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-    return {"results": results, "detail_level": detail}
-
-
-@router.get("/status")
-def status(request: Request):
-    user_id = _require_user_id(request)
-    context = AgentContext.create(user_id)
-    slack = OAuthManager.auth_status(context, "slack")
-    gmail = OAuthManager.auth_status(context, "gmail")
-    return {
-        "slack": slack["authorized"],
-        "gmail": gmail["authorized"],
-        "details": {
-            "slack": slack,
-            "gmail": gmail,
-        },
-    }
 
 
 @router.get("/{provider}/status/live")
