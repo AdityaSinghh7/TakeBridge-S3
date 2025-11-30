@@ -101,12 +101,6 @@ class OrchestratorRuntime:
                 len(state.results) > 0 and state.results[-1].status == "failed"
             )
 
-            # Emit SSE event: planning started
-            emit_event("orchestrator.planning.started", {
-                "step_number": len(state.results) + 1,
-                "last_failed": last_failed,
-            })
-
             # Ask orchestrator: what's the next step?
             decision = self._get_next_step(request, state, last_failed)
 
