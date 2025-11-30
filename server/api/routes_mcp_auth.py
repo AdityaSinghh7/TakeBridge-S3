@@ -508,11 +508,62 @@ def disconnect(provider: str, request: Request, connected_account_id: str | None
         else:
             summary = crud.disconnect_provider(db, user_id, provider)
 
+    # Invalidate cache when provider is disconnected
+    OAuthManager._invalidate_cache(user_id, provider)
+
     # Re-register actions (removes tools from ACI)
     # Registry is DB-backed, no manual refresh needed
     sync_registered_actions(user_id, aci_class=ACI)
 
     return {"status": "disconnected", "provider": provider, **summary}
+
+
+@router.get("/_debug/connected-account/{ca_id}")
+def debug_connected_account(ca_id: str):
+    """Debug helper to inspect the actual Composio API response for a connected account."""
+    import json
+    from mcp_agent.registry.oauth import _get_connected_account
+    
+    try:
+        detail = _get_connected_account(ca_id)
+        # Show all fields that might contain expiration/TTL info
+        expiration_fields = {
+            "expires_at": detail.get("expires_at"),
+            "expiresAt": detail.get("expiresAt"),
+            "expires_in": detail.get("expires_in"),
+            "expiresIn": detail.get("expiresIn"),
+            "ttl": detail.get("ttl"),
+            "token_expires_at": detail.get("token_expires_at"),
+            "tokenExpiresAt": detail.get("tokenExpiresAt"),
+            "expiration_time": detail.get("expiration_time"),
+        }
+        
+        # Check nested structures
+        credentials = detail.get("credentials") or detail.get("credential") or {}
+        tokens = detail.get("tokens") or detail.get("token") or {}
+        
+        if credentials:
+            expiration_fields["credentials.expires_at"] = credentials.get("expires_at")
+            expiration_fields["credentials.expiresAt"] = credentials.get("expiresAt")
+            expiration_fields["credentials.expires_in"] = credentials.get("expires_in")
+            expiration_fields["credentials.expiresIn"] = credentials.get("expiresIn")
+        
+        if tokens:
+            expiration_fields["tokens.expires_at"] = tokens.get("expires_at")
+            expiration_fields["tokens.expiresAt"] = tokens.get("expiresAt")
+            expiration_fields["tokens.expires_in"] = tokens.get("expires_in")
+            expiration_fields["tokens.expiresIn"] = tokens.get("expiresIn")
+        
+        return {
+            "connected_account_id": ca_id,
+            "status": detail.get("status"),
+            "provider": detail.get("provider"),
+            "auth_refresh_required": detail.get("auth_refresh_required"),
+            "expiration_fields": {k: v for k, v in expiration_fields.items() if v is not None},
+            "full_response": detail,  # Full response for inspection
+        }
+    except Exception as e:
+        return {"error": str(e), "connected_account_id": ca_id}
 
 
 @router.get("/_debug/redirect/{provider}")
