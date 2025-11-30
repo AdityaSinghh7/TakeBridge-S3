@@ -58,3 +58,33 @@ class MCPConnection(Base):
     last_error = Column(Text)
 
     connected_account = relationship("ConnectedAccount", back_populates="mcp_connections")
+
+
+class Workspace(Base):
+    __tablename__ = "workspaces"
+
+    id = Column(String, primary_key=True)
+    # Canonical user ID: Supabase auth.users.id (UUID). Must be the same across all clients.
+    user_id = Column(String, index=True, nullable=False)
+    status = Column(String, default="running")  # "running", "stopped", "terminated", "creating"
+    controller_base_url = Column(String, nullable=False)
+    vnc_url = Column(String, nullable=True)
+    # AWS EC2 instance details
+    vm_instance_id = Column(String, nullable=True)
+    cloud_region = Column(String, nullable=True)
+
+    created_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        onupdate=func.now(),
+        nullable=True,
+    )
+    last_used_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )

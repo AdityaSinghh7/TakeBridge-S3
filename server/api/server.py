@@ -17,8 +17,9 @@ import os
 import time
 from dataclasses import asdict
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
-from fastapi import Body, FastAPI, Header, HTTPException
+from fastapi import Body, FastAPI, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -39,6 +40,9 @@ from shared.streaming import (
     reset_current_emitter,
     set_current_emitter,
 )
+from vm_manager.vm_wrapper import ensure_workspace
+from vm_manager.config import settings
+from .auth import get_current_user, CurrentUser
 try:
     from dotenv import load_dotenv  # type: ignore
 except Exception:  # pragma: no cover
@@ -49,6 +53,10 @@ if load_dotenv:
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Suppress uvicorn access logs to WARNING level (keep errors, remove routine logs)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
 logger.info("Starting Orchestrator API")
 
 
@@ -166,6 +174,7 @@ def _create_streaming_response(
     request: OrchestrateRequest,
     user_id: Optional[str] = None,
     tool_constraints: Optional[Dict[str, Any]] = None,
+    workspace: Optional[Dict[str, Any]] = None,
 ) -> StreamingResponse:
     """Create streaming response using orchestrator agent.
 
@@ -173,6 +182,7 @@ def _create_streaming_response(
         request: OrchestrateRequest format
         user_id: Optional user ID for multi-tenancy
         tool_constraints: Optional tool constraints dict
+        workspace: Optional workspace context (id, controller_base_url, vnc_url)
 
     Returns:
         StreamingResponse with SSE events
@@ -180,12 +190,23 @@ def _create_streaming_response(
     queue: asyncio.Queue[Optional[bytes]] = asyncio.Queue()
     loop = asyncio.get_running_loop()
 
-    queue.put_nowait(_format_sse_event("response.created", {"status": "accepted"}))
+    initial_payload = {"status": "accepted"}
+    if workspace:
+        initial_payload["workspace"] = workspace
+    first_chunk = _format_sse_event("response.created", initial_payload)
+    logger.info("SSE stream started")
+    queue.put_nowait(first_chunk)
     queue.put_nowait(_format_sse_event("response.in_progress", {"status": "running"}))
 
     def _publish(event: str, data: Optional[Any] = None) -> None:
         chunk = _format_sse_event(event, data)
         try:
+            # Trace every SSE emission for visibility
+            logger.debug(
+                "SSE event=%s payload_keys=%s",
+                event,
+                list(data.keys()) if isinstance(data, dict) else type(data).__name__,
+            )
             loop.call_soon_threadsafe(queue.put_nowait, chunk)
         except RuntimeError as exc:
             if "closed" not in str(exc).lower():
@@ -235,6 +256,7 @@ def _create_streaming_response(
                 request,
                 user_id=user_id,
                 tool_constraints=tool_constraints,
+                workspace=workspace,
             )
             logger.info("Executing orchestrator_agent request")
             result = await _execute_orchestrator(orch_request, emitter)
@@ -292,7 +314,7 @@ def _create_streaming_response(
 @app.post("/orchestrate")
 async def orchestrate(
     payload: Dict[str, Any] = Body(...),
-    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
     Run a single orchestrator task (non-streaming).
@@ -312,14 +334,41 @@ async def orchestrate(
     """
     from server.api.orchestrator_adapter import orchestrate_to_orchestrator
 
+    # Extract user_id from header or env
+    user_id = current_user.sub
+
+    # Ensure workspace/VM and derive controller defaults
+    workspace_obj = ensure_workspace(user_id)
+    controller_data = dict(payload.get("controller") or {})
+    base_url = controller_data.get("base_url") or workspace_obj.controller_base_url
+    if not base_url:
+        raise HTTPException(status_code=500, detail="Workspace controller_base_url is missing")
+    parsed = urlparse(base_url) if base_url else None
+    host = controller_data.get("host") or (parsed.hostname if parsed else None)
+    port = controller_data.get("port") or (parsed.port if parsed else settings.AGENT_CONTROLLER_PORT)
+    controller_data.update(
+        {
+            "base_url": base_url,
+            "host": host,
+            "port": port,
+        }
+    )
+    payload = {**payload, "controller": controller_data}
+
     request = _parse_orchestrate_request(payload)
-    user_id = x_user_id or os.getenv("TB_DEFAULT_USER_ID")
     tool_constraints = payload.get("tool_constraints")
 
     orch_request = orchestrate_to_orchestrator(
         request,
         user_id=user_id,
         tool_constraints=tool_constraints,
+        workspace={
+            "id": workspace_obj.id,
+            "controller_base_url": workspace_obj.controller_base_url,
+            "vnc_url": workspace_obj.vnc_url,
+            "controller_host": host,
+            "controller_port": port,
+        },
     )
 
     try:
@@ -352,7 +401,7 @@ async def orchestrate_stream(task: str) -> StreamingResponse:
 @app.post("/orchestrate/stream")
 async def orchestrate_stream_post(
     payload: Dict[str, Any] = Body(...),
-    x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+    current_user: CurrentUser = Depends(get_current_user),
 ) -> StreamingResponse:
     """
     Streaming endpoint with full payload support (tool constraints, controller overrides, etc.).
@@ -366,15 +415,43 @@ async def orchestrate_stream_post(
             - providers: List[str] (for custom mode)
             - tools: List[str] (for custom mode)
     """
-    request = _parse_orchestrate_request(payload)
-
     # Extract user_id from header or env
-    user_id = x_user_id or os.getenv("TB_DEFAULT_USER_ID")
+    user_id = current_user.sub
+
+    # Ensure workspace/VM and derive controller defaults
+    workspace_obj = ensure_workspace(user_id)
+    controller_data = dict(payload.get("controller") or {})
+    base_url = controller_data.get("base_url") or workspace_obj.controller_base_url
+    if not base_url:
+        raise HTTPException(status_code=500, detail="Workspace controller_base_url is missing")
+    parsed = urlparse(base_url) if base_url else None
+    host = controller_data.get("host") or (parsed.hostname if parsed else None)
+    port = controller_data.get("port") or (parsed.port if parsed else settings.AGENT_CONTROLLER_PORT)
+    controller_data.update(
+        {
+            "base_url": base_url,
+            "host": host,
+            "port": port,
+        }
+    )
+
+    # Rebuild payload with controller defaults merged in
+    payload = {**payload, "controller": controller_data}
 
     # Extract tool_constraints from payload
     tool_constraints = payload.get("tool_constraints")
 
-    return _create_streaming_response(request, user_id, tool_constraints)
+    request = _parse_orchestrate_request(payload)
+
+    workspace_info = {
+        "id": workspace_obj.id,
+        "controller_base_url": workspace_obj.controller_base_url,
+        "vnc_url": workspace_obj.vnc_url,
+        "controller_host": host,
+        "controller_port": port,
+    }
+
+    return _create_streaming_response(request, user_id, tool_constraints, workspace_info)
 
 
 @app.get("/config")

@@ -12,3 +12,18 @@ class MCPConnectionOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+class WorkspaceOut(BaseModel):
+    id: str
+    user_id: str
+    status: str
+    controller_base_url: str
+    vnc_url: Optional[str] = None
+    vm_instance_id: Optional[str] = None
+    cloud_region: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    last_used_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True

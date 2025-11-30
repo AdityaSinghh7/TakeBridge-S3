@@ -8,17 +8,27 @@ from __future__ import annotations
 
 import os
 import time
-from typing import TYPE_CHECKING, Any, Dict, List
+import threading
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
-
+from sqlalchemy import select, update
+from mcp_agent.registry.db_models import ConnectedAccount, MCPConnection
+from datetime import datetime, timezone
 import requests
 
-from mcp_agent.user_identity import normalize_user_id
+from mcp_agent.user_identity import normalize_user_id, DEV_DEFAULT_USER_ID
 
 from . import crud
 
 if TYPE_CHECKING:
     from mcp_agent.core.context import AgentContext
+
+# Cache for provider auth statuses
+# Structure: {user_id: {provider: (status_dict, cached_at, ttl)}}
+# TTL (Time To Live) is a duration in seconds, not a timestamp
+_PROVIDER_STATUS_CACHE: Dict[str, Dict[str, tuple[Dict[str, Any], float, float]]] = {}
+_CACHE_LOCK = threading.Lock()
+_DEFAULT_TTL = float(os.getenv("PROVIDER_STATUS_CACHE_TTL", "30"))  # Default TTL in seconds (configurable via env var)
 
 # Composio API configuration
 COMPOSIO_HOST = os.getenv(
@@ -94,6 +104,105 @@ class OAuthManager:
     
     # In-memory redirect hints (optional)
     _redirect_hints: Dict[tuple[str, str], Dict[str, str | None]] = {}
+    
+    @classmethod
+    def _invalidate_cache(cls, user_id: str, provider: Optional[str] = None) -> None:
+        """
+        Invalidate cache for a user/provider combination.
+        
+        Args:
+            user_id: User identifier
+            provider: Optional provider name. If None, invalidates all providers for user.
+        """
+        normalized_user = normalize_user_id(user_id)
+        with _CACHE_LOCK:
+            if normalized_user not in _PROVIDER_STATUS_CACHE:
+                return
+            if provider:
+                _PROVIDER_STATUS_CACHE[normalized_user].pop(provider, None)
+            else:
+                _PROVIDER_STATUS_CACHE[normalized_user].clear()
+    
+    @classmethod
+    def _get_cached_status(
+        cls, user_id: str, provider: str
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get cached status if available and not expired.
+        
+        Returns:
+            Cached status dict or None if not cached/expired
+        """
+        normalized_user = normalize_user_id(user_id)
+        with _CACHE_LOCK:
+            user_cache = _PROVIDER_STATUS_CACHE.get(normalized_user, {})
+            if provider not in user_cache:
+                return None
+            
+            status_dict, cached_at, ttl = user_cache[provider]
+            elapsed = time.time() - cached_at
+            
+            # Check if expired
+            if elapsed >= ttl:
+                # Remove expired entry
+                user_cache.pop(provider, None)
+                return None
+            
+            return status_dict
+    
+    @classmethod
+    def _set_cached_status(
+        cls, user_id: str, provider: str, status: Dict[str, Any], ttl: float = _DEFAULT_TTL
+    ) -> None:
+        """
+        Cache provider status.
+        
+        Args:
+            user_id: User identifier
+            provider: Provider name
+            status: Status dict to cache
+            ttl: Time to live in seconds
+        """
+        normalized_user = normalize_user_id(user_id)
+        with _CACHE_LOCK:
+            if normalized_user not in _PROVIDER_STATUS_CACHE:
+                _PROVIDER_STATUS_CACHE[normalized_user] = {}
+            _PROVIDER_STATUS_CACHE[normalized_user][provider] = (
+                status,
+                time.time(),
+                ttl,
+            )
+    
+    @classmethod
+    def _get_lowest_remaining_ttl(cls, user_id: str) -> Optional[float]:
+        """
+        Get the lowest remaining TTL for all cached providers for a user.
+        
+        Returns:
+            Lowest remaining TTL in seconds, or None if no cache entries
+        """
+        normalized_user = normalize_user_id(user_id)
+        with _CACHE_LOCK:
+            user_cache = _PROVIDER_STATUS_CACHE.get(normalized_user, {})
+            if not user_cache:
+                return None
+            
+            now = time.time()
+            lowest_remaining = None
+            
+            for provider, (_, cached_at, ttl) in list(user_cache.items()):
+                elapsed = now - cached_at
+                remaining = ttl - elapsed
+                
+                if remaining <= 0:
+                    # Expired, remove it
+                    user_cache.pop(provider, None)
+                    continue
+                
+                if lowest_remaining is None or remaining < lowest_remaining:
+                    lowest_remaining = remaining
+            
+            return lowest_remaining
 
     @classmethod
     def set_redirect_hints(
@@ -124,6 +233,10 @@ class OAuthManager:
     def auth_status(cls, context: "AgentContext", provider: str) -> Dict[str, Any]:
         """
         Compute provider auth status with refresh awareness.
+        
+        Uses cache with TTL. Cache is invalidated when:
+        - A provider is connected/disconnected
+        - The lowest TTL of all providers expires
 
         Returns:
             {
@@ -136,13 +249,26 @@ class OAuthManager:
             }
         """
         from mcp_agent.user_identity import normalize_user_id
+        # Prefer the user_id we carried through OAuth start; fall back to the
+        # connected account detail (Composio echoes back the user we passed).
         user_id = normalize_user_id(context.user_id)
+        
+        # Check cache first
+        cached_status = cls._get_cached_status(user_id, provider)
+        if cached_status is not None:
+            return cached_status
+        
+        # Check if lowest TTL expired - if so, invalidate all cache for this user
+        lowest_ttl = cls._get_lowest_remaining_ttl(user_id)
+        if lowest_ttl is None or lowest_ttl <= 0:
+            # All cache expired, clear it
+            cls._invalidate_cache(user_id)
 
         with context.get_db() as db:
             ca_id, ac_id, url, headers = crud.get_active_context_for_provider(db, user_id, provider)
 
         if not url or not ca_id:
-            return {
+            status = {
                 "authorized": False,
                 "connected_account_id": ca_id,
                 "auth_config_id": ac_id,
@@ -150,9 +276,13 @@ class OAuthManager:
                 "refresh_required": False,
                 "reason": "missing mcp_url" if not url else "missing connected_account_id",
             }
+            # Cache negative results too (shorter TTL)
+            cls._set_cached_status(user_id, provider, status, ttl=_DEFAULT_TTL)
+            return status
 
         refresh_required = False
         reason: str | None = None
+        ttl = _DEFAULT_TTL  # Default fallback
 
         try:
             detail = _get_connected_account(ca_id)
@@ -163,12 +293,37 @@ class OAuthManager:
             if detail.get("auth_refresh_required"):
                 refresh_required = True
                 reason = reason or "auth_refresh_required"
+            
+            # Extract TTL/expiration from Composio response
+            # Based on actual API response, expires_in is in data, state.val, and params
+            # Use data.expires_in as primary source (value is in seconds)
+            data = detail.get("data") or {}
+            state_val = (detail.get("state") or {}).get("val") or {}
+            params = detail.get("params") or {}
+            
+            # Check for expires_in in various nested locations (Composio API structure)
+            expires_in = (
+                data.get("expires_in")  # Primary location: data.expires_in
+                or state_val.get("expires_in")  # Also in state.val.expires_in
+                or params.get("expires_in")  # Also in params.expires_in
+                or detail.get("expires_in")  # Top-level fallback
+                or detail.get("expiresIn")  # CamelCase variant
+            )
+            
+            if expires_in:
+                try:
+                    expires_in_seconds = float(expires_in)
+                    if expires_in_seconds > 0:
+                        ttl = expires_in_seconds
+                except (ValueError, TypeError):
+                    pass
+                    
         except Exception as exc:
             reason = f"status_check_failed: {exc}"
 
         authorized = bool(url and ca_id) and not refresh_required
 
-        return {
+        status = {
             "authorized": authorized,
             "connected_account_id": ca_id,
             "auth_config_id": ac_id,
@@ -176,6 +331,12 @@ class OAuthManager:
             "refresh_required": refresh_required,
             "reason": reason,
         }
+        
+        # Cache the result with provider-specific TTL (or default if not available)
+        # Ensure TTL is at least 1 second and not too large (cap at 1 hour for safety)
+        ttl = max(1, min(ttl, 3600))  # Between 1 second and 1 hour
+        cls._set_cached_status(user_id, provider, status, ttl=ttl)
+        return status
     
     @classmethod
     def start_oauth(
@@ -309,6 +470,12 @@ class OAuthManager:
         
         # Wait for account to become ACTIVE
         detail = _wait_connected_account_active(connected_account_id)
+        detail_user = (
+            detail.get("user_id")
+            or (detail.get("connection") or {}).get("user_id")
+        )
+        if detail_user and (not context.user_id or user_id == DEV_DEFAULT_USER_ID):
+            user_id = normalize_user_id(detail_user)
         
         # Extract provider UID (email or team ID)
         provider_uid = (
@@ -380,6 +547,35 @@ class OAuthManager:
         
         # Persist to DB
         with context.get_db() as db:
+            # If Composio rotated the connected_account_id for this user/provider,
+            # clear any old CA/MCP rows to avoid FK violations and keep a single source of truth.
+            old_ca_ids = [
+                r[0]
+                for r in db.execute(
+                    select(ConnectedAccount.id).where(
+                        ConnectedAccount.user_id == user_id,
+                        ConnectedAccount.provider == provider,
+                        ConnectedAccount.id != connected_account_id,
+                    )
+                ).all()
+            ]
+            if old_ca_ids:
+                db.execute(
+                    update(MCPConnection)
+                    .where(MCPConnection.connected_account_id.in_(old_ca_ids))
+                    .values(
+                        mcp_url=None,
+                        headers_json={},
+                        last_error="replaced connected account",
+                        last_synced_at=datetime.now(timezone.utc),
+                    )
+                )
+                db.execute(
+                    ConnectedAccount.__table__.delete().where(
+                        ConnectedAccount.id.in_(old_ca_ids)
+                    )
+                )
+
             crud.upsert_user(db, user_id)
             ac = detail.get("auth_config") or detail.get("authConfig") or {}
             ac_id = ac.get("id") or auth_config_id
@@ -394,6 +590,9 @@ class OAuthManager:
                 provider_uid=provider_uid,
             )
             crud.upsert_mcp_connection(db, ca_row.id, mcp_url, mcp_headers, last_error=None)
+        
+        # Invalidate cache when a provider is connected
+        cls._invalidate_cache(user_id, provider)
         
         return {
             "provider": provider,
@@ -413,6 +612,9 @@ class OAuthManager:
         user_id = normalize_user_id(context.user_id)
         with context.get_db() as db:
             crud.disconnect_provider(db, user_id, provider)
+        
+        # Invalidate cache when a provider is disconnected
+        cls._invalidate_cache(user_id, provider)
     
     @classmethod
     def is_authorized(cls, context: AgentContext, provider: str) -> bool:
@@ -514,7 +716,7 @@ def _get_connected_account(ca_id: str) -> Dict[str, Any]:
     r = requests.get(
         f"{COMPOSIO_API_V3}/connected_accounts/{ca_id}",
         headers=_headers(),
-        timeout=15,
+        timeout=15,  # Keep reasonable timeout - won't affect speed if Composio is working fine
     )
     r.raise_for_status()
     return r.json()
@@ -564,6 +766,35 @@ def _ensure_mcp_server(provider: str, auth_config_id: str) -> str:
     if len(name) < 4:
         name = "tb-srv1"
     
+    def _find_by_name() -> str | None:
+        """Return server id if a server with this name already exists."""
+        try:
+            r2 = requests.get(
+                f"{COMPOSIO_API_V3}/mcp/servers",
+                headers=_headers(),
+                params={"name": name},
+                timeout=20,
+            )
+            if 200 <= r2.status_code < 300:
+                body = r2.json()
+                items = body.get("items") or body.get("data") or body
+                if isinstance(items, dict):
+                    items = items.get("items") or items.get("data") or []
+                if isinstance(items, list):
+                    for s in items:
+                        if (s.get("name") or "") == name:
+                            sid = s.get("id") or s.get("server_id")
+                            if sid:
+                                return sid
+        except Exception:
+            return None
+        return None
+
+    # If a server with this name already exists, reuse it
+    existing = _find_by_name()
+    if existing:
+        return existing
+
     # Try to create server
     r = requests.post(
         f"{COMPOSIO_API_V3}/mcp/servers",
@@ -576,22 +807,23 @@ def _ensure_mcp_server(provider: str, auth_config_id: str) -> str:
         srv_id = data.get("id") or data.get("server_id")
         if srv_id:
             return srv_id
-    
-    # Try to list and reuse by name
+
+    # If name already exists, fall back to lookup
     try:
-        r2 = requests.get(f"{COMPOSIO_API_V3}/mcp/servers", headers=_headers(), timeout=20)
-        if 200 <= r2.status_code < 300:
-            body = r2.json()
-            items = body.get("items") or body.get("data") or body
-            if isinstance(items, list):
-                for s in items:
-                    if (s.get("name") or "") == name:
-                        sid = s.get("id") or s.get("server_id")
-                        if sid:
-                            return sid
+        body = r.json()
+        err_msg = str(body)
+        if (isinstance(body, dict) and (body.get("error") or {})) or "already exists" in err_msg:
+            sid = _find_by_name()
+            if sid:
+                return sid
     except Exception:
         pass
-    
+
+    # Try to list and reuse by name as a final fallback
+    sid = _find_by_name()
+    if sid:
+        return sid
+
     # If all else fails, raise
     r.raise_for_status()
     raise RuntimeError("Unable to provision MCP server")

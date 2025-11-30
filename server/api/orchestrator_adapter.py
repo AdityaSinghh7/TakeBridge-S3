@@ -24,6 +24,7 @@ def orchestrate_to_orchestrator(
     *,
     user_id: Optional[str] = None,
     tool_constraints: Optional[Dict[str, Any]] = None,
+    workspace: Optional[Dict[str, Any]] = None,
 ) -> OrchestratorRequest:
     """Convert OrchestrateRequest to OrchestratorRequest.
 
@@ -34,6 +35,7 @@ def orchestrate_to_orchestrator(
             - mode: "auto" | "custom"
             - providers: List[str] (for custom mode)
             - tools: List[str] (for custom mode)
+        workspace: Optional workspace context (id, controller_base_url, vnc_url)
 
     Returns:
         OrchestratorRequest compatible with orchestrator_agent runtime
@@ -60,9 +62,37 @@ def orchestrate_to_orchestrator(
         )
 
     # Build metadata dict
-    metadata: Dict[str, Any] = {}
+    metadata: Dict[str, Any] = {
+        "controller": {
+            "base_url": req.controller.base_url,
+            "host": req.controller.host,
+            "port": req.controller.port,
+            "timeout": req.controller.timeout,
+        },
+        "worker": {
+            "engine_params": req.worker.engine_params,
+            "max_steps": req.worker.max_steps,
+            "max_trajectory_length": req.worker.max_trajectory_length,
+            "enable_reflection": req.worker.enable_reflection,
+            "post_action_worker_delay": req.worker.post_action_worker_delay,
+        },
+        "grounding": {
+            "engine_params_for_generation": req.grounding.engine_params_for_generation,
+            "engine_params_for_grounding": req.grounding.engine_params_for_grounding,
+            "code_agent_engine_params": req.grounding.code_agent_engine_params,
+            "code_agent_budget": req.grounding.code_agent_budget,
+            "grounding_base_url": req.grounding.grounding_base_url,
+            "grounding_system_prompt": req.grounding.grounding_system_prompt,
+            "grounding_timeout": req.grounding.grounding_timeout,
+            "grounding_max_retries": req.grounding.grounding_max_retries,
+            "grounding_api_key": req.grounding.grounding_api_key,
+        },
+        "platform": req.platform,
+    }
     if tool_constraints:
         metadata["tool_constraints_dict"] = tool_constraints
+    if workspace:
+        metadata["workspace"] = workspace
 
     return OrchestratorRequest(
         task=req.task,

@@ -5,7 +5,7 @@ These endpoints exist solely to help you live-test MCP connectivity
 without needing to drive the Worker/LLM. Do NOT expose in production.
 """
 
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Depends
 
 from mcp_agent.registry.oauth import OAuthManager
 from mcp_agent.registry.manager import RegistryManager
@@ -13,23 +13,21 @@ from mcp_agent.core.context import AgentContext
 from mcp_agent.user_identity import normalize_user_id
 from mcp_agent.action_registry import sync_registered_actions
 from computer_use_agent.grounding.grounding_agent import ACI
+from server.api.auth import CurrentUser, get_current_user
 
 
 router = APIRouter(prefix="/api/mcp/tools", tags=["mcp-tools (test-only)"])
 
 
-def _require_user_id(request: Request) -> str:
-    raw = (request.headers.get("X-User-Id") or "").strip()
-    if not raw:
-        raise HTTPException(400, "Missing X-User-Id header.")
+def _require_user_id(current_user: CurrentUser) -> str:
     try:
-        return normalize_user_id(raw)
+        return normalize_user_id(current_user.sub)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
 
 @router.post("/gmail/send_email")
-def gmail_send_email_route(payload: dict, request: Request):
+def gmail_send_email_route(payload: dict, current_user: CurrentUser = Depends(get_current_user)):
     """Send an email using the Gmail MCP tool.
 
     Body fields:
@@ -40,7 +38,7 @@ def gmail_send_email_route(payload: dict, request: Request):
     - bcc (str, optional)
     - thread_id (str, optional)
     """
-    user_id = _require_user_id(request)
+    user_id = _require_user_id(current_user)
     context = AgentContext.create(user_id)
     
     if not OAuthManager.is_authorized(context, "gmail"):

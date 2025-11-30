@@ -8,6 +8,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+# Control stdout printing via environment variable
+_PRINT_ENABLED = os.getenv("TB_LATENCY_PRINT", "false").lower() in ("true", "1", "yes")
+_PRINT_THRESHOLD_MS = float(os.getenv("TB_LATENCY_THRESHOLD_MS", "0"))
+
 
 class LatencyLogger:
     """Thread-safe JSONL latency logger used across orchestrator components."""
@@ -45,7 +49,12 @@ class LatencyLogger:
             with self._lock:
                 with open(self._log_path, "a", encoding="utf-8") as fp:
                     fp.write(json.dumps(record, ensure_ascii=False) + "\n")
-                print(f"[LATENCY] {json.dumps(record, ensure_ascii=False)}")
+
+                # Only print if enabled and (no threshold OR duration exceeds threshold)
+                if _PRINT_ENABLED:
+                    duration = record.get("duration_ms", 0)
+                    if _PRINT_THRESHOLD_MS == 0 or duration >= _PRINT_THRESHOLD_MS:
+                        print(f"[LATENCY] {json.dumps(record, ensure_ascii=False)}")
         except Exception:
             pass
 

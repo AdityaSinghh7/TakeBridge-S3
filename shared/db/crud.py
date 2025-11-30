@@ -63,6 +63,24 @@ def upsert_connected_account(
         .limit(1)
     ).scalar_one_or_none()
     if existing:
+        # If Composio issued a new connected_account_id, replace the old row so
+        # foreign keys remain valid and we stay aligned with upstream ids.
+        if existing.id != ca_id:
+            # Delete the old row (cascades to MCPConnection), then recreate with new id.
+            db.delete(existing)
+            db.flush()
+            ca = ConnectedAccount(
+                id=ca_id,
+                user_id=user_id,
+                auth_config_id=auth_config_id,
+                provider=provider,
+                status=status,
+                provider_uid=provider_uid,
+            )
+            db.add(ca)
+            db.flush()
+            return ca
+
         existing.status = status
         existing.provider = provider
         existing.provider_uid = provider_uid
