@@ -121,6 +121,322 @@
       "type": "object"
     }
   },
+  "googledrive.googledrive_upload_file": {
+    "success": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    }
+  },
+  "googlesheets.googlesheets_batch_get": {
+    "success": {
+      "properties": {
+        "spreadsheetId": {
+          "type": "string"
+        },
+        "valueRanges": {
+          "items": {
+            "properties": {
+              "majorDimension": {
+                "type": "string"
+              },
+              "range": {
+                "type": "string"
+              },
+              "values": {
+                "items": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "majorDimension",
+              "range",
+              "values"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [],
+      "type": "object"
+    }
+  },
+  "googleslides.googleslides_create_slides_markdown": {
+    "success": {
+      "properties": {
+        "presentation_id": {
+          "type": "string"
+        },
+        "request_data": {
+          "items": {
+            "properties": {
+              "createShape": {
+                "properties": {
+                  "elementProperties": {
+                    "properties": {
+                      "pageObjectId": {
+                        "type": "string"
+                      },
+                      "size": {
+                        "properties": {
+                          "height": {
+                            "properties": {
+                              "magnitude": {
+                                "type": "integer"
+                              },
+                              "unit": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "magnitude",
+                              "unit"
+                            ],
+                            "type": "object"
+                          },
+                          "width": {
+                            "properties": {
+                              "magnitude": {
+                                "type": "integer"
+                              },
+                              "unit": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "magnitude",
+                              "unit"
+                            ],
+                            "type": "object"
+                          }
+                        },
+                        "required": [
+                          "height",
+                          "width"
+                        ],
+                        "type": "object"
+                      },
+                      "transform": {
+                        "properties": {
+                          "scaleX": {
+                            "type": "integer"
+                          },
+                          "scaleY": {
+                            "type": "integer"
+                          },
+                          "translateX": {
+                            "type": "integer"
+                          },
+                          "translateY": {
+                            "type": "integer"
+                          },
+                          "unit": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "scaleX",
+                          "scaleY",
+                          "translateX",
+                          "translateY",
+                          "unit"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "pageObjectId",
+                      "size",
+                      "transform"
+                    ],
+                    "type": "object"
+                  },
+                  "objectId": {
+                    "type": "string"
+                  },
+                  "shapeType": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "elementProperties",
+                  "objectId",
+                  "shapeType"
+                ],
+                "type": "object"
+              },
+              "createSlide": {
+                "properties": {
+                  "objectId": {
+                    "type": "string"
+                  },
+                  "slideLayoutReference": {
+                    "properties": {
+                      "predefinedLayout": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "predefinedLayout"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "objectId",
+                  "slideLayoutReference"
+                ],
+                "type": "object"
+              },
+              "deleteObject": {
+                "properties": {
+                  "objectId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "objectId"
+                ],
+                "type": "object"
+              },
+              "insertText": {
+                "properties": {
+                  "insertionIndex": {
+                    "type": "integer"
+                  },
+                  "objectId": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "insertionIndex",
+                  "objectId",
+                  "text"
+                ],
+                "type": "object"
+              },
+              "updatePageProperties": {
+                "properties": {
+                  "fields": {
+                    "type": "string"
+                  },
+                  "objectId": {
+                    "type": "string"
+                  },
+                  "pageProperties": {
+                    "properties": {
+                      "pageBackgroundFill": {
+                        "properties": {
+                          "solidFill": {
+                            "properties": {
+                              "color": {
+                                "properties": {
+                                  "rgbColor": {
+                                    "properties": {
+                                      "blue": {
+                                        "type": "integer"
+                                      },
+                                      "green": {
+                                        "type": "integer"
+                                      },
+                                      "red": {
+                                        "type": "integer"
+                                      }
+                                    },
+                                    "required": [
+                                      "blue",
+                                      "green",
+                                      "red"
+                                    ],
+                                    "type": "object"
+                                  }
+                                },
+                                "required": [
+                                  "rgbColor"
+                                ],
+                                "type": "object"
+                              }
+                            },
+                            "required": [
+                              "color"
+                            ],
+                            "type": "object"
+                          }
+                        },
+                        "required": [
+                          "solidFill"
+                        ],
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "pageBackgroundFill"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "fields",
+                  "objectId",
+                  "pageProperties"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "slide_count": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "presentation_id",
+        "request_data",
+        "slide_count"
+      ],
+      "type": "object"
+    }
+  },
+  "mailchimp.mailchimp_create_a_survey_campaign": {
+    "success": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    }
+  },
+  "quickbooks.quickbooks_create_customer": {
+    "success": {
+      "properties": {
+        "message": {
+          "type": "string"
+        },
+        "status_code": {
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "type": "object"
+    }
+  },
+  "quickbooks.quickbooks_create_invoice": {
+    "success": {
+      "properties": {},
+      "required": [],
+      "type": "object"
+    }
+  },
   "shopify.shopify_get_orders_with_filters": {
     "success": {
       "properties": {
