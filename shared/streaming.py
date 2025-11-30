@@ -94,7 +94,11 @@ def emit_event(event: str, data: Any) -> None:
         return
     _EMITTER_WARNING_EMITTED = False
     sanitized = sanitize_event_name(event)
-    logger.debug("Emitting stream event '%s' with payload keys %s", sanitized, list(data.keys()) if isinstance(data, dict) else type(data))
+    logger.info(
+        "Emitting stream event '%s' payload_keys=%s",
+        sanitized,
+        list(data.keys()) if isinstance(data, dict) else type(data).__name__,
+    )
     emitter.emit(sanitized, data)
 
 

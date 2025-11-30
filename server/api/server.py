@@ -189,12 +189,24 @@ def _create_streaming_response(
     initial_payload = {"status": "accepted"}
     if workspace:
         initial_payload["workspace"] = workspace
-    queue.put_nowait(_format_sse_event("response.created", initial_payload))
+    first_chunk = _format_sse_event("response.created", initial_payload)
+    logger.info(
+        "SSE initial response.created payload_keys=%s workspace_keys=%s",
+        list(initial_payload.keys()),
+        list(workspace.keys()) if workspace else None,
+    )
+    queue.put_nowait(first_chunk)
     queue.put_nowait(_format_sse_event("response.in_progress", {"status": "running"}))
 
     def _publish(event: str, data: Optional[Any] = None) -> None:
         chunk = _format_sse_event(event, data)
         try:
+            # Trace every SSE emission for visibility
+            logger.info(
+                "SSE event=%s payload_keys=%s",
+                event,
+                list(data.keys()) if isinstance(data, dict) else type(data).__name__,
+            )
             loop.call_soon_threadsafe(queue.put_nowait, chunk)
         except RuntimeError as exc:
             if "closed" not in str(exc).lower():
