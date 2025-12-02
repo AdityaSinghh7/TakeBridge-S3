@@ -1,5 +1,6 @@
 # vm_manager/aws_vm_manager.py
 
+import os
 import time
 from typing import Tuple, Optional
 
@@ -12,6 +13,36 @@ from vm_manager.config import settings
 # Simple constants
 HEALTHCHECK_TIMEOUT_SECONDS = 300  # total time we'll wait for instance + controller
 HEALTHCHECK_INTERVAL_SECONDS = 5  # poll interval (seconds)
+
+
+def _get_aws_credentials():
+    """
+    Get AWS credentials from environment variables.
+    
+    Returns:
+        dict with aws_access_key_id and aws_secret_access_key
+        
+    Raises:
+        ValueError if required environment variables are not set
+    """
+    access_key_id = os.getenv("AWS_ACCESS_KEY_ID")
+    secret_access_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+    
+    if not access_key_id:
+        raise ValueError(
+            "AWS_ACCESS_KEY_ID environment variable is required. "
+            "Please set it before using VM management."
+        )
+    if not secret_access_key:
+        raise ValueError(
+            "AWS_SECRET_ACCESS_KEY environment variable is required. "
+            "Please set it before using VM management."
+        )
+    
+    return {
+        "aws_access_key_id": access_key_id,
+        "aws_secret_access_key": secret_access_key,
+    }
 
 
 def _parse_security_groups(s: str) -> list[str]:
@@ -35,7 +66,8 @@ def create_agent_instance_for_user(user_id: str) -> Tuple[str, str, Optional[str
         f"[aws_vm_manager] create_agent_instance_for_user(user={user_id}) in region={region}"
     )
 
-    ec2 = boto3.client("ec2", region_name=region)
+    credentials = _get_aws_credentials()
+    ec2 = boto3.client("ec2", region_name=region, **credentials)
     sg_ids = _parse_security_groups(settings.AGENT_SECURITY_GROUP_IDS)
 
     run_args = {
@@ -165,5 +197,6 @@ def terminate_instance(instance_id: str):
         instance_id: The EC2 instance ID to terminate
     """
     print(f"[aws_vm_manager] terminate_instance({instance_id})")
-    ec2 = boto3.client("ec2", region_name=settings.AWS_REGION)
+    credentials = _get_aws_credentials()
+    ec2 = boto3.client("ec2", region_name=settings.AWS_REGION, **credentials)
     ec2.terminate_instances(InstanceIds=[instance_id])
