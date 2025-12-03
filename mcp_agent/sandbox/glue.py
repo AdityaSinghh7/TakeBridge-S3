@@ -69,17 +69,17 @@ def register_default_tool_caller() -> None:
 
             response = await loop.run_in_executor(None, _call_sync)
 
-            # dispatch_tool returns normalized ActionResponse, but we need one more unwrap
-            # to collapse remaining {"data": {...}} nesting for sandbox expectations
-            from mcp_agent.execution.envelope import unwrap_nested_data
+            # Use single source of truth for unwrapping and success/error handling
+            from mcp_agent.execution.response_ops import MCPResponseOps
 
-            data = unwrap_nested_data(response["data"])
-            result_success = bool(response["successful"])
+            ops = MCPResponseOps(response)
+            data = ops.unwrap_data()
+            result_success = ops.is_success()
             return {
                 "success": result_success,
                 "successful": result_success,
                 "data": data,
-                "error": response.get("error"),
+                "error": ops.get_error(),
                 "logs": None,  # dispatch_tool doesn't return logs field
             }
         except Exception as exc:

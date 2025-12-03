@@ -8,6 +8,7 @@ import requests
 
 from mcp_agent.core.exceptions import UnauthorizedError
 from mcp_agent.registry import get_mcp_client, is_provider_available
+from mcp_agent.high_signal import emit_high_signal
 from mcp_agent.types import ToolInvocationResult
 from mcp_agent.user_identity import normalize_user_id
 from shared.streaming import emit_event
@@ -65,10 +66,10 @@ def _normalize_tool_response(
     response: dict[str, Any] | None,
 ) -> ToolInvocationResult:
     """Normalize MCP response into standardized envelope."""
-    from mcp_agent.execution.envelope import normalize_action_response
+    from mcp_agent.execution.response_ops import MCPResponseOps
 
     normalized: dict[str, Any] = dict(response or {})
-    envelope = normalize_action_response(normalized)
+    envelope = MCPResponseOps(normalized).to_action_response()
     normalized["successful"] = envelope["successful"]
     normalized["data"] = envelope["data"]
     normalized["error"] = envelope.get("error")
@@ -129,12 +130,14 @@ def _invoke_mcp_tool(
                 "user_id": user_id,
             },
         )
-        return _structured_result(
+        result = _structured_result(
             provider,
             tool,
             successful=False,
             error=error_message,
         )
+        emit_high_signal(provider, tool, result)
+        return result
 
     emit_event(
         "mcp.action.completed",
@@ -144,7 +147,9 @@ def _invoke_mcp_tool(
             "user_id": user_id,
         },
     )
-    return _normalize_tool_response(provider, tool, payload_keys, response)
+    normalized = _normalize_tool_response(provider, tool, payload_keys, response)
+    emit_high_signal(provider, tool, normalized)
+    return normalized
 
 
 def _invoke_via_composio_api(

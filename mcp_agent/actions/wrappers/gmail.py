@@ -5,15 +5,12 @@ Handles parameter mapping and MCP tool invocation for Gmail.
 
 from __future__ import annotations
 
-import json
 import os
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any
 
-from mcp_agent.core.exceptions import UnauthorizedError
-from mcp_agent.registry import get_mcp_client, is_provider_available
 from mcp_agent.types import ToolInvocationResult
 from mcp_agent.user_identity import normalize_user_id
-from shared.streaming import emit_event
+from ._common import ensure_authorized, _invoke_mcp_tool
 
 if TYPE_CHECKING:
     from mcp_agent.core.context import AgentContext
@@ -70,98 +67,6 @@ def _resolve_gmail_user_id(user_id: str | None) -> str:
     return user_id
 
 
-def _structured_result(
-    provider: str,
-    tool: str,
-    *,
-    successful: bool,
-    error: str | None = None,
-    data: Any = None,
-) -> ToolInvocationResult:
-    """Build standardized tool result."""
-    if data is None:
-        normalized_data: Any = {}
-    elif isinstance(data, dict):
-        normalized_data = data
-    else:
-        normalized_data = {"value": data}
-    
-    return {
-        "successful": bool(successful),
-        "error": error,
-        "data": normalized_data,
-        "logs": None,
-        "provider": provider,
-        "tool": tool,
-        "payload_keys": [],
-    }
-
-
-def _normalize_tool_response(
-    provider: str,
-    tool: str,
-    payload_keys: list[str],
-    response: dict[str, Any] | None,
-) -> ToolInvocationResult:
-    """Normalize MCP response into standardized envelope."""
-    from mcp_agent.execution.envelope import normalize_action_response
-    
-    normalized: dict[str, Any] = dict(response or {})
-    envelope = normalize_action_response(normalized)
-    normalized["successful"] = envelope["successful"]
-    normalized["data"] = envelope["data"]
-    normalized["error"] = envelope.get("error")
-    normalized.pop("successfull", None)
-    normalized.pop("success", None)
-    normalized["provider"] = provider
-    normalized["tool"] = tool
-    normalized["payload_keys"] = payload_keys
-    return normalized
-
-
-def _invoke_mcp_tool(
-    context: AgentContext, provider: str, tool: str, payload: dict[str, Any]
-) -> ToolInvocationResult:
-    """Call MCP tool via RegistryManager and return normalized result."""
-    payload_keys = sorted(payload.keys())
-    user_id = normalize_user_id(context.user_id)
-    
-    emit_event("mcp.action.started", {
-        "server": provider,
-        "tool": tool,
-        "payload_keys": payload_keys,
-        "user_id": user_id,
-    })
-    
-    try:
-        # Use functional API directly
-        client = get_mcp_client(context, provider)
-        if not client:
-            raise RuntimeError(f"MCP client not available for provider: {provider}")
-        response = client.call(tool, payload)
-    except Exception as exc:
-        error_message = str(exc)
-        emit_event("mcp.action.failed", {
-            "server": provider,
-            "tool": tool,
-            "error": error_message,
-            "user_id": user_id,
-        })
-        return _structured_result(
-            provider,
-            tool,
-            successful=False,
-            error=error_message,
-        )
-    
-    emit_event("mcp.action.completed", {
-        "server": provider,
-        "tool": tool,
-        "user_id": user_id,
-    })
-    return _normalize_tool_response(provider, tool, payload_keys, response)
-
-
 def gmail_send_email(
     context: AgentContext,
     to: str,
@@ -189,13 +94,7 @@ def gmail_send_email(
         Standardized tool result with messageId, threadId, etc.
     """
     tool_name = "GMAIL_SEND_EMAIL"
-    user_id = normalize_user_id(context.user_id)
-    
-    # Check authorization via registry
-    
-    # Use functional API directly
-    if not is_provider_available(context, "gmail"):
-        raise UnauthorizedError("gmail", user_id)
+    ensure_authorized(context, "gmail")
     
     # Extract primary recipient and rest
     primary, extra_tos = _primary_plus_rest(to)
@@ -248,14 +147,8 @@ def gmail_search(
         Standardized tool result with messages array
     """
     tool_name = "GMAIL_FETCH_EMAILS"
-    tb_user_id = normalize_user_id(context.user_id)
     gmail_user_id = _resolve_gmail_user_id(user_id)
-    
-    # Check authorization
-    
-    # Use functional API directly
-    if not is_provider_available(context, "gmail"):
-        raise UnauthorizedError("gmail", tb_user_id)
+    ensure_authorized(context, "gmail")
     
     payload: dict[str, Any] = {
         "query": query,
@@ -277,4 +170,3 @@ def gmail_search(
         payload["verbose"] = bool(verbose)
     
     return _invoke_mcp_tool(context, "gmail", tool_name, payload)
-

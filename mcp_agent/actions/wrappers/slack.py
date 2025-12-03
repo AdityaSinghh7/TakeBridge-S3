@@ -6,13 +6,10 @@ Handles parameter mapping and MCP tool invocation for Slack.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any
 
-from mcp_agent.core.exceptions import UnauthorizedError
-from mcp_agent.registry import get_mcp_client, is_provider_available
 from mcp_agent.types import ToolInvocationResult
-from mcp_agent.user_identity import normalize_user_id
-from shared.streaming import emit_event
+from ._common import ensure_authorized, _invoke_mcp_tool
 
 if TYPE_CHECKING:
     from mcp_agent.core.context import AgentContext
@@ -50,82 +47,6 @@ def _structured_result(
     else:
         normalized_data = {"value": data}
     
-    return {
-        "successful": bool(successful),
-        "error": error,
-        "data": normalized_data,
-        "logs": None,
-        "provider": provider,
-        "tool": tool,
-        "payload_keys": [],
-    }
-
-
-def _normalize_tool_response(
-    provider: str,
-    tool: str,
-    payload_keys: list[str],
-    response: dict[str, Any] | None,
-) -> ToolInvocationResult:
-    """Normalize MCP response into standardized envelope."""
-    from mcp_agent.execution.envelope import normalize_action_response
-    
-    normalized: dict[str, Any] = dict(response or {})
-    envelope = normalize_action_response(normalized)
-    normalized["successful"] = envelope["successful"]
-    normalized["data"] = envelope["data"]
-    normalized["error"] = envelope.get("error")
-    normalized.pop("successfull", None)
-    normalized.pop("success", None)
-    normalized["provider"] = provider
-    normalized["tool"] = tool
-    normalized["payload_keys"] = payload_keys
-    return normalized
-
-
-def _invoke_mcp_tool(
-    context: AgentContext, provider: str, tool: str, payload: dict[str, Any]
-) -> ToolInvocationResult:
-    """Call MCP tool via RegistryManager and return normalized result."""
-    payload_keys = sorted(payload.keys())
-    user_id = normalize_user_id(context.user_id)
-    
-    emit_event("mcp.action.started", {
-        "server": provider,
-        "tool": tool,
-        "payload_keys": payload_keys,
-        "user_id": user_id,
-    })
-    
-    try:
-        # Use functional API directly
-        client = get_mcp_client(context, provider)
-        if not client:
-            raise RuntimeError(f"MCP client not available for provider: {provider}")
-        response = client.call(tool, payload)
-    except Exception as exc:
-        error_message = str(exc)
-        emit_event("mcp.action.failed", {
-            "server": provider,
-            "tool": tool,
-            "error": error_message,
-            "user_id": user_id,
-        })
-        return _structured_result(
-            provider,
-            tool,
-            successful=False,
-            error=error_message,
-        )
-    
-    emit_event("mcp.action.completed", {
-        "server": provider,
-        "tool": tool,
-        "user_id": user_id,
-    })
-    return _normalize_tool_response(provider, tool, payload_keys, response)
-
-
 def slack_post_message(
     context: AgentContext,
     channel: str,
@@ -172,13 +93,7 @@ def slack_post_message(
         Standardized tool result with ok, channel, ts, message
     """
     tool_name = "SLACK_SEND_MESSAGE"
-    user_id = normalize_user_id(context.user_id)
-    
-    # Check authorization
-    from mcp_agent.registry import get_mcp_client, is_provider_available
-    # Use functional API directly
-    if not is_provider_available(context, "slack"):
-        raise UnauthorizedError("slack", user_id)
+    ensure_authorized(context, "slack")
     
     # Require at least one content field
     content_provided = any([text, markdown_text, blocks, attachments])
@@ -278,4 +193,3 @@ def slack_search_messages(
         payload["auto_paginate"] = bool(auto_paginate)
     
     return _invoke_mcp_tool(context, "slack", tool_name, payload)
-
