@@ -129,6 +129,14 @@ try:
 except Exception as _e:  # pragma: no cover
     logger.warning("Failed to mount MCP tools routes: %s", _e)
 
+# Mount task compose routes
+try:
+    from server.api.routes_compose_task import router as compose_task_router  # type: ignore
+    app.include_router(compose_task_router)
+    logger.info("Mounted task compose routes")
+except Exception as _e:  # pragma: no cover
+    logger.warning("Failed to mount task compose routes: %s", _e)
+
 
 def _parse_orchestrate_request(payload: Dict[str, Any]) -> OrchestrateRequest:
     try:
@@ -438,10 +446,15 @@ async def orchestrate_stream_post(
     # Rebuild payload with controller defaults merged in
     payload = {**payload, "controller": controller_data}
 
-    # Extract tool_constraints from payload
+    # Extract tool_constraints and optional composed_plan from payload
     tool_constraints = payload.get("tool_constraints")
+    composed_plan = payload.get("composed_plan")
 
     request = _parse_orchestrate_request(payload)
+
+    # Attach composed_plan so orchestrator_adapter can forward it
+    if composed_plan is not None:
+        setattr(request, "composed_plan", composed_plan)
 
     workspace_info = {
         "id": workspace_obj.id,

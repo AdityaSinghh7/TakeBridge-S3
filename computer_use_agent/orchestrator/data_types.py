@@ -201,6 +201,9 @@ class OrchestrateRequest:
     platform: Optional[str] = None
     enable_code_execution: bool = False
     tool_constraints: Optional[ToolConstraints] = None
+    # Optional composed plan dict attached by the API layer and passed through
+    # to the orchestrator adapter. This is treated as opaque here.
+    composed_plan: Optional[Dict[str, Any]] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "OrchestrateRequest":
@@ -219,6 +222,7 @@ class OrchestrateRequest:
             tool_constraints=ToolConstraints.from_dict(
                 data.get("tool_constraints") or data.get("toolset")
             ),
+            composed_plan=data.get("composed_plan"),
         )
 
 

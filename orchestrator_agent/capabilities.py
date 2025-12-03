@@ -74,6 +74,115 @@ def _normalize_platform(raw: Optional[str]) -> str:
     return val
 
 
+def get_common_apps_for_platform(platform: str) -> list[str]:
+    """
+    Return a reasonable list of common desktop applications for a given platform.
+    
+    This is used for planning when we don't have access to the live VM state.
+    The list includes commonly available apps that users might have installed.
+    
+    Args:
+        platform: Platform string ("darwin", "windows", "linux", or "unknown")
+    
+    Returns:
+        List of common application names for that platform
+    """
+    platform_lower = platform.lower()
+    
+    # Common apps across all platforms
+    universal = [
+        "Chrome",
+        "Firefox",
+        "Safari",
+        "Edge",
+        "LibreOffice Writer",
+        "LibreOffice Calc",
+        "LibreOffice Impress",
+        "VS Code",
+        "Notepad++",
+        "Terminal",
+    ]
+    
+    if platform_lower == "darwin":
+        return universal + [
+            "Finder",
+            "Safari",
+            "Mail",
+            "Calendar",
+            "Notes",
+            "TextEdit",
+            "Preview",
+            "Spotlight",
+            "System Preferences",
+            "Activity Monitor",
+            "Xcode",
+            "iTerm",
+            "Slack",
+            "Discord",
+            "Zoom",
+            "Microsoft Word",
+            "Microsoft Excel",
+            "Microsoft PowerPoint",
+            "Adobe Acrobat",
+            "Photoshop",
+        ]
+    elif platform_lower == "windows":
+        return universal + [
+            "File Explorer",
+            "Microsoft Edge",
+            "Outlook",
+            "Calendar",
+            "Notepad",
+            "WordPad",
+            "Paint",
+            "Task Manager",
+            "Settings",
+            "PowerShell",
+            "Command Prompt",
+            "Microsoft Word",
+            "Microsoft Excel",
+            "Microsoft PowerPoint",
+            "OneNote",
+            "Teams",
+            "Slack",
+            "Discord",
+            "Zoom",
+            "Adobe Acrobat",
+            "Photoshop",
+        ]
+    elif platform_lower == "linux":
+        return universal + [
+            "Nautilus",
+            "Files",
+            "Gedit",
+            "Kate",
+            "LibreOffice Writer",
+            "LibreOffice Calc",
+            "LibreOffice Impress",
+            "GIMP",
+            "Inkscape",
+            "Firefox",
+            "Chrome",
+            "Terminal",
+            "GNOME Terminal",
+            "Konsole",
+            "Slack",
+            "Discord",
+            "Zoom",
+            "Thunderbird",
+        ]
+    else:
+        # Unknown platform - return universal apps plus some generic ones
+        return universal + [
+            "Text Editor",
+            "File Manager",
+            "Web Browser",
+            "Email Client",
+            "PDF Viewer",
+            "Image Editor",
+        ]
+
+
 def fetch_mcp_capabilities(user_id: str, force_refresh: bool = False) -> Dict[str, Any]:
     """
     Fetch available MCP providers and tools for a user.
@@ -253,6 +362,7 @@ __all__ = [
     "fetch_mcp_capabilities",
     "fetch_computer_capabilities",
     "build_capability_context",
+    "get_common_apps_for_platform",
     "invalidate_cache",
     "CACHE_TTL",
 ]
