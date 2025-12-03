@@ -11,6 +11,7 @@ from mcp_agent.env_sync import ensure_env_for_provider
 from mcp_agent.user_identity import normalize_user_id
 from mcp_agent.sandbox.ephemeral import generate_ephemeral_toolbox
 from shared import agent_signal
+from shared.run_context import RUN_LOG_ID
 
 from .budget import Budget
 from .llm import PlannerLLM
@@ -521,80 +522,89 @@ def execute_mcp_task(
     extra_context = extra_context or {}
     tool_constraints = extra_context.get("tool_constraints")
     step_id = extra_context.get("step_id", "mcp-main")
+    # Bind run_id to context for per-run logging when present
+    run_token = None
+    run_id = extra_context.get("request_id") or extra_context.get("run_id")
+    if run_id:
+        run_token = RUN_LOG_ID.set(run_id)
 
-    # Get or create hierarchical logger
-    h_logger = get_hierarchical_logger()
-    if not h_logger:
-        # Standalone execution (not via orchestrator)
-        h_logger = HierarchicalLogger(task)
-        set_hierarchical_logger(h_logger)
+    try:
+        # Get or create hierarchical logger
+        h_logger = get_hierarchical_logger()
+        if not h_logger:
+            # Standalone execution (not via orchestrator)
+            h_logger = HierarchicalLogger(task)
+            set_hierarchical_logger(h_logger)
 
-    # Bind step_id to context
-    set_step_id(step_id)
+        # Bind step_id to context
+        set_step_id(step_id)
 
-    # Get agent logger
-    mcp_logger = h_logger.get_agent_logger("mcp", step_id)
+        # Get agent logger
+        mcp_logger = h_logger.get_agent_logger("mcp", step_id)
 
-    # Emit SSE event: task started
-    emit_event("mcp.task.started", {
-        "task": task[:100],
-        "user_id": normalized_user,
-        "step_id": step_id,
-        "tool_constraints": tool_constraints,
-    })
-
-    # Log to hierarchical logger
-    mcp_logger.log_event("task.started", {
-        "task": task,
-        "user_id": normalized_user,
-        "tool_constraints": tool_constraints,
-    })
-
-    with tempfile.TemporaryDirectory(prefix=f"toolbox-{normalized_user}-") as temp_dir:
-        toolbox_path = Path(temp_dir)
-
-        agent_context = AgentContext.create(
-            user_id=normalized_user,
-            extra={"toolbox_root": str(toolbox_path)},
-        )
-
-        generate_ephemeral_toolbox(agent_context, toolbox_path)
-
-        state = AgentState(
-            task=task.strip(),
-            user_id=normalized_user,
-            request_id=agent_context.request_id,
-            budget=budget or Budget(),
-            extra_context=extra_context,
-            tool_constraints=tool_constraints,  # NEW: Set tool constraints on state
-        )
-        for provider in SUPPORTED_PROVIDERS:
-            ensure_env_for_provider(normalized_user, provider)
-        state.record_event(
-            "mcp.planner.started",
-            {
-                "budget": asdict(state.budget_tracker.snapshot()),
-                "extra_context_keys": sorted(state.extra_context.keys()),
-                "ephemeral_toolbox": str(toolbox_path),
-                "tool_constraints": tool_constraints,
-            },
-        )
-        runtime = AgentOrchestrator(agent_context, state, llm=llm)
-        result = runtime.run()
-
-        # Emit SSE event: task completed
-        emit_event("mcp.task.completed", {
-            "success": result.get("success", False),
+        # Emit SSE event: task started
+        emit_event("mcp.task.started", {
+            "task": task[:100],
+            "user_id": normalized_user,
             "step_id": step_id,
+            "tool_constraints": tool_constraints,
         })
 
         # Log to hierarchical logger
-        mcp_logger.log_event("task.completed", {
-            "success": result.get("success", False),
-            "error": result.get("error") if not result.get("success", False) else None,
+        mcp_logger.log_event("task.started", {
+            "task": task,
+            "user_id": normalized_user,
+            "tool_constraints": tool_constraints,
         })
 
-        return result
+        with tempfile.TemporaryDirectory(prefix=f"toolbox-{normalized_user}-") as temp_dir:
+            toolbox_path = Path(temp_dir)
+
+            agent_context = AgentContext.create(
+                user_id=normalized_user,
+                extra={"toolbox_root": str(toolbox_path)},
+            )
+
+            generate_ephemeral_toolbox(agent_context, toolbox_path)
+
+            state = AgentState(
+                task=task.strip(),
+                user_id=normalized_user,
+                request_id=agent_context.request_id,
+                budget=budget or Budget(),
+                extra_context=extra_context,
+                tool_constraints=tool_constraints,  # NEW: Set tool constraints on state
+            )
+            for provider in SUPPORTED_PROVIDERS:
+                ensure_env_for_provider(normalized_user, provider)
+            state.record_event(
+                "mcp.planner.started",
+                {
+                    "budget": asdict(state.budget_tracker.snapshot()),
+                    "extra_context_keys": sorted(state.extra_context.keys()),
+                    "ephemeral_toolbox": str(toolbox_path),
+                    "tool_constraints": tool_constraints,
+                },
+            )
+            runtime = AgentOrchestrator(agent_context, state, llm=llm)
+            result = runtime.run()
+
+            # Emit SSE event: task completed
+            emit_event("mcp.task.completed", {
+                "success": result.get("success", False),
+                "step_id": step_id,
+            })
+
+            # Log to hierarchical logger
+            mcp_logger.log_event("task.completed", {
+                "success": result.get("success", False),
+                "error": result.get("error") if not result.get("success", False) else None,
+            })
+
+            return result
+    finally:
+        if run_token:
+            RUN_LOG_ID.reset(run_token)
 
 
 # Backward compatibility alias

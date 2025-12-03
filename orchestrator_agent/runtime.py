@@ -10,6 +10,7 @@ multiple tenants can be served in parallel without mixing state.
 """
 
 import asyncio
+import contextvars
 import json
 import logging
 from datetime import datetime
@@ -37,6 +38,8 @@ from shared.hierarchical_logger import (
     set_hierarchical_logger,
     get_hierarchical_logger,
 )
+from shared.run_context import RUN_LOG_ID
+from shared.run_context import RUN_LOG_ID
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +57,11 @@ class OrchestratorRuntime:
         """Process a single request with single-step planning."""
         agent_signal.register_signal_handlers()
         agent_signal.clear_signal_state()
+
+        # Bind run_id to context for downstream logging (especially executor threads).
+        run_token = None
+        if request.request_id:
+            run_token = RUN_LOG_ID.set(request.request_id)
 
         # Initialize hierarchical logger and set in context
         self.hierarchical_logger = HierarchicalLogger(request.task)
@@ -190,6 +198,8 @@ class OrchestratorRuntime:
             "failed_steps": sum(1 for r in state.results if not r.success),
         })
 
+        if run_token:
+            RUN_LOG_ID.reset(run_token)
         return state
 
     async def run_many(self, requests: Iterable[OrchestratorRequest]) -> List[RunState]:
@@ -476,8 +486,12 @@ class OrchestratorRuntime:
         The trajectory contains all necessary data.
         """
         loop = asyncio.get_running_loop()
+        ctx = contextvars.copy_context()
+        run_id = getattr(request, "request_id", None)
+        if run_id:
+            ctx.run(RUN_LOG_ID.set, run_id)
         return await loop.run_in_executor(
-            None, lambda: run_agent_bridge(step.target, request, step)
+            None, lambda: ctx.run(run_agent_bridge, step.target, request, step)
         )
 
 

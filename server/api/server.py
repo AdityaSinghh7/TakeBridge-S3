@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import contextvars
 import json
 import logging
 import os
@@ -43,6 +42,7 @@ from shared.streaming import (
 from vm_manager.vm_wrapper import ensure_workspace
 from vm_manager.config import settings
 from orchestrator_agent.data_types import OrchestratorRequest
+from shared.run_context import RUN_LOG_ID
 from .auth import get_current_user, CurrentUser
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -59,6 +59,52 @@ logger = logging.getLogger(__name__)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 logger.info("Starting Orchestrator API")
+
+class _RunLogFilter(logging.Filter):
+    """Filter that only allows records when the current run_id matches."""
+
+    def __init__(self, run_id: str) -> None:
+        super().__init__()
+        self.run_id = run_id
+
+    def filter(self, record: logging.LogRecord) -> bool:  # pragma: no cover - thin helper
+        current = RUN_LOG_ID.get()
+        record.run_id = current or ""  # type: ignore[attr-defined]
+        return current == self.run_id
+
+
+def _attach_run_log_handler(run_id: str) -> logging.Handler:
+    """Create and attach a file handler that captures logs for a specific run_id."""
+    logs_dir = os.path.join("logs", "streams")
+    os.makedirs(logs_dir, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    filename = f"{timestamp}-{run_id}.log"
+    path = os.path.join(logs_dir, filename)
+
+    handler = logging.FileHandler(path, encoding="utf-8")
+    handler.setLevel(logging.INFO)
+    handler.addFilter(_RunLogFilter(run_id))
+    formatter = logging.Formatter(
+        fmt="%(asctime)s %(levelname)s [%(name)s] run_id=%(run_id)s %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    handler.setFormatter(formatter)
+
+    root_logger = logging.getLogger()
+    root_logger.addHandler(handler)
+    return handler
+
+
+def _detach_run_log_handler(handler: logging.Handler) -> None:
+    """Detach and close a run-specific handler safely."""
+    root_logger = logging.getLogger()
+    try:
+        root_logger.removeHandler(handler)
+    except ValueError:
+        pass
+    with contextlib.suppress(Exception):
+        handler.flush()
+        handler.close()
 
 
 @contextlib.asynccontextmanager
@@ -256,9 +302,9 @@ def _create_streaming_response(
 
     async def _run_and_stream() -> None:
         heartbeat = None
+        log_token = None
+        handler = None
         try:
-            heartbeat = asyncio.create_task(_emit_keepalive())
-
             from server.api.orchestrator_adapter import orchestrate_to_orchestrator
 
             orch_request = orchestrate_to_orchestrator(
@@ -267,6 +313,13 @@ def _create_streaming_response(
                 tool_constraints=tool_constraints,
                 workspace=workspace,
             )
+            run_id = getattr(orch_request, "request_id", None) or "run"
+            handler = _attach_run_log_handler(run_id)
+            log_token = RUN_LOG_ID.set(run_id)
+
+            # Start keepalive after run_id is bound so any logs it emits are tagged.
+            heartbeat = asyncio.create_task(_emit_keepalive())
+
             logger.info("Executing orchestrator_agent request")
             result = await _execute_orchestrator(orch_request, emitter)
 
@@ -311,6 +364,10 @@ def _create_streaming_response(
                 heartbeat.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await heartbeat
+            if log_token is not None:
+                RUN_LOG_ID.reset(log_token)
+            if handler is not None:
+                _detach_run_log_handler(handler)
             await queue.put(None)
 
     asyncio.create_task(_run_and_stream())

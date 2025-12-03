@@ -16,11 +16,15 @@ from __future__ import annotations
 import os
 import random
 import time
+import logging
 from functools import lru_cache
 from contextlib import nullcontext
 
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Sequence, Union
+from shared.run_context import RUN_LOG_ID
+
+logger = logging.getLogger(__name__)
 
 try:
     # Optional dependency; we won't hard-require it
@@ -464,10 +468,34 @@ class OAIClient:
         attempt = 0
         while True:
             try:
+                run_id = RUN_LOG_ID.get()
+                logger.info(
+                    "oai.request.start",\
+                    extra={
+                        "model": payload.get("model"),
+                        "stream": bool(stream),
+                        "reasoning_effort": payload.get("reasoning", {}).get("effort"),
+                        "reasoning_summary": payload.get("reasoning", {}).get("summary"),
+                        "max_output_tokens": payload.get("max_output_tokens"),
+                        "attempt": attempt + 1,
+                        "cost_source": kwargs.get("cost_source"),
+                        "run_id": run_id,
+                    },
+                )
                 if stream:
                     return self._client.responses.stream(**payload)
                 return self._client.responses.create(**payload)
             except Exception as exc:
+                logger.warning(
+                    "oai.request.retry",\
+                    extra={
+                        "model": payload.get("model"),
+                        "attempt": attempt + 1,
+                        "max_retries": resolved_max_retries + 1,
+                        "error": str(exc),
+                        "run_id": RUN_LOG_ID.get(),
+                    },
+                )
                 if not _is_retryable_error(exc) or attempt >= resolved_max_retries:
                     raise
                 backoff_seconds = min(

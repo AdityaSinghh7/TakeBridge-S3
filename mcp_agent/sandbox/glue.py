@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import os
 from typing import Any, Dict, TYPE_CHECKING
 
 from mcp_agent.actions import SUPPORTED_PROVIDERS
 from mcp_agent.user_identity import normalize_user_id, DEV_USER_ENV_VAR, DEV_DEFAULT_USER_ID
 from mcp_agent.env_sync import ensure_env_for_provider
+from shared.run_context import RUN_LOG_ID
 
 if TYPE_CHECKING:  # pragma: no cover - type checking only
     from mcp_agent.sandbox.runtime import ToolCallResult
@@ -58,6 +60,7 @@ def register_default_tool_caller() -> None:
 
             # Call dispatcher synchronously in executor (dispatcher is sync)
             loop = asyncio.get_running_loop()
+            ctx = contextvars.copy_context()
 
             def _call_sync() -> Dict[str, Any]:
                 return dispatch_tool(
@@ -67,7 +70,11 @@ def register_default_tool_caller() -> None:
                     payload=payload
                 )
 
-            response = await loop.run_in_executor(None, _call_sync)
+            # Propagate run_id (if any) into the executor thread for per-run logging.
+            if request_id:
+                ctx.run(RUN_LOG_ID.set, request_id)
+
+            response = await loop.run_in_executor(None, lambda: ctx.run(_call_sync))
 
             # Use single source of truth for unwrapping and success/error handling
             from mcp_agent.execution.response_ops import MCPResponseOps
