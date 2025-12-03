@@ -130,25 +130,13 @@ def get_common_apps_for_platform(platform: str) -> list[str]:
         return universal + [
             "File Explorer",
             "Microsoft Edge",
-            "Outlook",
-            "Calendar",
             "Notepad",
             "WordPad",
-            "Paint",
             "Task Manager",
             "Settings",
             "PowerShell",
             "Command Prompt",
-            "Microsoft Word",
-            "Microsoft Excel",
-            "Microsoft PowerPoint",
-            "OneNote",
-            "Teams",
-            "Slack",
-            "Discord",
-            "Zoom",
-            "Adobe Acrobat",
-            "Photoshop",
+            
         ]
     elif platform_lower == "linux":
         return universal + [
