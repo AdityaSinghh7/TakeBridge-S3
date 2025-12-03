@@ -62,3 +62,33 @@ def apollo_people_enrichment(
         }
     )
     return _invoke_mcp_tool(context, provider, tool_name, payload)
+
+
+apollo_people_enrichment.__tb_output_schema__ = {
+  "properties": {
+    "data": {
+      "additionalProperties": True,
+      "description": "Dictionary with enriched data for the person from Apollo.io; structure and content vary based on information found and requested.",
+      "title": "Data",
+      "type": "object"
+    },
+    "error": {
+      "default": None,
+      "description": "Error if any occurred during the execution of the action",
+      "nullable": True,
+      "title": "Error",
+      "type": "string"
+    },
+    "successful": {
+      "description": "Whether or not the action execution was successful or not",
+      "title": "Successful",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "data",
+    "successful"
+  ],
+  "title": "PeopleEnrichmentResponseWrapper",
+  "type": "object"
+}

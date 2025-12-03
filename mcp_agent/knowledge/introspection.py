@@ -13,7 +13,7 @@ import inspect
 import textwrap
 import threading
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Tuple, TYPE_CHECKING
+from typing import Callable, Dict, List, Tuple, TYPE_CHECKING, Optional, Any, Set
 
 from shared.streaming import emit_event
 
@@ -266,14 +266,9 @@ class ToolboxBuilder:
 
         raw_schema = getattr(func, "__tb_output_schema__", None)
         raw_schema_pretty = getattr(func, "__tb_output_schema_pretty__", None)
+        pretty_lines = None
         if raw_schema_pretty is not None:
-            pretty_lines = [line.rstrip() for line in str(raw_schema_pretty).strip().splitlines()]
-        else:
-            pretty_lines = [
-                "Canonical wrapper: { success: bool, data: dict, error: str | null }",
-                "",
-                "data: <schema not documented; TODO: replace with real Composio-compatible response payload schema>",
-            ]
+            pretty_lines = [line.rstrip() for line in str(raw_schema_pretty).strip().splitlines()] or None
 
         return ToolSpec(
             provider=provider_literal or provider,
@@ -295,7 +290,7 @@ class ToolboxBuilder:
             structured_params=structured_params,
             list_params=list_params,
             primary_param=primary_param,
-            output_schema=raw_schema or {},
+            output_schema=raw_schema or None,
             output_schema_pretty=pretty_lines,
         )
 
@@ -485,7 +480,6 @@ def ensure_io_specs_loaded() -> None:
     if _IO_SPECS_LOADED:
         return
 
-    from .schema_store import load_output_schemas
     from .types import ToolInputSpec, ToolOutputSpec
 
     # Register basic IoToolSpecs from action wrappers
@@ -507,7 +501,4 @@ def ensure_io_specs_loaded() -> None:
                 func=None,
             )
             register_tool(spec)
-
-    # Load and merge output schemas from JSON
-    load_output_schemas()
     _IO_SPECS_LOADED = True

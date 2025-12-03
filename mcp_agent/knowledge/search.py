@@ -32,7 +32,7 @@ MIN_SEMANTIC_SCORE_THRESHOLD = 0.25  # Minimum score to include in results when 
 MIN_FALLBACK_SCORE_THRESHOLD = 0.3  # Higher threshold for fallback heuristic mode
 ADAPTIVE_THRESHOLD_RATIO = 0.5  # Keep tools within 70% of top score when using adaptive threshold
 
-
+# used for /api/mcp/auth/providers endpoint ONLY
 def list_providers(user_id: str) -> List[Dict[str, Any]]:
     """List all configured providers for a user."""
     normalized = normalize_user_id(user_id)
@@ -163,12 +163,7 @@ def search_tools(
 
     results: List[Dict[str, Any]] = []
     for score, prov, tool in matches:
-        # Enrich with IoToolSpec output schema if available
-        # This populates output_fields with structured field paths
-        io_spec = get_tool_spec(prov.provider, tool.name)
-        if io_spec is not None and io_spec.output_spec.data_schema_success:
-            # Update tool's output_schema before conversion to compact descriptor
-            tool.output_schema = io_spec.output_spec.data_schema_success
+        # Use wrapper-provided output_schema only; do not enrich from IoToolSpec/JSON
 
         # Use compact descriptor - much smaller, optimized for LLM context
         descriptor: CompactToolDescriptor = tool.to_compact_descriptor()

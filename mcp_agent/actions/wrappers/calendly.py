@@ -35,3 +35,32 @@ def calendly_create_scheduling_link(
         }
     )
     return _invoke_mcp_tool(context, provider, tool_name, payload)
+
+calendly_create_scheduling_link.__tb_output_schema__ = {
+  "properties": {
+    "data": {
+      "additionalProperties": True,
+      "description": "Scheduling link resource containing the generated booking link",
+      "title": "Data",
+      "type": "object"
+    },
+    "error": {
+      "default": None,
+      "description": "Error if any occurred during the execution of the action",
+      "nullable": True,
+      "title": "Error",
+      "type": "string"
+    },
+    "successful": {
+      "description": "Whether or not the action execution was successful or not",
+      "title": "Successful",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "data",
+    "successful"
+  ],
+  "title": "CreateSchedulingLinkResponseWrapper",
+  "type": "object"
+}

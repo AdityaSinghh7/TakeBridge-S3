@@ -114,6 +114,105 @@ def gmail_send_email(
     
     return _invoke_mcp_tool(context, "gmail", tool_name, payload)
 
+gmail_send_email.__tb_output_schema__ = {
+    "properties": {
+        "data": {
+        "additionalProperties": False,
+        "description": "Data from the action execution",
+        "properties": {
+            "historyId": {
+            "default": None,
+            "description": "The ID of the last history record that modified this message.",
+            "nullable": True,
+            "title": "History Id",
+            "type": "string"
+            },
+            "id": {
+            "default": None,
+            "description": "The immutable ID of the sent message.",
+            "nullable": True,
+            "title": "Id",
+            "type": "string"
+            },
+            "internalDate": {
+            "default": None,
+            "description": "The internal timestamp of the message in milliseconds since epoch.",
+            "nullable": True,
+            "title": "Internal Date",
+            "type": "string"
+            },
+            "labelIds": {
+            "default": None,
+            "description": "List of IDs of labels applied to this message.",
+            "items": {
+                "properties": {},
+                "type": "string"
+            },
+            "nullable": True,
+            "title": "Label Ids",
+            "type": "array"
+            },
+            "payload": {
+            "additionalProperties": True,
+            "default": None,
+            "description": "The parsed email structure, including headers and body parts.",
+            "nullable": True,
+            "title": "Payload",
+            "type": "object"
+            },
+            "raw": {
+            "default": None,
+            "description": "The entire email message in RFC 2822 format, base64url-encoded.",
+            "nullable": True,
+            "title": "Raw",
+            "type": "string"
+            },
+            "sizeEstimate": {
+            "default": None,
+            "description": "Estimated size of the message in bytes.",
+            "nullable": True,
+            "title": "Size Estimate",
+            "type": "integer"
+            },
+            "snippet": {
+            "default": None,
+            "description": "A short extract of the message text.",
+            "nullable": True,
+            "title": "Snippet",
+            "type": "string"
+            },
+            "threadId": {
+            "default": None,
+            "description": "The ID of the thread the message belongs to.",
+            "nullable": True,
+            "title": "Thread Id",
+            "type": "string"
+            }
+        },
+        "title": "Data",
+        "type": "object"
+        },
+        "error": {
+        "default": None,
+        "description": "Error if any occurred during the execution of the action",
+        "nullable": True,
+        "title": "Error",
+        "type": "string"
+        },
+        "successful": {
+        "description": "Whether or not the action execution was successful or not",
+        "title": "Successful",
+        "type": "boolean"
+        }
+    },
+    "required": [
+        "data",
+        "successful"
+    ],
+    "title": "GmailMessageResponseWrapper",
+    "type": "object"
+    }
+
 
 def gmail_search(
     context: AgentContext,
@@ -170,3 +269,129 @@ def gmail_search(
         payload["verbose"] = bool(verbose)
     
     return _invoke_mcp_tool(context, "gmail", tool_name, payload)
+
+
+# Attach structured output schema for gmail_search so downstream search can surface output_fields
+gmail_search.__tb_output_schema__ = {
+    "properties": {
+        "data": {
+            "additionalProperties": False,
+            "description": "Data from the action execution",
+            "properties": {
+                "messages": {
+                    "description": (
+                        "List of retrieved email messages. Includes full content if `include_payload` was true, "
+                        "otherwise metadata."
+                    ),
+                    "items": {
+                        "description": "This model represents the body a Gmail message.",
+                        "properties": {
+                            "attachmentList": {
+                                "description": "The list of attachments",
+                                "items": {"properties": {}},
+                                "nullable": True,
+                                "title": "Attachment List",
+                                "type": "array",
+                            },
+                            "labelIds": {
+                                "description": "The label IDs of the message",
+                                "items": {"properties": {}},
+                                "nullable": True,
+                                "title": "Label Ids",
+                                "type": "array",
+                            },
+                            "messageId": {
+                                "description": "The message ID of the message",
+                                "nullable": True,
+                                "title": "Message Id",
+                                "type": "string",
+                            },
+                            "messageText": {
+                                "description": "The text of the message",
+                                "nullable": True,
+                                "title": "Message Text",
+                                "type": "string",
+                            },
+                            "messageTimestamp": {
+                                "description": "The timestamp of the message",
+                                "nullable": True,
+                                "title": "Message Timestamp",
+                                "type": "string",
+                            },
+                            "payload": {
+                                "additionalProperties": True,
+                                "description": "The payload of the message",
+                                "nullable": True,
+                                "title": "Payload",
+                                "type": "object",
+                            },
+                            "preview": {
+                                "additionalProperties": True,
+                                "description": "The preview of the message",
+                                "nullable": True,
+                                "title": "Preview",
+                                "type": "object",
+                            },
+                            "sender": {
+                                "description": "The sender of the message",
+                                "nullable": True,
+                                "title": "Sender",
+                                "type": "string",
+                            },
+                            "subject": {
+                                "description": "The subject of the message",
+                                "nullable": True,
+                                "title": "Subject",
+                                "type": "string",
+                            },
+                            "threadId": {
+                                "description": "The thread ID of the message",
+                                "nullable": True,
+                                "title": "Thread Id",
+                                "type": "string",
+                            },
+                            "to": {
+                                "description": "The recipient of the message",
+                                "nullable": True,
+                                "title": "To",
+                                "type": "string",
+                            },
+                        },
+                        "title": "MessageBody",
+                        "type": "object",
+                    },
+                    "title": "Messages",
+                    "type": "array",
+                },
+                "nextPageToken": {
+                    "description": "Token for the next page of results; use in subsequent `page_token` request. Empty if no more results.",
+                    "title": "Next Page Token",
+                    "type": "string",
+                },
+                "resultSizeEstimate": {
+                    "description": "Estimated total messages matching the query (not just this page).",
+                    "title": "Result Size Estimate",
+                    "type": "integer",
+                },
+            },
+            "required": ["nextPageToken", "resultSizeEstimate", "messages"],
+            "title": "Data",
+            "type": "object",
+        },
+        "error": {
+            "default": None,
+            "description": "Error if any occurred during the execution of the action",
+            "nullable": True,
+            "title": "Error",
+            "type": "string",
+        },
+        "successful": {
+            "description": "Whether or not the action execution was successful or not",
+            "title": "Successful",
+            "type": "boolean",
+        },
+    },
+    "required": ["data", "successful"],
+    "title": "FetchEmailsResponseWrapper",
+    "type": "object",
+}

@@ -355,13 +355,25 @@ class AgentState:
 
                 # Get found tools from observation
                 observation = step.observation or []
-                tool_count = len(observation) if isinstance(observation, list) else 0
+                tool_count = 0
+                tool_names: List[str] = []
+                if isinstance(step.action_outcome, dict):
+                    tool_count = step.action_outcome.get("total_found", 0) or 0
+                    names = step.action_outcome.get("found_tool_names")
+                    if isinstance(names, list):
+                        tool_names = [n for n in names if isinstance(n, str) and n]
+                if tool_count == 0 and isinstance(observation, list):
+                    tool_count = len(observation)
 
                 lines.append(f"### Step {step_num}: Search - {provider}")
                 lines.append(f"**Query**: {query}")
                 lines.append(f"**Found**: {tool_count} tool(s)")
 
-                if tool_count > 0 and isinstance(observation, list):
+                if tool_names:
+                    lines.append("**Tools**:")
+                    for name in tool_names[:20]:
+                        lines.append(f"- `{name}`")
+                elif tool_count > 0 and isinstance(observation, list):
                     lines.append("**Tools**:")
                     for tool in observation[:20]:  # Limit to first 20 tools
                         tool_id = tool.get("tool_id", "unknown")

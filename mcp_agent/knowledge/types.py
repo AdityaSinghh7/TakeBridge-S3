@@ -144,8 +144,8 @@ class ToolSpec:
     list_params: Dict[str, str] = field(default_factory=dict)
     primary_param: Optional[str] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
-    output_schema: Dict[str, Any] = field(default_factory=dict)
-    output_schema_pretty: List[str] = field(default_factory=list)
+    output_schema: Optional[Dict[str, Any]] = None
+    output_schema_pretty: Optional[List[str]] = None
 
     @property
     def tool_id(self) -> str:
@@ -293,14 +293,7 @@ class ToolSpec:
                     line = f"{line} = {op['default']}"
                 input_lines.append(line)
 
-        if self.output_schema_pretty:
-            output_lines = list(self.output_schema_pretty)
-        else:
-            output_lines = [
-                "Canonical wrapper: { success: bool, data: dict, error: str | null }",
-                "",
-                "data: <schema not documented; TODO: replace with real Composio-compatible payload schema>",
-            ]
+        output_lines: List[str] = list(self.output_schema_pretty) if self.output_schema_pretty else []
 
         return LLMToolDescriptor(
             provider=self.provider,

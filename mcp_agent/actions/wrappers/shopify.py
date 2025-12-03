@@ -9,6 +9,8 @@ from ._common import _clean_payload, _invoke_mcp_tool, ensure_authorized
 if TYPE_CHECKING:
     from mcp_agent.core.context import AgentContext
 
+from .shopify_output import shopify_update_order_output_schema, shopify_get_orders_with_filters_output_schema
+
 
 def shopify_update_order(context: "AgentContext", id: int, phone: str | None = None) -> ToolInvocationResult:
     """
@@ -35,6 +37,8 @@ def shopify_update_order(context: "AgentContext", id: int, phone: str | None = N
     )
     return _invoke_mcp_tool(context, provider, tool_name, payload)
 
+
+shopify_update_order.__tb_output_schema__ = shopify_update_order_output_schema
 
 def shopify_get_orders_with_filters(
     context: "AgentContext",
@@ -132,3 +136,5 @@ def shopify_get_orders_with_filters(
         }
     )
     return _invoke_mcp_tool(context, provider, tool_name, payload)
+
+shopify_get_orders_with_filters.__tb_output_schema__ = shopify_get_orders_with_filters_output_schema

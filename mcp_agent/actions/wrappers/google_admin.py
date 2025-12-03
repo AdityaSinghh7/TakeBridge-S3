@@ -53,3 +53,43 @@ def google_admin_create_user(
         }
     )
     return _invoke_mcp_tool(context, provider, tool_name, payload)
+
+google_admin_create_user.__tb_output_schema__ = {
+  "properties": {
+    "data": {
+      "additionalProperties": False,
+      "description": "Data from the action execution",
+      "properties": {
+        "response_data": {
+          "additionalProperties": True,
+          "description": "Full API response from Google Admin for the created user",
+          "title": "Response Data",
+          "type": "object"
+        }
+      },
+      "required": [
+        "response_data"
+      ],
+      "title": "Data",
+      "type": "object"
+    },
+    "error": {
+      "default": None,
+      "description": "Error if any occurred during the execution of the action",
+      "nullable": True,
+      "title": "Error",
+      "type": "string"
+    },
+    "successful": {
+      "description": "Whether or not the action execution was successful or not",
+      "title": "Successful",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "data",
+    "successful"
+  ],
+  "title": "CreateUserResponseWrapper",
+  "type": "object"
+}

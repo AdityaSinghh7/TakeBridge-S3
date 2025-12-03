@@ -71,3 +71,73 @@ def jira_create_issue(
         }
     )
     return _invoke_mcp_tool(context, provider, tool_name, payload)
+
+jira_create_issue.__tb_output_schema__ = {
+  "properties": {
+    "data": {
+      "additionalProperties": False,
+      "description": "Data from the action execution",
+      "properties": {
+        "browser_url": {
+          "description": "Direct browser URL to view the created issue in the Jira web interface.",
+          "examples": [
+            "https://api.atlassian.com/ex/jira/cloud-id/browse/TEST-101"
+          ],
+          "title": "Browser Url",
+          "type": "string"
+        },
+        "id": {
+          "description": "Unique ID of the created Jira issue.",
+          "examples": [
+            "12738"
+          ],
+          "title": "Id",
+          "type": "string"
+        },
+        "key": {
+          "description": "Human-readable key of the created issue (e.g., 'PROJ-123').",
+          "examples": [
+            "TEST-101",
+            "PROJ-42"
+          ],
+          "title": "Key",
+          "type": "string"
+        },
+        "self": {
+          "description": "Direct API URL to access the created issue via REST API.",
+          "examples": [
+            "https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/issue/12738"
+          ],
+          "title": "Self",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "key",
+        "browser_url",
+        "self"
+      ],
+      "title": "Data",
+      "type": "object"
+    },
+    "error": {
+      "default": None,
+      "description": "Error if any occurred during the execution of the action",
+      "nullable": True,
+      "title": "Error",
+      "type": "string"
+    },
+    "successful": {
+      "description": "Whether or not the action execution was successful or not",
+      "title": "Successful",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "data",
+    "successful"
+  ],
+  "title": "CreateIssueResponseWrapper",
+  "type": "object"
+}

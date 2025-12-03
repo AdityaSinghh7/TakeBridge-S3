@@ -32,6 +32,37 @@ def quickbooks_create_invoice(
     return _invoke_mcp_tool(context, provider, tool_name, payload)
 
 
+quickbooks_create_invoice.__tb_output_schema__ = {
+  "properties": {
+    "data": {
+      "additionalProperties": True,
+      "description": "Full JSON response returned by QuickBooks for the created invoice",
+      "title": "Data",
+      "type": "object"
+    },
+    "error": {
+      "default": None,
+      "description": "Error if any occurred during the execution of the action",
+      "nullable": True,
+      "title": "Error",
+      "type": "string"
+    },
+    "successful": {
+      "description": "Whether or not the action execution was successful or not",
+      "title": "Successful",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "data",
+    "successful"
+  ],
+  "title": "CreateInvoiceResponseWrapper",
+  "type": "object"
+}
+
+
+
 def quickbooks_create_customer(
     context: "AgentContext",
     display_name: str | None = None,
@@ -58,3 +89,34 @@ def quickbooks_create_customer(
         }
     )
     return _invoke_mcp_tool(context, provider, tool_name, payload)
+
+
+
+quickbooks_create_customer.__tb_output_schema__ = {
+  "properties": {
+    "data": {
+      "additionalProperties": True,
+      "default": {},
+      "description": "Data of the created customer",
+      "title": "Data",
+      "type": "object"
+    },
+    "error": {
+      "default": None,
+      "description": "Error if any occurred during the execution of the action",
+      "nullable": True,
+      "title": "Error",
+      "type": "string"
+    },
+    "successful": {
+      "description": "Whether or not the action execution was successful or not",
+      "title": "Successful",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "successful"
+  ],
+  "title": "CreateCustomerResponseWrapper",
+  "type": "object"
+}

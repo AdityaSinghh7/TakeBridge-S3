@@ -47,3 +47,32 @@ def stripe_create_refund(
         }
     )
     return _invoke_mcp_tool(context, provider, tool_name, payload)
+
+stripe_create_refund.__tb_output_schema__ = {
+  "properties": {
+    "data": {
+      "additionalProperties": True,
+      "description": "The full Stripe Refund object detailing the created refund.",
+      "title": "Data",
+      "type": "object"
+    },
+    "error": {
+      "default": None,
+      "description": "Error if any occurred during the execution of the action",
+      "nullable": True,
+      "title": "Error",
+      "type": "string"
+    },
+    "successful": {
+      "description": "Whether or not the action execution was successful or not",
+      "title": "Successful",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "data",
+    "successful"
+  ],
+  "title": "CreateRefundResponseWrapper",
+  "type": "object"
+}

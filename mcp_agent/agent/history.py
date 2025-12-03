@@ -140,7 +140,6 @@ class ExecutionHistory:
                     "error": step.error,
                     "is_smart_summary": step.is_smart_summary,
                     "observation": _fmt(step.observation),
-                    "observation_metadata": step.observation_metadata,
                 }
             )
 

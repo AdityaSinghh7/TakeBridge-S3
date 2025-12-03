@@ -68,3 +68,41 @@ def airtable_list_records(
         }
     )
     return _invoke_mcp_tool(context, provider, tool_name, payload)
+
+
+airtable_list_records.__tb_output_schema__ = {
+  "properties": {
+    "data": {
+      "additionalProperties": False,
+      "description": "Data from the action execution",
+      "properties": {
+        "response_data": {
+          "additionalProperties": True,
+          "description": "The raw JSON response from the Airtable API, containing the list of records and any pagination offset.",
+          "title": "Response Data",
+          "type": "object"
+        }
+      },
+      "title": "Data",
+      "type": "object"
+    },
+    "error": {
+      "default": None,
+      "description": "Error if any occurred during the execution of the action",
+      "nullable": True,
+      "title": "Error",
+      "type": "string"
+    },
+    "successful": {
+      "description": "Whether or not the action execution was successful or not",
+      "title": "Successful",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "data",
+    "successful"
+  ],
+  "title": "ListRecordsResponseWrapper",
+  "type": "object"
+}

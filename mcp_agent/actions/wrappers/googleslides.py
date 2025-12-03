@@ -32,3 +32,58 @@ def googleslides_create_slides_markdown(
         }
     )
     return _invoke_mcp_tool(context, provider, tool_name, payload)
+
+googleslides_create_slides_markdown.__tb_output_schema__ = {
+  "properties": {
+    "data": {
+      "additionalProperties": False,
+      "description": "Data from the action execution",
+      "properties": {
+        "presentation_id": {
+          "description": "The unique identifier of the newly created Google Slides presentation.",
+          "title": "Presentation Id",
+          "type": "string"
+        },
+        "request_data": {
+          "description": "Google Slides API request objects generated from markdown_text for batchUpdate.",
+          "items": {
+            "additionalProperties": True,
+            "properties": {},
+            "type": "object"
+          },
+          "title": "Request Data",
+          "type": "array"
+        },
+        "slide_count": {
+          "description": "The number of slides created in the presentation.",
+          "title": "Slide Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "presentation_id",
+        "slide_count"
+      ],
+      "title": "Data",
+      "type": "object"
+    },
+    "error": {
+      "default": None,
+      "description": "Error if any occurred during the execution of the action",
+      "nullable": True,
+      "title": "Error",
+      "type": "string"
+    },
+    "successful": {
+      "description": "Whether or not the action execution was successful or not",
+      "title": "Successful",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "data",
+    "successful"
+  ],
+  "title": "CreateSlidesMarkdownResponseWrapper",
+  "type": "object"
+}

@@ -32,3 +32,32 @@ def mailchimp_create_a_survey_campaign(
         }
     )
     return _invoke_mcp_tool(context, provider, tool_name, payload)
+
+
+mailchimp_create_a_survey_campaign.__tb_output_schema__ = {
+  "properties": {
+    "data": {
+      "additionalProperties": True,
+      "title": "Data",
+      "type": "object"
+    },
+    "error": {
+      "default": None,
+      "description": "Error if any occurred during the execution of the action",
+      "nullable": True,
+      "title": "Error",
+      "type": "string"
+    },
+    "successful": {
+      "description": "Whether or not the action execution was successful or not",
+      "title": "Successful",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "data",
+    "successful"
+  ],
+  "title": "CreateASurveyCampaignResponseWrapper",
+  "type": "object"
+}

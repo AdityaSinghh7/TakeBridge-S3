@@ -119,7 +119,13 @@ class PlannerLLM:
         snapshot: BudgetSnapshot,
     ) -> str:
         state = context.build_planner_state(snapshot)
-        state_json = json.dumps(state, ensure_ascii=False, sort_keys=True, indent=2)
+
+        # Do not leak identifiers to the LLM
+        state_filtered = dict(state)
+        state_filtered.pop("run_id", None)
+        state_filtered.pop("user_id", None)
+
+        state_json = json.dumps(state_filtered, ensure_ascii=False, sort_keys=True, indent=2)
         
         # DEBUG: optionally dump PLANNER_STATE_JSON to stderr
         if os.getenv("MCP_PLANNER_DUMP_STATE_JSON") == "1":

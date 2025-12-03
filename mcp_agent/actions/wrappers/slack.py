@@ -13,7 +13,7 @@ from ._common import ensure_authorized, _invoke_mcp_tool
 
 if TYPE_CHECKING:
     from mcp_agent.core.context import AgentContext
-
+from .slack_output_helper import slack_post_message_output_schema, slack_search_messages_output_schema
 
 def _serialize_structured_param(value: Any) -> str | None:
     """
@@ -30,22 +30,6 @@ def _serialize_structured_param(value: Any) -> str | None:
     except (TypeError, ValueError) as exc:
         raise ValueError("Structured Slack parameters must be JSON-serializable.") from exc
 
-
-def _structured_result(
-    provider: str,
-    tool: str,
-    *,
-    successful: bool,
-    error: str | None = None,
-    data: Any = None,
-) -> ToolInvocationResult:
-    """Build standardized tool result."""
-    if data is None:
-        normalized_data: Any = {}
-    elif isinstance(data, dict):
-        normalized_data = data
-    else:
-        normalized_data = {"value": data}
     
 def slack_post_message(
     context: AgentContext,
@@ -142,6 +126,8 @@ def slack_post_message(
     return _invoke_mcp_tool(context, "slack", tool_name, payload)
 
 
+
+
 def slack_search_messages(
     context: AgentContext,
     query: str,
@@ -170,13 +156,9 @@ def slack_search_messages(
         Standardized tool result with matches, query, total, pagination
     """
     tool_name = "SLACK_SEARCH_MESSAGES"
-    user_id = normalize_user_id(context.user_id)
+    ensure_authorized(context, "slack")
     
-    # Check authorization
-    from mcp_agent.registry import get_mcp_client, is_provider_available
-    # Use functional API directly
-    if not is_provider_available(context, "slack"):
-        raise UnauthorizedError("slack", user_id)
+    
     
     payload: dict[str, Any] = {"query": query}
     if count is not None:
@@ -193,3 +175,7 @@ def slack_search_messages(
         payload["auto_paginate"] = bool(auto_paginate)
     
     return _invoke_mcp_tool(context, "slack", tool_name, payload)
+
+
+slack_search_messages.__tb_output_schema__ = slack_search_messages_output_schema
+slack_post_message.__tb_output_schema__ = slack_post_message_output_schema

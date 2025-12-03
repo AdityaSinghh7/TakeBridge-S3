@@ -319,6 +319,28 @@ def flatten_schema_fields(
     schema_type = schema.get("type")
     props = schema.get("properties", {})
 
+    # If this is an envelope with a top-level "data" property, dive into it
+    # without emitting the "data" prefix so callers see the inner fields directly.
+    # If data has no type/properties, emit a placeholder so the caller can still
+    # reference data safely.
+    if depth == 0 and isinstance(props, dict) and "data" in props:
+        data_schema = props.get("data")
+        if isinstance(data_schema, dict):
+            data_type = data_schema.get("type") or "object"
+            data_props = data_schema.get("properties") or {}
+            # If data has no children, emit the data path with its type
+            if not data_props:
+                out.append(f"{prefix + '.' if prefix else ''}data: {data_type}")
+                return out
+            return flatten_schema_fields(
+                data_schema,
+                prefix=prefix,
+                depth=depth,
+                max_depth=max_depth,
+                max_fields=max_fields,
+                out=out,
+            )
+
     if schema_type and not props:
         if prefix:
             out.append(f"{prefix}: {schema_type}")
@@ -331,6 +353,14 @@ def flatten_schema_fields(
         if isinstance(subschema, dict) and subschema.get("type") == "array":
             item = subschema.get("items", {})
             child_prefix = f"{prefix}.{name}[]" if prefix else f"{name}[]"
+            # If items schema is empty/unknown, still emit the array path
+            if (
+                not isinstance(item, dict)
+                or not item
+                or (not item.get("type") and not item.get("properties"))
+            ):
+                out.append(f"{child_prefix}: {subschema.get('type', 'array')}")
+                continue
             flatten_schema_fields(
                 item,
                 prefix=child_prefix,
@@ -351,4 +381,3 @@ def flatten_schema_fields(
             )
 
     return out
-

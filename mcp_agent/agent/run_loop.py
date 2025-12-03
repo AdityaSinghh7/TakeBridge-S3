@@ -205,6 +205,11 @@ class AgentOrchestrator:
                 return self._failure(result.error_code or "search_failed", error_message, preview=str(command))
             query = (command.get("query") or "").strip()
             found_tools = observation.get("found_tools", [])
+            tool_names = [
+                (t.get("tool") or t.get("tool_id") or "").strip()
+                for t in found_tools
+                if isinstance(t, dict)
+            ]
             self.agent_state.merge_search_results(found_tools, replace=False)
             # found_tools are already compact - no need to slim further
             self.agent_state.record_event(
@@ -230,11 +235,14 @@ class AgentOrchestrator:
                 action_outcome={
                     "success": True,
                     "total_found": len(found_tools),
-                    "found_tool_names": [
-                        (t.get("tool") or t.get("tool_id") or "") for t in found_tools
-                    ],
+                    "found_tool_names": tool_names,
                 },
-                observation=found_tools,
+                observation=(
+                    f"Search succeeded; found {len(found_tools)} tools: "
+                    f"{', '.join([name for name in tool_names if name]) or 'none'}. "
+                    "Details merged into available_tools."
+                ),
+                # to be fixed, need to check if the observation_metadata has to adhere to this shape with all the keys or if we can reliably delete the keys that are irrelevant.
                 observation_metadata={
                     "summarization_method": "none",
                     "summarization_model": None,
