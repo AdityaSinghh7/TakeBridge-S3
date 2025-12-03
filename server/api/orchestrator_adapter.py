@@ -94,6 +94,9 @@ def orchestrate_to_orchestrator(
     if workspace:
         metadata["workspace"] = workspace
 
+    # Optional composed plan passed through from the original request payload
+    composed_plan = getattr(req, "composed_plan", None)
+
     return OrchestratorRequest(
         task=req.task,
         max_steps=budget.max_steps,
@@ -109,6 +112,7 @@ def orchestrate_to_orchestrator(
         request_id=tenant.request_id,
         user_id=user_id,
         tool_constraints=tool_constraints_obj,
+        composed_plan=composed_plan,
     )
 
 

@@ -186,6 +186,9 @@ class OrchestratorRequest(AgentTaskInput):
     """Concrete request used by the orchestrator runtime."""
 
     tool_constraints: Optional[ToolConstraints] = None
+    # Optional composed plan provided by the Task Compose Agent / frontend.
+    # This should be a JSON-serializable dict matching the ComposedPlan schema.
+    composed_plan: Optional[Dict[str, Any]] = None
 
     def __post_init__(self) -> None:
         # Keep budget max_steps aligned with the top-level field.
