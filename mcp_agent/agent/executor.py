@@ -343,6 +343,11 @@ class ActionExecutor:
                 preview=f"Unknown tool_id '{tool_id}'.",
                 error="planner_used_unknown_tool",
                 error_code="planner_used_unknown_tool",
+                tool_id=tool_id,
+                provider=provider,
+                server=server,
+                tool_name=tool_name,
+                args=args,
             )
 
         discovered_tool_ids = {
@@ -359,6 +364,11 @@ class ActionExecutor:
                 preview=f"Tool '{tool_id}' was never discovered via search.",
                 error="planner_used_undiscovered_tool",
                 error_code="planner_used_undiscovered_tool",
+                tool_id=tool_id,
+                provider=provider,
+                server=server,
+                tool_name=tool_name,
+                args=args,
             )
 
         provider = spec.provider
@@ -404,6 +414,11 @@ class ActionExecutor:
                 preview=f"{provider}.{resolved_tool} failed: {error_message}",
                 error=error_message,
                 error_code="tool_execution_failed",
+                tool_id=tool_id,
+                provider=provider,
+                server=server,
+                tool_name=tool_name,
+                args=args,
             )
 
         observation, is_smart_summary, original_tokens, compressed_tokens = self._process_tool_observation(result)
@@ -439,6 +454,11 @@ class ActionExecutor:
             is_smart_summary=is_smart_summary,
             original_tokens=original_tokens,
             compressed_tokens=compressed_tokens,
+            tool_id=tool_id,
+            provider=provider,
+            server=server,
+            tool_name=tool_name,
+            args=payload,
         )
 
     # --- Sandbox execution ---

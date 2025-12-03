@@ -195,9 +195,6 @@ class AgentOrchestrator:
                     action_outcome={"success": False, "error": error_message},
                     observation={"error": error_message, "found_tools": []},
                     observation_metadata={
-                        "summarization_method": "none",
-                        "summarization_model": None,
-                        "raw_output_ref": None,
                         "total_found": 0,
                     },
                     error=result.error_code or error_message,
@@ -242,11 +239,8 @@ class AgentOrchestrator:
                     f"{', '.join([name for name in tool_names if name]) or 'none'}. "
                     "Details merged into available_tools."
                 ),
-                # to be fixed, need to check if the observation_metadata has to adhere to this shape with all the keys or if we can reliably delete the keys that are irrelevant.
+                # Minimal metadata for trajectory consumption
                 observation_metadata={
-                    "summarization_method": "none",
-                    "summarization_model": None,
-                    "raw_output_ref": None,
                     "total_found": len(found_tools),
                     "merged_into_cache": True,
                     "cache_size_after": len(self.agent_state.search_results),
@@ -255,32 +249,31 @@ class AgentOrchestrator:
             return None
 
         if cmd_type == "tool":
+            resolved_tool_id = result.tool_id or command.get("tool_id") or f"{command.get('provider')}.{command.get('tool')}"
+            resolved_provider = result.provider or result.server or command.get("provider") or command.get("server")
+            resolved_tool = result.tool_name or command.get("tool") or (
+                resolved_tool_id.split(".", 1)[1] if resolved_tool_id and "." in resolved_tool_id else command.get("tool")
+            )
+            resolved_args = result.args if result.args is not None else (command.get("args") or command.get("payload") or {})
+            resolved_action_input = {
+                "tool_id": resolved_tool_id,
+                "provider": resolved_provider,
+                "tool": resolved_tool,
+                "args": resolved_args,
+            }
+
             if not result.success:
                 self.agent_state.record_step(
                     action_type="tool",
                     success=False,
                     action_reasoning=command.get("reasoning") or "",
-                    action_input={
-                        "tool_id": command.get("tool_id") or f"{command.get('provider')}.{command.get('tool')}",
-                        "provider": command.get("provider") or command.get("server"),
-                        "server": command.get("server") or command.get("provider"),
-                        "tool": command.get("tool"),
-                        "args": command.get("args") or command.get("payload") or {},
-                    },
+                    action_input=resolved_action_input,
                     action_outcome={
                         "success": False,
                         "error": error_message,
                     },
                     observation=result.observation if result.observation else {"error": error_message},
-                    observation_metadata={
-                        "raw_output_ref": result.raw_output_key,
-                        "summarization_method": "none",
-                        "summarization_model": None,
-                        "original_tokens": result.original_tokens,
-                        "compressed_tokens": result.compressed_tokens,
-                    },
                     error=result.error_code or result.error or "tool_execution_failed",
-                    is_smart_summary=result.is_smart_summary,
                 )
                 return self._failure(
                     result.error_code or "tool_execution_failed",
@@ -293,33 +286,15 @@ class AgentOrchestrator:
                 action_type="tool",
                 success=True,
                 action_reasoning=reasoning,
-                action_input={
-                    "tool_id": command.get("tool_id") or f"{command.get('provider')}.{command.get('tool')}",
-                    "provider": command.get("provider") or command.get("server"),
-                    "server": command.get("server") or command.get("provider"),
-                    "tool": command.get("tool"),
-                    "args": command.get("args") or command.get("payload") or {},
-                },
+                action_input=resolved_action_input,
                 action_outcome={
                     "success": True,
-                    "raw_output_ref": result.raw_output_key,
-                    "is_smartly_summarized": result.is_smart_summary,
                 },
                 observation=result.observation,
                 observation_metadata={
-                    "raw_output_ref": result.raw_output_key,
-                    "summarization_method": "llm" if result.is_smart_summary else "none",
-                    "summarization_model": "o4-mini" if result.is_smart_summary else None,
-                    "original_tokens": result.original_tokens,
-                    "compressed_tokens": result.compressed_tokens,
-                    "compression_ratio": (
-                        ((result.original_tokens - result.compressed_tokens) / result.original_tokens * 100)
-                        if result.original_tokens and result.compressed_tokens and result.original_tokens > 0
-                        else None
-                    ),
+                    "is_smart_summary": result.is_smart_summary,
                 },
                 error=None,
-                is_smart_summary=result.is_smart_summary,
             )
             return None
 
@@ -337,18 +312,12 @@ class AgentOrchestrator:
                     action_outcome={
                         "success": False,
                         "error": error_message,
-                        "raw_output_ref": result.raw_output_key,
-                        "return_values": observation,
                     },
                     observation=result.observation if result.observation else observation,
                     observation_metadata={
-                        "raw_output_ref": result.raw_output_key,
-                        "summarization_method": "none",
-                        "summarization_model": None,
                         "retry_count": observation.get("prior_errors", 0) if isinstance(observation, dict) else 0,
                     },
                     error=error_code,
-                    is_smart_summary=result.is_smart_summary,
                 )
                 if error_code == "sandbox_syntax_error":
                     prior_errors = observation.get("prior_errors", 0)
@@ -382,25 +351,12 @@ class AgentOrchestrator:
                         isinstance(observation, dict)
                         and observation.get("_all_tools_succeeded")
                     ),
-                    "raw_output_ref": result.raw_output_key,
-                    "return_values": observation,
-                    "is_smartly_summarized": result.is_smart_summary,
                 },
                 observation=result.observation,
                 observation_metadata={
-                    "raw_output_ref": result.raw_output_key,
-                    "summarization_method": "llm" if result.is_smart_summary else "none",
-                    "summarization_model": "o4-mini" if result.is_smart_summary else None,
-                    "original_tokens": result.original_tokens,
-                    "compressed_tokens": result.compressed_tokens,
-                    "compression_ratio": (
-                        ((result.original_tokens - result.compressed_tokens) / result.original_tokens * 100)
-                        if result.original_tokens and result.compressed_tokens and result.original_tokens > 0
-                        else None
-                    ),
+                    "is_smart_summary": result.is_smart_summary,
                 },
                 error=None,
-                is_smart_summary=result.is_smart_summary,
             )
             return None
 

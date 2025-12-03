@@ -22,6 +22,12 @@ class StepResult:
     is_smart_summary: bool = False
     original_tokens: Optional[int] = None
     compressed_tokens: Optional[int] = None
+    # Resolved tool metadata (set for tool commands)
+    tool_id: Optional[str] = None
+    provider: Optional[str] = None
+    server: Optional[str] = None
+    tool_name: Optional[str] = None
+    args: Optional[Dict[str, Any]] = None
 
 
 class MCPTaskResult(TypedDict, total=False):
