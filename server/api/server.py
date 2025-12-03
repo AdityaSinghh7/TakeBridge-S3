@@ -42,6 +42,7 @@ from shared.streaming import (
 )
 from vm_manager.vm_wrapper import ensure_workspace
 from vm_manager.config import settings
+from orchestrator_agent.data_types import OrchestratorRequest
 from .auth import get_current_user, CurrentUser
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -146,7 +147,7 @@ def _parse_orchestrate_request(payload: Dict[str, Any]) -> OrchestrateRequest:
 
 
 async def _execute_orchestrator(
-    request: "OrchestratorRequest", emitter: Optional[StreamEmitter] = None
+    request: OrchestrateRequest, emitter: Optional[StreamEmitter] = None
 ):
     """Execute the orchestrator agent with optional stream emission."""
     from orchestrator_agent.runtime import OrchestratorRuntime
