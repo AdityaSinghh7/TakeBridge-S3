@@ -35,10 +35,10 @@ You analyze the user's goal, review what has been accomplished so far, and decid
 - Structured data operations (search, create, update, delete via APIs)
 
 **What MCP returns:**
-- Structured API responses (JSON data, lists, objects)
-- Success/failure status from API calls
-- Data retrieved from services (emails, messages, records, files)
-- Confirmation of actions taken (email sent, record created, etc.)
+- Structured API responses (JSON data, lists, objects) that are translated into a canonical JSON shape (task, overall_success, summary, error/error_code, last_step_failed, failed_step_index, total_steps, steps_summary, data, artifacts)
+- Success/failure status from API calls and any errors
+- Data retrieved from services (emails, messages, records, files) distilled into task-relevant fields
+- Confirmation of actions taken (email sent, record created, etc.) reflected in the canonical translation
 
 **Capabilities:** See provider list below
 **Strengths:** Fast, reliable, precise, works with APIs
@@ -134,13 +134,15 @@ When reviewing previous step results, interpret them based on the agent used:
 
 Respond with JSON in **ONE** of these three formats:
 
-### 1. Next Step (most common)
+### 1. Next Step 
 {
   "type": "next_step",
   "target": "mcp" | "computer_use",
-  "task": "Clear, specific description of what this step should accomplish",
+  "task": "Clear, specific, fully self-contained description of what this step should accomplish, including any data/context the agent needs",
   "reasoning": "Brief explanation of why this is the right next step"
 }
+
+You are the single source of data compilation. When you emit a `next_step`, make the `task` string fully self-contained: include any concrete data, context, and outputs already obtained that the MCP or computer-use agent will need to execute. Assume downstream agents start fresh each step and have no memory beyond what you include in the `task`.
 
 ### 2. Task Complete
 {
@@ -196,6 +198,20 @@ CONTEXT_TEMPLATE = """
 ## Current Task
 
 **User's Goal:** {task}
+
+Use the canonical translated JSON from previous steps as your source of truth. It already filters and organizes the trajectory data; do not ignore any field that is present. Reason about what matters for the user's goal and pull out relevant facts rather than repeating long text verbatim. Treat missing fields as absent data, not hidden information. Base your next-step decision on these results and the current goal. The canonical shape includes: task, overall_success, summary, error/error_code, last_step_failed, failed_step_index, total_steps, steps_summary, data, and artifacts (tool_calls, ui_observations, code_executions, search_results); consult each present field before deciding the next step.
+
+Canonical shape (fields may appear differently for MCP vs Computer-Use; use what is present):
+- task: original subtask the agent executed; align next steps to this intent.
+- overall_success / last_step_failed / failed_step_index: status flags showing whether recovery or an alternate path is needed.
+- summary: concise narrative of what was accomplished; use it to avoid repeating work.
+- error / error_code: failure details; plan mitigation or a different approach when present.
+- total_steps / steps_summary: what the agent tried and how each step ended; use to decide whether to continue, retry, or pivot.
+- data: task-relevant extracted results (e.g., emails, records, content); reuse directly instead of re-fetching.
+- artifacts.tool_calls: tool arguments, responses, and success flags returned by the worker; reuse outputs and avoid redundant calls.
+- artifacts.ui_observations: UI findings from the computer-use agent; guide navigation, verification, or corrections.
+- artifacts.code_executions: code run and outputs; code executed by the MCP agent for calling multiple tools or performing data manipulation operations.
+- artifacts.search_results: discovery context; tools/providers that were found in the respective step.
 
 **Steps Completed So Far:**
 {previous_results}
@@ -293,13 +309,46 @@ def _render_json(value: Any, max_chars: int = 4000) -> str:
     return text
 
 
+def _prune_empty(obj: Any) -> Any:
+    """
+    Recursively remove empty/None values from dictionaries and lists while
+    preserving falsy primitives like 0 or False.
+    """
+
+    def is_empty(val: Any) -> bool:
+        if val is None:
+            return True
+        if isinstance(val, (str, bytes)) and len(val) == 0:
+            return True
+        if isinstance(val, (list, dict)) and len(val) == 0:
+            return True
+        return False
+
+    if isinstance(obj, dict):
+        pruned: Dict[str, Any] = {}
+        for k, v in obj.items():
+            cleaned = _prune_empty(v)
+            if not is_empty(cleaned):
+                pruned[k] = cleaned
+        return pruned
+
+    if isinstance(obj, list):
+        cleaned_list = []
+        for item in obj:
+            cleaned = _prune_empty(item)
+            if not is_empty(cleaned):
+                cleaned_list.append(cleaned)
+        return cleaned_list
+
+    return obj
+
+
 def format_previous_results(
     results: List["StepResult"], task: Optional[str] = None
 ) -> str:
     """
     Format previous step results for context using translator output as the single
-    source of truth. Presents a clean, structured view with no truncation of
-    translator-derived content.
+    source of truth. Presents a clean, pruned JSON view with minimal adornment.
 
     Args:
         results: List of StepResult objects
@@ -319,105 +368,21 @@ def format_previous_results(
     for i, r in enumerate(results, 1):  # Show all steps with numbering
         output = r.output or {}
         translated = output.get("translated", {})
+        cleaned = _prune_empty(translated)
 
-        overall_success = translated.get("overall_success")
-        success_flag = overall_success if isinstance(overall_success, bool) else bool(r.success)
-        total_steps = translated.get("total_steps")
-        steps_summary = translated.get("steps_summary") or []
-        data_block = translated.get("data")
-        artifacts = translated.get("artifacts") or {}
-        error_text = translated.get("error") or r.error
-        summary = translated.get("summary") or output.get("summary") or "No summary"
+        header = f"{i}. {r.target.upper()} step – Task: {r.next_task}"
+        step_lines = [header]
 
-        header = f"### {r.target.upper()} step – Task: {r.next_task}"
-        status_line = f"Overall result: {'Completed' if success_flag else 'Failed'}"
-        run_length_line = f"Agent reported total steps: {total_steps if total_steps is not None else 'unknown'}"
-
-        step_lines = [f"{i}. {header}", f"   {status_line}", f"   {run_length_line}", f"   Summary: {summary}"]
-
-        if steps_summary:
-            step_lines.append("   Stepwise summary:")
-            for entry in steps_summary:
-                step_lines.append(f"     - {entry}")
+        if cleaned:
+            try:
+                json_block = json.dumps(cleaned, indent=2, ensure_ascii=False)
+            except Exception:
+                json_block = str(cleaned)
+            step_lines.append("```json")
+            step_lines.append(json_block)
+            step_lines.append("```")
         else:
-            step_lines.append("   Stepwise summary: not provided")
-
-        if data_block and isinstance(data_block, dict):
-            step_lines.append("   Data:")
-            for key, value in list(data_block.items())[:5]:
-                value_str = _render_json(value, max_chars=None)
-                step_lines.append(f"     - {key}: {value_str}")
-            if len(data_block) > 5:
-                step_lines.append(f"     ... ({len(data_block) - 5} more)")
-
-        # Artifacts
-        tool_calls = artifacts.get("tool_calls") or []
-        search_results = artifacts.get("search_results") or []
-        ui_observations = artifacts.get("ui_observations") or []
-        code_executions = artifacts.get("code_executions") or []
-
-        if any([tool_calls, search_results, ui_observations, code_executions]):
-            step_lines.append("   Artifacts:")
-
-        if tool_calls:
-            step_lines.append(f"     Tool calls ({len(tool_calls)}):")
-            for call in tool_calls[:5]:
-                tool_id = call.get("tool_id", "unknown")
-                call_status = call.get("success")
-                status_label = (
-                    "success" if call_status is True else "fail" if call_status is False else "unknown"
-                )
-                args_str = _render_json(call.get("arguments"), max_chars=None)
-                resp_str = _render_json(call.get("response"), max_chars=None)
-                step_lines.append(f"       - {tool_id} ({status_label})")
-                step_lines.append(f"         arguments: {args_str}")
-                step_lines.append(f"         response: {resp_str}")
-            if len(tool_calls) > 5:
-                step_lines.append(f"       ... ({len(tool_calls) - 5} more)")
-
-        if search_results:
-            step_lines.append(f"     Search results ({len(search_results)}):")
-            for sr in search_results[:5]:
-                query = sr.get("query", "")
-                count = sr.get("tools_found")
-                tool_names = sr.get("tool_names") or []
-                count_text = count if count is not None else len(tool_names)
-                step_lines.append(f"       - query: {query} | tools_found: {count_text} | tool_names: {', '.join(tool_names)}")
-            if len(search_results) > 5:
-                step_lines.append(f"       ... ({len(search_results) - 5} more)")
-
-        if ui_observations:
-            step_lines.append(f"     UI observations ({len(ui_observations)}):")
-            for obs in ui_observations[:5]:
-                obs_str = _render_json(obs, max_chars=None)
-                step_lines.append(f"       - {obs_str}")
-            if len(ui_observations) > 5:
-                step_lines.append(f"       ... ({len(ui_observations) - 5} more)")
-
-        if code_executions:
-            step_lines.append(f"     Code executions ({len(code_executions)}):")
-            for exec_entry in code_executions[:5]:
-                code_str = _render_json(exec_entry.get("code"), max_chars=None)
-                output_str = _render_json(exec_entry.get("output"), max_chars=None)
-                exec_status = exec_entry.get("success")
-                exec_label = (
-                    "success" if exec_status is True else "fail" if exec_status is False else "unknown"
-                )
-                step_lines.append(f"       - {exec_label}")
-                step_lines.append(f"         code: {code_str}")
-                step_lines.append(f"         output: {output_str}")
-            if len(code_executions) > 5:
-                step_lines.append(f"       ... ({len(code_executions) - 5} more)")
-
-        if error_text:
-            step_lines.append(f"   Error: {error_text}")
-
-        # Provide a full translated JSON block for downstream planners
-        if translated:
-            full_json = _render_json(translated, max_chars=None)
-            indented = "\n".join(f"     {line}" for line in full_json.splitlines())
-            step_lines.append("   Full translated payload:")
-            step_lines.append(indented)
+            step_lines.append(f"No translated payload available for this step with task: {r.next_task}, you should retry the step.")
 
         lines.append("\n".join(step_lines))
 

@@ -37,7 +37,7 @@ You receive execution trajectories from either:
 
 The trajectory is a COMPLETE self-contained markdown document with ALL data needed. There are no separate raw outputs - everything is in the markdown.
 
-You act as a *cleaning and formatting agent* for the orchestrator: your job is to restructure what the worker provided into the canonical JSON without inventing, dropping, or compressing information. Do not reduce fidelity—preserve the actual values exactly as shown in the trajectory.
+You act as a *cleaning and formatting agent* for the orchestrator: your job is to restructure what the worker provided into the canonical JSON without inventing or omitting task-relevant information. Preserve key facts, but do not copy long text verbatim when a concise, task-relevant summary will do.
 
 Your task is to extract and organize this into a decisive canonical JSON format that enables the orchestrator to:
 - Determine overall success/failure
@@ -49,9 +49,10 @@ Your task is to extract and organize this into a decisive canonical JSON format 
 
 ### Data Extraction
 - **EXTRACT ALL key data** from the markdown (tool responses, UI observations, errors)
-- **PRESERVE actual values** - don't summarize or paraphrase data fields
+- **KEEP key fields exact** (IDs, timestamps, subjects, senders, counts, statuses). For large free-form text, summarize into task-relevant facts instead of copying the entire text.
 - **COUNT accurately** - total steps, tools found, etc.
 - **IDENTIFY failures precisely** - which step number failed, what the error was
+- When deciding what to keep, ask: "What does the task need?" Keep information that serves the task; avoid copying unrelated bulk text.
 
 ### No Invention
 - **NEVER fabricate** data, counts, or values not in the trajectory
@@ -193,10 +194,10 @@ You MUST output this EXACT JSON structure with ALL fields:
 - **failed_step_index**: 1-based index of first step that failed, `null` if overall_success=true
 - **total_steps**: Count of steps executed (from markdown headers)
 - **steps_summary**: Array with one entry per step - natural language "Step N: [action]. [outcome]"
-- **artifacts.tool_calls**: Every MCP tool call with args, response, success extracted from markdown
-- **artifacts.ui_observations**: Every behaviour narrator observation from computer-use
-- **artifacts.code_executions**: Sandbox and code agent executions with code and output
-- **artifacts.search_results**: Every search with query, count, and tool names found
+  - **artifacts.tool_calls**: Every MCP tool call with args, response, success extracted from markdown
+  - **artifacts.ui_observations**: Every behaviour narrator observation from computer-use
+  - **artifacts.code_executions**: Sandbox and code agent executions with code and output
+  - **artifacts.search_results**: Every search with query, count, and tool names found
 
 ## Examples
 
@@ -333,22 +334,22 @@ Output:
 """
 
 
-def _build_messages(task: str, step_id: str, target: AgentTarget, trajectory: str) -> list[dict]:
+def _build_messages(task: str, target: AgentTarget, trajectory: str) -> list[dict]:
     """Build LLM messages for translation."""
-    user_payload = {
-        "task": task,
-        "step_id": step_id,
-        "agent_type": target,
-        "trajectory_markdown": trajectory,
-        "instruction": (
-            "Translate the trajectory markdown into the canonical JSON format. "
-            "Extract all data from the markdown - there are no other inputs. "
-            "Return ONLY valid JSON with all required fields."
-        ),
-    }
+    user_content = (
+        f"Task: {task}\n"
+        f"Agent type: {target}\n"
+        "Trajectory (markdown follows):\n"
+        "```markdown\n"
+        f"{trajectory}\n"
+        "```\n"
+        "Instruction: Translate the trajectory markdown into the canonical JSON format. "
+        "Extract all data from the markdown - there are no other inputs. "
+        "Return ONLY valid JSON with all required fields."
+    )
     return [
         {"role": "system", "content": TRANSLATOR_SYSTEM_PROMPT},
-        {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+        {"role": "user", "content": user_content},
     ]
 
 
@@ -441,9 +442,9 @@ def _deterministic_fallback(task: str, target: AgentTarget, trajectory: str) -> 
 def translate_step_output(
     *,
     task: str,
-    step_id: str,
     target: AgentTarget,
     trajectory: str,
+    debug_step_id: Optional[str] = None,
     llm_client: Optional[Any] = None,
     llm_model: str = "o4-mini",
     max_output_tokens: int = 16000,
@@ -456,9 +457,9 @@ def translate_step_output(
 
     Args:
         task: The task description
-        step_id: Step identifier
         target: Agent type (mcp or computer_use)
         trajectory: Self-contained markdown trajectory with ALL data
+        debug_step_id: Optional step identifier used only for logging/debugging
         llm_client: Optional LLM client
         llm_model: Model to use for translation
         max_output_tokens: Max tokens for LLM response
@@ -469,7 +470,7 @@ def translate_step_output(
     logger.info(
         "translator.enter target=%s step_id=%s trajectory_len=%s",
         target,
-        step_id,
+        debug_step_id,
         len(trajectory),
     )
 
@@ -484,7 +485,7 @@ def translate_step_output(
 
     if client:
         try:
-            messages = _build_messages(task, step_id, target, trajectory)
+            messages = _build_messages(task, target, trajectory)
             response = client.create_response(
                 messages=messages,
                 model=llm_model,

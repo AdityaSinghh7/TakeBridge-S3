@@ -296,9 +296,9 @@ class OrchestratorRuntime:
             )
             translated = translate_step_output(
                 task=step.next_task,
-                step_id=step.step_id,
                 target=step.target,
                 trajectory=trajectory,
+                debug_step_id=step.step_id,
             )
             overall_success = bool(
                 translated.get("overall_success", translated.get("success", True))

@@ -102,7 +102,7 @@ class PlannerLLM:
         """
         developer_content = self._developer_message(context, snapshot)
         user_payload = json.dumps(
-            {"task": context.task, "extra_context": context.extra_context},
+            {"task": context.task},
             ensure_ascii=False,
             sort_keys=True,
         )
