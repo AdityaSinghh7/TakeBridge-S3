@@ -7,6 +7,7 @@ This route lets clients submit a raw task and receive an editable composed plan
 that reflects the user's MCP + computer-use capabilities.
 """
 
+import logging
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
@@ -23,6 +24,7 @@ from server.api.auth import CurrentUser, get_current_user
 from vm_manager.vm_wrapper import ensure_workspace
 from vm_manager.config import settings
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/compose_task", tags=["task-compose"])
 
@@ -55,6 +57,8 @@ async def compose_task(
         raise HTTPException(status_code=400, detail="Field 'task' is required and must be non-empty.")
 
     user_id: str = current_user.sub
+    
+    logger.info(f"/compose_task endpoint called - user_id={user_id}, task={task[:100]}...")
 
     # Fetch MCP capabilities (essential for planning)
     mcp_caps = fetch_mcp_capabilities(user_id, force_refresh=False)
@@ -102,7 +106,9 @@ async def compose_task(
     }
 
     tool_constraints = payload.get("tool_constraints")
+    logger.info(f"Calling compose_plan for task: {task[:100]}...")
     plan = compose_plan(task, capabilities, tool_constraints=tool_constraints)
+    logger.info(f"compose_plan completed - returned plan with {len(plan.get('steps', []))} steps, schema_version={plan.get('schema_version')}")
     return plan
 
 

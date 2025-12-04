@@ -317,8 +317,10 @@ def compose_plan(
     # First attempt
     raw_text = ""
     try:
+        logger.info("Calling LLM for compose_plan - task: %s", task[:100])
         resp = respond_once(messages=messages)
         raw_text = extract_assistant_text(resp)
+        logger.info("LLM response received - length: %d chars, preview: %s", len(raw_text), raw_text[:200])
     except Exception as exc:  # pragma: no cover - defensive guard
         logger.exception("Task compose agent call failed on first attempt: %s", exc)
         plan = _build_minimal_plan(task)
@@ -328,6 +330,7 @@ def compose_plan(
 
     # Retry once with explicit JSON reminder if needed
     if plan_dict is None:
+        logger.info("LLM response was not valid JSON, retrying with JSON reminder")
         retry_messages = [
             {"role": "system", "content": system_prompt},
             {
@@ -342,6 +345,7 @@ def compose_plan(
         try:
             resp = respond_once(messages=retry_messages)
             raw_text = extract_assistant_text(resp)
+            logger.info("LLM retry response received - length: %d chars, preview: %s", len(raw_text), raw_text[:200])
             plan_dict = _safe_parse_json(raw_text)
         except Exception as exc:  # pragma: no cover
             logger.exception("Task compose agent call failed on retry: %s", exc)
