@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from mcp_agent.types import ToolInvocationResult
 from mcp_agent.user_identity import normalize_user_id
-from ._common import ensure_authorized, _invoke_mcp_tool
+from ._common import _clean_payload, ensure_authorized, _invoke_mcp_tool
 
 if TYPE_CHECKING:
     from mcp_agent.core.context import AgentContext
@@ -394,4 +394,297 @@ gmail_search.__tb_output_schema__ = {
     "required": ["data", "successful"],
     "title": "FetchEmailsResponseWrapper",
     "type": "object",
+}
+
+
+def gmail_create_email_draft(
+    context: AgentContext,
+    *,
+    recipient_email: str | None = None,
+    body: str | None = None,
+    subject: str | None = None,
+    attachment: dict | None = None,
+    bcc: list[str] | str | None = None,
+    cc: list[str] | str | None = None,
+    extra_recipients: list[str] | str | None = None,
+    is_html: bool | None = False,
+    thread_id: str | None = None,
+    user_id: str = "me",
+) -> ToolInvocationResult:
+    """
+    Create a Gmail draft with optional recipients, body, subject, and attachment.
+
+    At least one of recipient_email, cc, or bcc must be provided. Subject or body must be supplied.
+    """
+    tool_name = "GMAIL_CREATE_EMAIL_DRAFT"
+    ensure_authorized(context, "gmail")
+
+    gmail_user_id = _resolve_gmail_user_id(user_id)
+    to_primary = (recipient_email or "").strip() or None
+    cc_list = _norm_string_list(cc)
+    bcc_list = _norm_string_list(bcc)
+    extra_list = _norm_string_list(extra_recipients)
+
+    if extra_list and not to_primary:
+        raise ValueError("extra_recipients requires recipient_email to be provided.")
+
+    if not (to_primary or cc_list or bcc_list):
+        raise ValueError("Provide at least one recipient via recipient_email, cc, or bcc.")
+
+    if not (subject or body):
+        raise ValueError("Either subject or body must be provided.")
+
+    payload = _clean_payload(
+        {
+            "user_id": gmail_user_id,
+            "recipient_email": to_primary,
+            "subject": subject,
+            "body": body,
+            "is_html": bool(is_html) if is_html is not None else None,
+            "cc": cc_list or None,
+            "bcc": bcc_list or None,
+            "extra_recipients": extra_list or None,
+            "thread_id": thread_id,
+            "attachment": attachment,
+        }
+    )
+
+    return _invoke_mcp_tool(context, "gmail", tool_name, payload)
+
+
+gmail_create_email_draft.__tb_output_schema__ = {
+  "properties": {
+    "data": {
+      "additionalProperties": False,
+      "description": "Data from the action execution",
+      "properties": {
+        "id": {
+          "description": "Immutable ID of the draft.",
+          "title": "Id",
+          "type": "string"
+        },
+        "message": {
+          "additionalProperties": False,
+          "description": "The created draft message resource.",
+          "properties": {
+            "historyId": {
+              "default": None,
+              "description": "The ID of the last history record that modified this message.",
+              "nullable": True,
+              "title": "History Id",
+              "type": "string"
+            },
+            "id": {
+              "default": None,
+              "description": "The immutable ID of the sent message.",
+              "nullable": True,
+              "title": "Id",
+              "type": "string"
+            },
+            "internalDate": {
+              "default": None,
+              "description": "The internal timestamp of the message in milliseconds since epoch.",
+              "nullable": True,
+              "title": "Internal Date",
+              "type": "string"
+            },
+            "labelIds": {
+              "default": None,
+              "description": "List of IDs of labels applied to this message.",
+              "items": {
+                "properties": {},
+                "type": "string"
+              },
+              "nullable": True,
+              "title": "Label Ids",
+              "type": "array"
+            },
+            "payload": {
+              "additionalProperties": True,
+              "default": None,
+              "description": "The parsed email structure, including headers and body parts.",
+              "nullable": True,
+              "title": "Payload",
+              "type": "object"
+            },
+            "raw": {
+              "default": None,
+              "description": "The entire email message in RFC 2822 format, base64url-encoded.",
+              "nullable": True,
+              "title": "Raw",
+              "type": "string"
+            },
+            "sizeEstimate": {
+              "default": None,
+              "description": "Estimated size of the message in bytes.",
+              "nullable": True,
+              "title": "Size Estimate",
+              "type": "integer"
+            },
+            "snippet": {
+              "default": None,
+              "description": "A short extract of the message text.",
+              "nullable": True,
+              "title": "Snippet",
+              "type": "string"
+            },
+            "threadId": {
+              "default": None,
+              "description": "The ID of the thread the message belongs to.",
+              "nullable": True,
+              "title": "Thread Id",
+              "type": "string"
+            }
+          },
+          "title": "Message",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "message"
+      ],
+      "title": "Data",
+      "type": "object"
+    },
+    "error": {
+      "default": None,
+      "description": "Error if any occurred during the execution of the action",
+      "nullable": True,
+      "title": "Error",
+      "type": "string"
+    },
+    "successful": {
+      "description": "Whether or not the action execution was successful or not",
+      "title": "Successful",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "data",
+    "successful"
+  ],
+  "title": "CreateEmailDraftResponseWrapper",
+  "type": "object"
+}
+
+
+def gmail_send_draft(
+    context: AgentContext,
+    draft_id: str,
+    user_id: str = "me",
+) -> ToolInvocationResult:
+    """
+    Send an existing Gmail draft by ID.
+    """
+    tool_name = "GMAIL_SEND_DRAFT"
+    ensure_authorized(context, "gmail")
+
+    gmail_user_id = _resolve_gmail_user_id(user_id)
+    payload = _clean_payload(
+        {
+            "draft_id": draft_id,
+            "user_id": gmail_user_id,
+        }
+    )
+    return _invoke_mcp_tool(context, "gmail", tool_name, payload)
+
+
+gmail_send_draft.__tb_output_schema__ = {
+  "properties": {
+    "data": {
+      "additionalProperties": False,
+      "description": "Data from the action execution",
+      "properties": {
+        "historyId": {
+          "default": None,
+          "description": "The ID of the last history record that modified this message.",
+          "nullable": True,
+          "title": "History Id",
+          "type": "string"
+        },
+        "id": {
+          "default": None,
+          "description": "The immutable ID of the sent message.",
+          "nullable": True,
+          "title": "Id",
+          "type": "string"
+        },
+        "internalDate": {
+          "default": None,
+          "description": "The internal timestamp of the message in milliseconds since epoch.",
+          "nullable": True,
+          "title": "Internal Date",
+          "type": "string"
+        },
+        "labelIds": {
+          "default": None,
+          "description": "List of IDs of labels applied to this message.",
+          "items": {
+            "properties": {},
+            "type": "string"
+          },
+          "nullable": True,
+          "title": "Label Ids",
+          "type": "array"
+        },
+        "payload": {
+          "additionalProperties": True,
+          "default": None,
+          "description": "The parsed email structure, including headers and body parts.",
+          "nullable": True,
+          "title": "Payload",
+          "type": "object"
+        },
+        "raw": {
+          "default": None,
+          "description": "The entire email message in RFC 2822 format, base64url-encoded.",
+          "nullable": True,
+          "title": "Raw",
+          "type": "string"
+        },
+        "sizeEstimate": {
+          "default": None,
+          "description": "Estimated size of the message in bytes.",
+          "nullable": True,
+          "title": "Size Estimate",
+          "type": "integer"
+        },
+        "snippet": {
+          "default": None,
+          "description": "A short extract of the message text.",
+          "nullable": True,
+          "title": "Snippet",
+          "type": "string"
+        },
+        "threadId": {
+          "default": None,
+          "description": "The ID of the thread the message belongs to.",
+          "nullable": True,
+          "title": "Thread Id",
+          "type": "string"
+        }
+      },
+      "title": "Data",
+      "type": "object"
+    },
+    "error": {
+      "default": None,
+      "description": "Error if any occurred during the execution of the action",
+      "nullable": True,
+      "title": "Error",
+      "type": "string"
+    },
+    "successful": {
+      "description": "Whether or not the action execution was successful or not",
+      "title": "Successful",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "data",
+    "successful"
+  ],
+  "title": "GmailMessageResponseWrapper",
+  "type": "object"
 }

@@ -189,7 +189,7 @@ class AgentOrchestrator:
                     action_reasoning=command.get("reasoning") or "",
                     action_input={
                         "search_query": (command.get("query") or "").strip(),
-                        "provider": command.get("provider"),
+                        "provider": command.get("provider") or command.get("server"),
                         "max_limit": command.get("limit") or command.get("max_results"),
                         "reasoning": command.get("reasoning") or "",
                     },
@@ -226,7 +226,7 @@ class AgentOrchestrator:
                 action_reasoning=reasoning,
                 action_input={
                     "search_query": query,
-                    "provider": command.get("provider"),
+                    "provider": command.get("provider") or command.get("server"),
                     "max_limit": command.get("limit") or command.get("max_results"),
                     "reasoning": reasoning,
                 },

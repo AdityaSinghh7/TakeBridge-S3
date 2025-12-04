@@ -1,3 +1,5 @@
+import json
+
 shopify_get_orders_with_filters_output_schema = {
   "properties": {
     "data": {
@@ -5384,4 +5386,4095 @@ SHOPIFY_UPDATE_ORDER_OUTPUT_SCHEMA = {
   "type": "object"
 }
 
+SHOPIFY_GET_ORDERSBY_ID_OUTPUT_SCHEMA = json.loads(
+  """{  "properties": {    "data": {      "additionalProperties": false,      "description": "Data from the action execution",      "properties": {        "admin_graphql_api_id": {          "default": null,          "description": "The GraphQL API identifier for the order.",          "nullable": true,          "title": "Admin Graphql Api Id",          "type": "string"        },        "app_id": {          "default": null,          "description": "The ID of the app that created the order.",          "nullable": true,          "title": "App Id",          "type": "integer"        },        "billing_address": {          "additionalProperties": false,          "default": null,          "description": "Represents a mailing address.",          "nullable": true,          "properties": {            "address1": {              "default": null,              "description": "The first line of the address.",              "nullable": true,              "title": "Address1",              "type": "string"            },            "address2": {              "default": null,              "description": "The second line of the address.",              "nullable": true,              "title": "Address2",              "type": "string"            },            "city": {              "default": null,              "description": "The city of the address.",              "nullable": true,              "title": "City",              "type": "string"            },            "company": {              "default": null,              "description": "The company name.",              "nullable": true,              "title": "Company",              "type": "string"            },            "country": {              "default": null,              "description": "The country of the address.",              "nullable": true,              "title": "Country",              "type": "string"            },            "country_code": {              "default": null,              "description": "The country code in ISO 3166-1 alpha-2 format.",              "nullable": true,              "title": "Country Code",              "type": "string"            },            "first_name": {              "default": null,              "description": "The first name.",              "nullable": true,              "title": "First Name",              "type": "string"            },            "last_name": {              "default": null,              "description": "The last name.",              "nullable": true,              "title": "Last Name",              "type": "string"            },            "latitude": {              "default": null,              "description": "The latitude coordinate.",              "nullable": true,              "title": "Latitude",              "type": "string"            },            "longitude": {              "default": null,              "description": "The longitude coordinate.",              "nullable": true,              "title": "Longitude",              "type": "string"            },            "name": {              "default": null,              "description": "The full name.",              "nullable": true,              "title": "Name",              "type": "string"            },            "phone": {              "default": null,              "description": "The phone number.",              "nullable": true,              "title": "Phone",              "type": "string"            },            "province": {              "default": null,              "description": "The province or state.",              "nullable": true,              "title": "Province",              "type": "string"            },            "province_code": {              "default": null,              "description": "The province or state code.",              "nullable": true,              "title": "Province Code",              "type": "string"            },            "zip": {              "default": null,              "description": "The postal or ZIP code.",              "nullable": true,              "title": "Zip",              "type": "string"            }          },          "title": "Address",          "type": "object"        },        "browser_ip": {          "default": null,          "description": "The IP address of the browser used by the customer when they placed the order. Supports both IPv4 and IPv6.",          "nullable": true,          "title": "Browser Ip",          "type": "string"        },        "buyer_accepts_marketing": {          "default": null,          "description": "Whether the customer consented to receive email updates from the shop.",          "nullable": true,          "title": "Buyer Accepts Marketing",          "type": "boolean"        },        "cancel_reason": {          "default": null,          "description": "The reason why the order was canceled. Valid values: customer, fraud, inventory, declined, other.",          "nullable": true,          "title": "Cancel Reason",          "type": "string"        },        "cancelled_at": {          "default": null,          "description": "The date and time when the order was canceled in ISO 8601 format. Returns null if the order isn't canceled.",          "nullable": true,          "title": "Cancelled At",          "type": "string"        },        "cart_token": {          "default": null,          "description": "Unique identifier for the cart. Deprecated field.",          "nullable": true,          "title": "Cart Token",          "type": "string"        },        "checkout_id": {          "default": null,          "description": "The ID of the checkout associated with the order.",          "nullable": true,          "title": "Checkout Id",          "type": "integer"        },        "checkout_token": {          "default": null,          "description": "Unique identifier for the checkout. Deprecated field.",          "nullable": true,          "title": "Checkout Token",          "type": "string"        },        "client_details": {          "additionalProperties": false,          "default": null,          "description": "Information about the browser that the customer used when they placed their order.",          "nullable": true,          "properties": {            "accept_language": {              "default": null,              "description": "The accepted language of the browser.",              "nullable": true,              "title": "Accept Language",              "type": "string"            },            "browser_height": {              "default": null,              "description": "The browser screen height in pixels.",              "nullable": true,              "title": "Browser Height",              "type": "integer"            },            "browser_ip": {              "default": null,              "description": "The IP address of the browser.",              "nullable": true,              "title": "Browser Ip",              "type": "string"            },            "browser_width": {              "default": null,              "description": "The browser screen width in pixels.",              "nullable": true,              "title": "Browser Width",              "type": "integer"            },            "session_hash": {              "default": null,              "description": "A hash of the session.",              "nullable": true,              "title": "Session Hash",              "type": "string"            },            "user_agent": {              "default": null,              "description": "The user agent string from the browser.",              "nullable": true,              "title": "User Agent",              "type": "string"            }          },          "title": "ClientDetails",          "type": "object"        },        "closed_at": {          "default": null,          "description": "The date and time when the order was closed in ISO 8601 format. Returns null if the order isn't closed.",          "nullable": true,          "title": "Closed At",          "type": "string"        },        "company": {          "additionalProperties": true,          "default": null,          "description": "Information about the company associated with the order for B2B orders. Returns null if not a B2B order.",          "nullable": true,          "title": "Company",          "type": "object"        },        "confirmation_number": {          "default": null,          "description": "A randomly generated alpha-numeric identifier for the order that may be shown to the customer.",          "nullable": true,          "title": "Confirmation Number",          "type": "string"        },        "contact_email": {          "default": null,          "description": "The customer's email address.",          "nullable": true,          "title": "Contact Email",          "type": "string"        },        "created_at": {          "description": "The date and time when the order was created in ISO 8601 format.",          "title": "Created At",          "type": "string"        },        "currency": {          "description": "The three-letter code (ISO 4217 format) for the shop currency.",          "title": "Currency",          "type": "string"        },        "current_subtotal_price": {          "default": null,          "description": "The current subtotal price of the order in the shop currency after returns, refunds, order edits, and cancellations.",          "nullable": true,          "title": "Current Subtotal Price",          "type": "string"        },        "current_subtotal_price_set": {          "additionalProperties": false,          "default": null,          "description": "Price representation in shop and presentment currencies.",          "nullable": true,          "properties": {            "presentment_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            },            "shop_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            }          },          "title": "PriceSet",          "type": "object"        },        "current_total_discounts": {          "default": null,          "description": "The current total discounts on the order in the shop currency after returns, refunds, order edits, and cancellations.",          "nullable": true,          "title": "Current Total Discounts",          "type": "string"        },        "current_total_discounts_set": {          "additionalProperties": false,          "default": null,          "description": "Price representation in shop and presentment currencies.",          "nullable": true,          "properties": {            "presentment_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            },            "shop_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            }          },          "title": "PriceSet",          "type": "object"        },        "current_total_duties_set": {          "additionalProperties": false,          "default": null,          "description": "Price representation in shop and presentment currencies.",          "nullable": true,          "properties": {            "presentment_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            },            "shop_money": {              "additionalProperties": false,              "default": null,              "description": "Price representation in shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            }          },          "title": "PriceSet",          "type": "object"        },        "current_total_price": {          "default": null,          "description": "The current total price of the order in the shop currency after returns, refunds, order edits, and cancellations.",          "nullable": true,          "title": "Current Total Price",          "type": "string"        },        "current_total_price_set": {          "additionalProperties": false,          "default": null,          "description": "Price representation in shop and presentment currencies.",          "nullable": true,          "properties": {            "presentment_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            },            "shop_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            }          },          "title": "PriceSet",          "type": "object"        },        "current_total_tax": {          "default": null,          "description": "The current total tax on the order in the shop currency after returns, refunds, order edits, and cancellations.",          "nullable": true,          "title": "Current Total Tax",          "type": "string"        },        "current_total_tax_set": {          "additionalProperties": false,          "default": null,          "description": "Price representation in shop and presentment currencies.",          "nullable": true,          "properties": {            "presentment_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            },            "shop_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            }          },          "title": "PriceSet",          "type": "object"        },        "customer": {          "additionalProperties": true,          "default": null,          "description": "Information about the customer. May be null for POS orders.",          "nullable": true,          "title": "Customer",          "type": "object"        },        "customer_locale": {          "default": null,          "description": "The two-letter language code for the customer's locale.",          "nullable": true,          "title": "Customer Locale",          "type": "string"        },        "device_id": {          "default": null,          "description": "The ID of the device that created the order.",          "nullable": true,          "title": "Device Id",          "type": "integer"        },        "discount_applications": {          "default": null,          "description": "List of discount applications.",          "items": {            "additionalProperties": true,            "properties": {},            "type": "object"          },          "nullable": true,          "title": "Discount Applications",          "type": "array"        },        "discount_codes": {          "default": null,          "description": "List of discount codes applied to the order.",          "items": {            "description": "Represents a discount code applied to the order.",            "properties": {              "amount": {                "default": null,                "description": "The amount of the discount.",                "nullable": true,                "title": "Amount",                "type": "string"              },              "code": {                "default": null,                "description": "The discount code.",                "nullable": true,                "title": "Code",                "type": "string"              },              "type": {                "default": null,                "description": "The type of discount. Valid values: fixed_amount, percentage, shipping.",                "nullable": true,                "title": "Type",                "type": "string"              }            },            "title": "DiscountCode",            "type": "object"          },          "nullable": true,          "title": "Discount Codes",          "type": "array"        },        "email": {          "default": null,          "description": "The customer's email address.",          "nullable": true,          "title": "Email",          "type": "string"        },        "estimated_taxes": {          "default": null,          "description": "Whether taxes on the order are estimated.",          "nullable": true,          "title": "Estimated Taxes",          "type": "boolean"        },        "financial_status": {          "default": null,          "description": "The status of payments associated with the order. Valid values: pending, authorized, partially_paid, paid, partially_refunded, refunded, voided.",          "nullable": true,          "title": "Financial Status",          "type": "string"        },        "fulfillment_status": {          "default": null,          "description": "The order's status in terms of fulfilled line items. Valid values: fulfilled, partial, restocked, null (unfulfilled).",          "nullable": true,          "title": "Fulfillment Status",          "type": "string"        },        "fulfillments": {          "default": null,          "description": "Array of fulfillment objects for the order.",          "items": {            "additionalProperties": true,            "properties": {},            "type": "object"          },          "nullable": true,          "title": "Fulfillments",          "type": "array"        },        "gateway": {          "default": null,          "description": "The payment gateway used for the order.",          "nullable": true,          "title": "Gateway",          "type": "string"        },        "id": {          "description": "Unique identifier for the order.",          "title": "Id",          "type": "integer"        },        "landing_site": {          "default": null,          "description": "The URL for the page where the buyer landed when entering the shop.",          "nullable": true,          "title": "Landing Site",          "type": "string"        },        "landing_site_ref": {          "default": null,          "description": "The landing site referrer.",          "nullable": true,          "title": "Landing Site Ref",          "type": "string"        },        "line_items": {          "description": "A list of line item objects, each containing information about an item in the order.",          "items": {            "description": "Represents an item in the order.",            "properties": {              "attributed_staffs": {                "default": null,                "description": "Staff members attributed to the line item.",                "items": {                  "additionalProperties": true,                  "properties": {},                  "type": "object"                },                "nullable": true,                "title": "Attributed Staffs",                "type": "array"              },              "current_quantity": {                "default": null,                "description": "The current quantity after removals.",                "nullable": true,                "title": "Current Quantity",                "type": "integer"              },              "discount_allocations": {                "default": null,                "description": "List of discount allocations.",                "items": {                  "additionalProperties": true,                  "properties": {},                  "type": "object"                },                "nullable": true,                "title": "Discount Allocations",                "type": "array"              },              "duties": {                "default": null,                "description": "List of duties applied to the line item.",                "items": {                  "additionalProperties": true,                  "properties": {},                  "type": "object"                },                "nullable": true,                "title": "Duties",                "type": "array"              },              "fulfillable_quantity": {                "default": null,                "description": "The amount available to fulfill.",                "nullable": true,                "title": "Fulfillable Quantity",                "type": "integer"              },              "fulfillment_service": {                "default": null,                "description": "The service provider fulfilling the item.",                "nullable": true,                "title": "Fulfillment Service",                "type": "string"              },              "fulfillment_status": {                "default": null,                "description": "The fulfillment status of the line item.",                "nullable": true,                "title": "Fulfillment Status",                "type": "string"              },              "gift_card": {                "default": null,                "description": "Whether the line item is a gift card.",                "nullable": true,                "title": "Gift Card",                "type": "boolean"              },              "grams": {                "default": null,                "description": "The weight of the item in grams.",                "nullable": true,                "title": "Grams",                "type": "integer"              },              "id": {                "description": "The ID of the line item.",                "title": "Id",                "type": "integer"              },              "name": {                "description": "The name of the product variant.",                "title": "Name",                "type": "string"              },              "origin_location": {                "additionalProperties": true,                "default": null,                "description": "The location from where the item is being fulfilled.",                "nullable": true,                "title": "Origin Location",                "type": "object"              },              "price": {                "description": "The price of the item.",                "title": "Price",                "type": "string"              },              "price_set": {                "additionalProperties": false,                "default": null,                "description": "Price representation in shop and presentment currencies.",                "nullable": true,                "properties": {                  "presentment_money": {                    "additionalProperties": false,                    "default": null,                    "description": "Represents an amount in both shop and presentment currencies.",                    "nullable": true,                    "properties": {                      "amount": {                        "default": null,                        "description": "The decimal amount.",                        "nullable": true,                        "title": "Amount",                        "type": "string"                      },                      "currency_code": {                        "default": null,                        "description": "The currency code.",                        "nullable": true,                        "title": "Currency Code",                        "type": "string"                      }                    },                    "title": "MoneySet",                    "type": "object"                  },                  "shop_money": {                    "additionalProperties": false,                    "default": null,                    "description": "Represents an amount in both shop and presentment currencies.",                    "nullable": true,                    "properties": {                      "amount": {                        "default": null,                        "description": "The decimal amount.",                        "nullable": true,                        "title": "Amount",                        "type": "string"                      },                      "currency_code": {                        "default": null,                        "description": "The currency code.",                        "nullable": true,                        "title": "Currency Code",                        "type": "string"                      }                    },                    "title": "MoneySet",                    "type": "object"                  }                },                "title": "PriceSet",                "type": "object"              },              "product_id": {                "default": null,                "description": "The ID of the product.",                "nullable": true,                "title": "Product Id",                "type": "integer"              },              "properties": {                "default": null,                "description": "Custom properties for the line item.",                "items": {                  "additionalProperties": true,                  "properties": {},                  "type": "object"                },                "nullable": true,                "title": "Properties",                "type": "array"              },              "quantity": {                "description": "The number of items purchased.",                "title": "Quantity",                "type": "integer"              },              "requires_shipping": {                "default": null,                "description": "Whether the line item requires shipping.",                "nullable": true,                "title": "Requires Shipping",                "type": "boolean"              },              "sku": {                "default": null,                "description": "The SKU of the product variant.",                "nullable": true,                "title": "Sku",                "type": "string"              },              "tax_lines": {                "default": null,                "description": "List of tax line objects.",                "items": {                  "additionalProperties": true,                  "properties": {},                  "type": "object"                },                "nullable": true,                "title": "Tax Lines",                "type": "array"              },              "taxable": {                "default": null,                "description": "Whether the line item is taxable.",                "nullable": true,                "title": "Taxable",                "type": "boolean"              },              "tip_payment_gateway": {                "default": null,                "description": "The payment gateway used to tender the tip.",                "nullable": true,                "title": "Tip Payment Gateway",                "type": "string"              },              "tip_payment_method": {                "default": null,                "description": "The payment method used for the tip.",                "nullable": true,                "title": "Tip Payment Method",                "type": "string"              },              "title": {                "description": "The title of the product.",                "title": "Title",                "type": "string"              },              "total_discount": {                "default": null,                "description": "The total discount amount applied to the line item.",                "nullable": true,                "title": "Total Discount",                "type": "string"              },              "total_discount_set": {                "additionalProperties": false,                "default": null,                "description": "Price representation in shop and presentment currencies.",                "nullable": true,                "properties": {                  "presentment_money": {                    "additionalProperties": false,                    "default": null,                    "description": "Represents an amount in both shop and presentment currencies.",                    "nullable": true,                    "properties": {                      "amount": {                        "default": null,                        "description": "The decimal amount.",                        "nullable": true,                        "title": "Amount",                        "type": "string"                      },                      "currency_code": {                        "default": null,                        "description": "The currency code.",                        "nullable": true,                        "title": "Currency Code",                        "type": "string"                      }                    },                    "title": "MoneySet",                    "type": "object"                  },                  "shop_money": {                    "additionalProperties": false,                    "default": null,                    "description": "Represents an amount in both shop and presentment currencies.",                    "nullable": true,                    "properties": {                      "amount": {                        "default": null,                        "description": "The decimal amount.",                        "nullable": true,                        "title": "Amount",                        "type": "string"                      },                      "currency_code": {                        "default": null,                        "description": "The currency code.",                        "nullable": true,                        "title": "Currency Code",                        "type": "string"                      }                    },                    "title": "MoneySet",                    "type": "object"                  }                },                "title": "PriceSet",                "type": "object"              },              "variant_id": {                "default": null,                "description": "The ID of the product variant.",                "nullable": true,                "title": "Variant Id",                "type": "integer"              },              "variant_title": {                "default": null,                "description": "The title of the product variant.",                "nullable": true,                "title": "Variant Title",                "type": "string"              },              "vendor": {                "default": null,                "description": "The vendor of the product.",                "nullable": true,                "title": "Vendor",                "type": "string"              }            },            "required": [              "id",              "title",              "name",              "quantity",              "price"            ],            "title": "LineItem",            "type": "object"          },          "title": "Line Items",          "type": "array"        },        "location_id": {          "default": null,          "description": "The ID of the physical location where the order was processed.",          "nullable": true,          "title": "Location Id",          "type": "integer"        },        "name": {          "description": "The order name, which is a unique identifier starting with #.",          "title": "Name",          "type": "string"        },        "note": {          "default": null,          "description": "An optional note attached to the order.",          "nullable": true,          "title": "Note",          "type": "string"        },        "note_attributes": {          "default": null,          "description": "Extra information added to the order by the customer.",          "items": {            "description": "Extra information added to the order by the customer.",            "properties": {              "name": {                "default": null,                "description": "The attribute name.",                "nullable": true,                "title": "Name",                "type": "string"              },              "value": {                "default": null,                "description": "The attribute value.",                "nullable": true,                "title": "Value",                "type": "string"              }            },            "title": "NoteAttribute",            "type": "object"          },          "nullable": true,          "title": "Note Attributes",          "type": "array"        },        "number": {          "description": "The sequential order number, used for display purposes.",          "title": "Number",          "type": "integer"        },        "order_number": {          "description": "The order's position in the shop's order list.",          "title": "Order Number",          "type": "integer"        },        "order_status_url": {          "default": null,          "description": "The URL pointing to the order status web page.",          "nullable": true,          "title": "Order Status Url",          "type": "string"        },        "original_total_duties_set": {          "additionalProperties": false,          "default": null,          "description": "Price representation in shop and presentment currencies.",          "nullable": true,          "properties": {            "presentment_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            },            "shop_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            }          },          "title": "PriceSet",          "type": "object"        },        "payment_gateway_names": {          "default": null,          "description": "The list of payment gateways used for the order.",          "items": {            "properties": {},            "type": "string"          },          "nullable": true,          "title": "Payment Gateway Names",          "type": "array"        },        "phone": {          "default": null,          "description": "The customer's phone number.",          "nullable": true,          "title": "Phone",          "type": "string"        },        "presentment_currency": {          "default": null,          "description": "The three-letter code (ISO 4217 format) for the currency that the customer used at checkout.",          "nullable": true,          "title": "Presentment Currency",          "type": "string"        },        "processed_at": {          "default": null,          "description": "The date and time when the order was processed in ISO 8601 format.",          "nullable": true,          "title": "Processed At",          "type": "string"        },        "processing_method": {          "default": null,          "description": "The payment processing method. Valid values: checkout, direct, manual, offsite, express.",          "nullable": true,          "title": "Processing Method",          "type": "string"        },        "reference": {          "default": null,          "description": "The reference number for the order.",          "nullable": true,          "title": "Reference",          "type": "string"        },        "referring_site": {          "default": null,          "description": "The website that the customer clicked on to come to the shop.",          "nullable": true,          "title": "Referring Site",          "type": "string"        },        "refunds": {          "default": null,          "description": "List of refunds applied to the order.",          "items": {            "additionalProperties": true,            "properties": {},            "type": "object"          },          "nullable": true,          "title": "Refunds",          "type": "array"        },        "shipping_address": {          "additionalProperties": false,          "default": null,          "description": "Represents a mailing address.",          "nullable": true,          "properties": {            "address1": {              "default": null,              "description": "The first line of the address.",              "nullable": true,              "title": "Address1",              "type": "string"            },            "address2": {              "default": null,              "description": "The second line of the address.",              "nullable": true,              "title": "Address2",              "type": "string"            },            "city": {              "default": null,              "description": "The city of the address.",              "nullable": true,              "title": "City",              "type": "string"            },            "company": {              "default": null,              "description": "The company name.",              "nullable": true,              "title": "Company",              "type": "string"            },            "country": {              "default": null,              "description": "The country of the address.",              "nullable": true,              "title": "Country",              "type": "string"            },            "country_code": {              "default": null,              "description": "The country code in ISO 3166-1 alpha-2 format.",              "nullable": true,              "title": "Country Code",              "type": "string"            },            "first_name": {              "default": null,              "description": "The first name.",              "nullable": true,              "title": "First Name",              "type": "string"            },            "last_name": {              "default": null,              "description": "The last name.",              "nullable": true,              "title": "Last Name",              "type": "string"            },            "latitude": {              "default": null,              "description": "The latitude coordinate.",              "nullable": true,              "title": "Latitude",              "type": "string"            },            "longitude": {              "default": null,              "description": "The longitude coordinate.",              "nullable": true,              "title": "Longitude",              "type": "string"            },            "name": {              "default": null,              "description": "The full name.",              "nullable": true,              "title": "Name",              "type": "string"            },            "phone": {              "default": null,              "description": "The phone number.",              "nullable": true,              "title": "Phone",              "type": "string"            },            "province": {              "default": null,              "description": "The province or state.",              "nullable": true,              "title": "Province",              "type": "string"            },            "province_code": {              "default": null,              "description": "The province or state code.",              "nullable": true,              "title": "Province Code",              "type": "string"            },            "zip": {              "default": null,              "description": "The postal or ZIP code.",              "nullable": true,              "title": "Zip",              "type": "string"            }          },          "title": "Address",          "type": "object"        },        "shipping_lines": {          "default": null,          "description": "Array of shipping line objects, each containing information about the shipping methods used.",          "items": {            "description": "Represents a shipping method used for the order.",            "properties": {              "carrier_identifier": {                "default": null,                "description": "A reference to the carrier service.",                "nullable": true,                "title": "Carrier Identifier",                "type": "string"              },              "code": {                "default": null,                "description": "A reference to the shipping method.",                "nullable": true,                "title": "Code",                "type": "string"              },              "discount_allocations": {                "default": null,                "description": "List of discount allocations for the shipping line.",                "items": {                  "additionalProperties": true,                  "properties": {},                  "type": "object"                },                "nullable": true,                "title": "Discount Allocations",                "type": "array"              },              "id": {                "default": null,                "description": "The ID of the shipping line.",                "nullable": true,                "title": "Id",                "type": "integer"              },              "price": {                "default": null,                "description": "The price of the shipping method.",                "nullable": true,                "title": "Price",                "type": "string"              },              "price_set": {                "additionalProperties": false,                "default": null,                "description": "Price representation in shop and presentment currencies.",                "nullable": true,                "properties": {                  "presentment_money": {                    "additionalProperties": false,                    "default": null,                    "description": "Represents an amount in both shop and presentment currencies.",                    "nullable": true,                    "properties": {                      "amount": {                        "default": null,                        "description": "The decimal amount.",                        "nullable": true,                        "title": "Amount",                        "type": "string"                      },                      "currency_code": {                        "default": null,                        "description": "The currency code.",                        "nullable": true,                        "title": "Currency Code",                        "type": "string"                      }                    },                    "title": "MoneySet",                    "type": "object"                  },                  "shop_money": {                    "additionalProperties": false,                    "default": null,                    "description": "Represents an amount in both shop and presentment currencies.",                    "nullable": true,                    "properties": {                      "amount": {                        "default": null,                        "description": "The decimal amount.",                        "nullable": true,                        "title": "Amount",                        "type": "string"                      },                      "currency_code": {                        "default": null,                        "description": "The currency code.",                        "nullable": true,                        "title": "Currency Code",                        "type": "string"                      }                    },                    "title": "MoneySet",                    "type": "object"                  }                },                "title": "PriceSet",                "type": "object"              },              "requested_fulfillment_service_id": {                "default": null,                "description": "The ID of the fulfillment service.",                "nullable": true,                "title": "Requested Fulfillment Service Id",                "type": "string"              },              "source": {                "default": null,                "description": "The source of the shipping method.",                "nullable": true,                "title": "Source",                "type": "string"              },              "tax_lines": {                "default": null,                "description": "List of tax line objects for the shipping line.",                "items": {                  "additionalProperties": true,                  "properties": {},                  "type": "object"                },                "nullable": true,                "title": "Tax Lines",                "type": "array"              },              "title": {                "default": null,                "description": "The title of the shipping method.",                "nullable": true,                "title": "Title",                "type": "string"              }            },            "title": "ShippingLine",            "type": "object"          },          "nullable": true,          "title": "Shipping Lines",          "type": "array"        },        "source_identifier": {          "default": null,          "description": "The ID of the order source.",          "nullable": true,          "title": "Source Identifier",          "type": "string"        },        "source_name": {          "default": null,          "description": "Where the order originated. Valid values: web, pos, mobile, draft_order.",          "nullable": true,          "title": "Source Name",          "type": "string"        },        "source_url": {          "default": null,          "description": "The URL of the order source.",          "nullable": true,          "title": "Source Url",          "type": "string"        },        "subtotal_price": {          "default": null,          "description": "The price of the order before shipping and taxes.",          "nullable": true,          "title": "Subtotal Price",          "type": "string"        },        "subtotal_price_set": {          "additionalProperties": false,          "default": null,          "description": "Price representation in shop and presentment currencies.",          "nullable": true,          "properties": {            "presentment_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            },            "shop_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            }          },          "title": "PriceSet",          "type": "object"        },        "tags": {          "default": null,          "description": "Tags attached to the order, formatted as a string of comma-separated values.",          "nullable": true,          "title": "Tags",          "type": "string"        },        "tax_lines": {          "default": null,          "description": "Array of tax line objects, each of which details a tax applied to the order.",          "items": {            "description": "Represents a tax applied to the order.",            "properties": {              "channel_liable": {                "default": null,                "description": "Whether the channel is liable for the tax.",                "nullable": true,                "title": "Channel Liable",                "type": "boolean"              },              "price": {                "default": null,                "description": "The amount of tax to be charged.",                "nullable": true,                "title": "Price",                "type": "string"              },              "price_set": {                "additionalProperties": false,                "default": null,                "description": "Price representation in shop and presentment currencies.",                "nullable": true,                "properties": {                  "presentment_money": {                    "additionalProperties": false,                    "default": null,                    "description": "Represents an amount in both shop and presentment currencies.",                    "nullable": true,                    "properties": {                      "amount": {                        "default": null,                        "description": "The decimal amount.",                        "nullable": true,                        "title": "Amount",                        "type": "string"                      },                      "currency_code": {                        "default": null,                        "description": "The currency code.",                        "nullable": true,                        "title": "Currency Code",                        "type": "string"                      }                    },                    "title": "MoneySet",                    "type": "object"                  },                  "shop_money": {                    "additionalProperties": false,                    "default": null,                    "description": "Represents an amount in both shop and presentment currencies.",                    "nullable": true,                    "properties": {                      "amount": {                        "default": null,                        "description": "The decimal amount.",                        "nullable": true,                        "title": "Amount",                        "type": "string"                      },                      "currency_code": {                        "default": null,                        "description": "The currency code.",                        "nullable": true,                        "title": "Currency Code",                        "type": "string"                      }                    },                    "title": "MoneySet",                    "type": "object"                  }                },                "title": "PriceSet",                "type": "object"              },              "rate": {                "default": null,                "description": "The tax rate applied.",                "nullable": true,                "title": "Rate",                "type": "number"              },              "title": {                "default": null,                "description": "The name of the tax.",                "nullable": true,                "title": "Title",                "type": "string"              }            },            "title": "TaxLine",            "type": "object"          },          "nullable": true,          "title": "Tax Lines",          "type": "array"        },        "taxes_included": {          "default": null,          "description": "Whether taxes are included in the order subtotal.",          "nullable": true,          "title": "Taxes Included",          "type": "boolean"        },        "test": {          "default": null,          "description": "Whether this is a test order.",          "nullable": true,          "title": "Test",          "type": "boolean"        },        "token": {          "description": "A unique token for the order.",          "title": "Token",          "type": "string"        },        "total_discounts": {          "default": null,          "description": "The total discounts applied to the order.",          "nullable": true,          "title": "Total Discounts",          "type": "string"        },        "total_discounts_set": {          "additionalProperties": false,          "default": null,          "description": "Price representation in shop and presentment currencies.",          "nullable": true,          "properties": {            "presentment_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            },            "shop_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            }          },          "title": "PriceSet",          "type": "object"        },        "total_line_items_price": {          "default": null,          "description": "The sum of all line item prices before discounts.",          "nullable": true,          "title": "Total Line Items Price",          "type": "string"        },        "total_line_items_price_set": {          "additionalProperties": false,          "default": null,          "description": "Price representation in shop and presentment currencies.",          "nullable": true,          "properties": {            "presentment_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            },            "shop_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            }          },          "title": "PriceSet",          "type": "object"        },        "total_outstanding": {          "default": null,          "description": "The total outstanding amount of the order.",          "nullable": true,          "title": "Total Outstanding",          "type": "string"        },        "total_price": {          "description": "The sum of all line item prices, discounts, shipping, and taxes for the order.",          "title": "Total Price",          "type": "string"        },        "total_price_set": {          "additionalProperties": false,          "default": null,          "description": "Price representation in shop and presentment currencies.",          "nullable": true,          "properties": {            "presentment_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            },            "shop_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            }          },          "title": "PriceSet",          "type": "object"        },        "total_shipping_price_set": {          "additionalProperties": false,          "default": null,          "description": "Price representation in shop and presentment currencies.",          "nullable": true,          "properties": {            "presentment_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            },            "shop_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            }          },          "title": "PriceSet",          "type": "object"        },        "total_tax": {          "default": null,          "description": "The sum of all taxes applied to the order.",          "nullable": true,          "title": "Total Tax",          "type": "string"        },        "total_tax_set": {          "additionalProperties": false,          "default": null,          "description": "Price representation in shop and presentment currencies.",          "nullable": true,          "properties": {            "presentment_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            },            "shop_money": {              "additionalProperties": false,              "default": null,              "description": "Represents an amount in both shop and presentment currencies.",              "nullable": true,              "properties": {                "amount": {                  "default": null,                  "description": "The decimal amount.",                  "nullable": true,                  "title": "Amount",                  "type": "string"                },                "currency_code": {                  "default": null,                  "description": "The currency code.",                  "nullable": true,                  "title": "Currency Code",                  "type": "string"                }              },              "title": "MoneySet",              "type": "object"            }          },          "title": "PriceSet",          "type": "object"        },        "total_tip_received": {          "default": null,          "description": "The total tip amount received for the order.",          "nullable": true,          "title": "Total Tip Received",          "type": "string"        },        "total_weight": {          "default": null,          "description": "The sum of all line item weights in grams.",          "nullable": true,          "title": "Total Weight",          "type": "integer"        },        "updated_at": {          "description": "The date and time when the order was last modified in ISO 8601 format.",          "title": "Updated At",          "type": "string"        },        "user_id": {          "default": null,          "description": "The ID of the user who created the order.",          "nullable": true,          "title": "User Id",          "type": "integer"        }      },      "required": [        "id",        "created_at",        "currency",        "line_items",        "name",        "number",        "order_number",        "token",        "total_price",        "updated_at"      ],      "title": "Data",      "type": "object"    },    "error": {      "default": null,      "description": "Error if any occurred during the execution of the action",      "nullable": true,      "title": "Error",      "type": "string"    },    "successful": {      "description": "Whether or not the action execution was successful or not",      "title": "Successful",      "type": "boolean"    }  },  "required": [    "data",    "successful"  ],  "title": "GetOrdersbyIdResponseWrapper",  "type": "object"}"""
+)
+
+SHOPIFY_GET_ORDER_LIST_OUTPUT_SCHEMA = json.loads(
+  """{
+  "properties": {
+    "data": {
+      "additionalProperties": false,
+      "description": "Data from the action execution",
+      "properties": {
+        "orders": {
+          "description": "Array of order objects returned by the API.",
+          "items": {
+            "description": "Represents a Shopify order object.",
+            "properties": {
+              "admin_graphql_api_id": {
+                "default": null,
+                "description": "The GraphQL API identifier for the order (format: gid://shopify/Order/[ID]).",
+                "nullable": true,
+                "title": "Admin Graphql Api Id",
+                "type": "string"
+              },
+              "app_id": {
+                "default": null,
+                "description": "The ID of the app that created the order.",
+                "nullable": true,
+                "title": "App Id",
+                "type": "integer"
+              },
+              "billing_address": {
+                "additionalProperties": false,
+                "default": null,
+                "description": "Represents a mailing address.",
+                "nullable": true,
+                "properties": {
+                  "address1": {
+                    "default": null,
+                    "description": "Street address line 1.",
+                    "nullable": true,
+                    "title": "Address1",
+                    "type": "string"
+                  },
+                  "address2": {
+                    "default": null,
+                    "description": "Street address line 2.",
+                    "nullable": true,
+                    "title": "Address2",
+                    "type": "string"
+                  },
+                  "city": {
+                    "default": null,
+                    "description": "City name.",
+                    "nullable": true,
+                    "title": "City",
+                    "type": "string"
+                  },
+                  "company": {
+                    "default": null,
+                    "description": "Company name.",
+                    "nullable": true,
+                    "title": "Company",
+                    "type": "string"
+                  },
+                  "country": {
+                    "default": null,
+                    "description": "Country name.",
+                    "nullable": true,
+                    "title": "Country",
+                    "type": "string"
+                  },
+                  "country_code": {
+                    "default": null,
+                    "description": "Two-letter country code.",
+                    "nullable": true,
+                    "title": "Country Code",
+                    "type": "string"
+                  },
+                  "first_name": {
+                    "default": null,
+                    "description": "First name.",
+                    "nullable": true,
+                    "title": "First Name",
+                    "type": "string"
+                  },
+                  "last_name": {
+                    "default": null,
+                    "description": "Last name.",
+                    "nullable": true,
+                    "title": "Last Name",
+                    "type": "string"
+                  },
+                  "latitude": {
+                    "default": null,
+                    "description": "Latitude coordinate.",
+                    "nullable": true,
+                    "title": "Latitude",
+                    "type": "number"
+                  },
+                  "longitude": {
+                    "default": null,
+                    "description": "Longitude coordinate.",
+                    "nullable": true,
+                    "title": "Longitude",
+                    "type": "number"
+                  },
+                  "name": {
+                    "default": null,
+                    "description": "Full name.",
+                    "nullable": true,
+                    "title": "Name",
+                    "type": "string"
+                  },
+                  "phone": {
+                    "default": null,
+                    "description": "Phone number.",
+                    "nullable": true,
+                    "title": "Phone",
+                    "type": "string"
+                  },
+                  "province": {
+                    "default": null,
+                    "description": "Province or state name.",
+                    "nullable": true,
+                    "title": "Province",
+                    "type": "string"
+                  },
+                  "province_code": {
+                    "default": null,
+                    "description": "Province or state code.",
+                    "nullable": true,
+                    "title": "Province Code",
+                    "type": "string"
+                  },
+                  "zip": {
+                    "default": null,
+                    "description": "Postal or ZIP code.",
+                    "nullable": true,
+                    "title": "Zip",
+                    "type": "string"
+                  }
+                },
+                "title": "Address",
+                "type": "object"
+              },
+              "browser_ip": {
+                "default": null,
+                "description": "The IP address of the browser used by the customer when they placed the order. Both IPv4 and IPv6 are supported.",
+                "nullable": true,
+                "title": "Browser Ip",
+                "type": "string"
+              },
+              "buyer_accepts_marketing": {
+                "default": null,
+                "description": "Whether the customer consented to receive email updates from the shop.",
+                "nullable": true,
+                "title": "Buyer Accepts Marketing",
+                "type": "boolean"
+              },
+              "cancel_reason": {
+                "default": null,
+                "description": "The reason why the order was canceled. Valid values: customer, fraud, inventory, declined, other.",
+                "nullable": true,
+                "title": "Cancel Reason",
+                "type": "string"
+              },
+              "cancelled_at": {
+                "default": null,
+                "description": "The date and time when the order was canceled in ISO 8601 format. Returns null if the order isn't canceled.",
+                "nullable": true,
+                "title": "Cancelled At",
+                "type": "string"
+              },
+              "cart_token": {
+                "default": null,
+                "description": "A unique value when referencing the cart that's associated with the order. Deprecated field.",
+                "nullable": true,
+                "title": "Cart Token",
+                "type": "string"
+              },
+              "checkout_id": {
+                "default": null,
+                "description": "The ID of the order placed on the originating platform, such as a unique POS or third-party identifier.",
+                "nullable": true,
+                "title": "Checkout Id",
+                "type": "integer"
+              },
+              "checkout_token": {
+                "default": null,
+                "description": "A unique value when referencing the checkout that's associated with the order. Deprecated field.",
+                "nullable": true,
+                "title": "Checkout Token",
+                "type": "string"
+              },
+              "client_details": {
+                "additionalProperties": true,
+                "default": null,
+                "description": "Information about the browser that the customer used when they placed their order, including user agent and session hash.",
+                "nullable": true,
+                "title": "Client Details",
+                "type": "object"
+              },
+              "closed_at": {
+                "default": null,
+                "description": "The date and time when the order was closed in ISO 8601 format. Returns null if the order isn't closed.",
+                "nullable": true,
+                "title": "Closed At",
+                "type": "string"
+              },
+              "company": {
+                "additionalProperties": true,
+                "default": null,
+                "description": "Represents information about the purchasing company for the order.",
+                "nullable": true,
+                "title": "Company",
+                "type": "object"
+              },
+              "confirmation_number": {
+                "default": null,
+                "description": "A randomly generated alpha-numeric identifier for the order.",
+                "nullable": true,
+                "title": "Confirmation Number",
+                "type": "string"
+              },
+              "confirmed": {
+                "default": null,
+                "description": "Whether the order has been confirmed.",
+                "nullable": true,
+                "title": "Confirmed",
+                "type": "boolean"
+              },
+              "contact_email": {
+                "default": null,
+                "description": "The contact email address for the order.",
+                "nullable": true,
+                "title": "Contact Email",
+                "type": "string"
+              },
+              "created_at": {
+                "default": null,
+                "description": "The date and time when the order was created in ISO 8601 format.",
+                "nullable": true,
+                "title": "Created At",
+                "type": "string"
+              },
+              "currency": {
+                "default": null,
+                "description": "The three-letter code (ISO 4217) for the shop currency.",
+                "nullable": true,
+                "title": "Currency",
+                "type": "string"
+              },
+              "current_subtotal_price": {
+                "default": null,
+                "description": "The current subtotal price of the order in the shop currency, updated according to refunds.",
+                "nullable": true,
+                "title": "Current Subtotal Price",
+                "type": "string"
+              },
+              "current_subtotal_price_set": {
+                "additionalProperties": false,
+                "default": null,
+                "description": "Represents a price in both shop and presentment currencies.",
+                "nullable": true,
+                "properties": {
+                  "presentment_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  },
+                  "shop_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  }
+                },
+                "title": "MoneySet",
+                "type": "object"
+              },
+              "current_total_additional_fees_set": {
+                "additionalProperties": false,
+                "default": null,
+                "description": "Represents a price in both shop and presentment currencies.",
+                "nullable": true,
+                "properties": {
+                  "presentment_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  },
+                  "shop_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  }
+                },
+                "title": "MoneySet",
+                "type": "object"
+              },
+              "current_total_discounts": {
+                "default": null,
+                "description": "The current total discounts on the order in the shop currency, updated according to refunds.",
+                "nullable": true,
+                "title": "Current Total Discounts",
+                "type": "string"
+              },
+              "current_total_discounts_set": {
+                "additionalProperties": false,
+                "default": null,
+                "description": "Represents a price in both shop and presentment currencies.",
+                "nullable": true,
+                "properties": {
+                  "presentment_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  },
+                  "shop_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  }
+                },
+                "title": "MoneySet",
+                "type": "object"
+              },
+              "current_total_duties_set": {
+                "additionalProperties": false,
+                "default": null,
+                "description": "Represents a price in both shop and presentment currencies.",
+                "nullable": true,
+                "properties": {
+                  "presentment_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  },
+                  "shop_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  }
+                },
+                "title": "MoneySet",
+                "type": "object"
+              },
+              "current_total_price": {
+                "default": null,
+                "description": "The current total price of the order in the shop currency, updated according to refunds.",
+                "nullable": true,
+                "title": "Current Total Price",
+                "type": "string"
+              },
+              "current_total_price_set": {
+                "additionalProperties": false,
+                "default": null,
+                "description": "Represents a price in both shop and presentment currencies.",
+                "nullable": true,
+                "properties": {
+                  "presentment_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  },
+                  "shop_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  }
+                },
+                "title": "MoneySet",
+                "type": "object"
+              },
+              "current_total_tax": {
+                "default": null,
+                "description": "The current total tax amount for the order.",
+                "nullable": true,
+                "title": "Current Total Tax",
+                "type": "string"
+              },
+              "current_total_tax_set": {
+                "additionalProperties": false,
+                "default": null,
+                "description": "Represents a price in both shop and presentment currencies.",
+                "nullable": true,
+                "properties": {
+                  "presentment_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  },
+                  "shop_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  }
+                },
+                "title": "MoneySet",
+                "type": "object"
+              },
+              "customer": {
+                "additionalProperties": false,
+                "default": null,
+                "description": "Represents customer information.",
+                "nullable": true,
+                "properties": {
+                  "accepts_marketing": {
+                    "default": null,
+                    "description": "Whether the customer has consented to receive marketing material.",
+                    "nullable": true,
+                    "title": "Accepts Marketing",
+                    "type": "boolean"
+                  },
+                  "accepts_marketing_updated_at": {
+                    "default": null,
+                    "description": "The date and time when the customer consented or objected to receiving marketing material.",
+                    "nullable": true,
+                    "title": "Accepts Marketing Updated At",
+                    "type": "string"
+                  },
+                  "admin_graphql_api_id": {
+                    "default": null,
+                    "description": "The GraphQL API identifier for the customer.",
+                    "nullable": true,
+                    "title": "Admin Graphql Api Id",
+                    "type": "string"
+                  },
+                  "created_at": {
+                    "default": null,
+                    "description": "The date and time when the customer was created.",
+                    "nullable": true,
+                    "title": "Created At",
+                    "type": "string"
+                  },
+                  "currency": {
+                    "default": null,
+                    "description": "The three-letter code for the currency that the customer used when they paid for their last order.",
+                    "nullable": true,
+                    "title": "Currency",
+                    "type": "string"
+                  },
+                  "default_address": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a mailing address.",
+                    "nullable": true,
+                    "properties": {
+                      "address1": {
+                        "default": null,
+                        "description": "Street address line 1.",
+                        "nullable": true,
+                        "title": "Address1",
+                        "type": "string"
+                      },
+                      "address2": {
+                        "default": null,
+                        "description": "Street address line 2.",
+                        "nullable": true,
+                        "title": "Address2",
+                        "type": "string"
+                      },
+                      "city": {
+                        "default": null,
+                        "description": "City name.",
+                        "nullable": true,
+                        "title": "City",
+                        "type": "string"
+                      },
+                      "company": {
+                        "default": null,
+                        "description": "Company name.",
+                        "nullable": true,
+                        "title": "Company",
+                        "type": "string"
+                      },
+                      "country": {
+                        "default": null,
+                        "description": "Country name.",
+                        "nullable": true,
+                        "title": "Country",
+                        "type": "string"
+                      },
+                      "country_code": {
+                        "default": null,
+                        "description": "Two-letter country code.",
+                        "nullable": true,
+                        "title": "Country Code",
+                        "type": "string"
+                      },
+                      "first_name": {
+                        "default": null,
+                        "description": "First name.",
+                        "nullable": true,
+                        "title": "First Name",
+                        "type": "string"
+                      },
+                      "last_name": {
+                        "default": null,
+                        "description": "Last name.",
+                        "nullable": true,
+                        "title": "Last Name",
+                        "type": "string"
+                      },
+                      "latitude": {
+                        "default": null,
+                        "description": "Latitude coordinate.",
+                        "nullable": true,
+                        "title": "Latitude",
+                        "type": "number"
+                      },
+                      "longitude": {
+                        "default": null,
+                        "description": "Longitude coordinate.",
+                        "nullable": true,
+                        "title": "Longitude",
+                        "type": "number"
+                      },
+                      "name": {
+                        "default": null,
+                        "description": "Full name.",
+                        "nullable": true,
+                        "title": "Name",
+                        "type": "string"
+                      },
+                      "phone": {
+                        "default": null,
+                        "description": "Phone number.",
+                        "nullable": true,
+                        "title": "Phone",
+                        "type": "string"
+                      },
+                      "province": {
+                        "default": null,
+                        "description": "Province or state name.",
+                        "nullable": true,
+                        "title": "Province",
+                        "type": "string"
+                      },
+                      "province_code": {
+                        "default": null,
+                        "description": "Province or state code.",
+                        "nullable": true,
+                        "title": "Province Code",
+                        "type": "string"
+                      },
+                      "zip": {
+                        "default": null,
+                        "description": "Postal or ZIP code.",
+                        "nullable": true,
+                        "title": "Zip",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Address",
+                    "type": "object"
+                  },
+                  "email": {
+                    "default": null,
+                    "description": "The customer's email address.",
+                    "nullable": true,
+                    "title": "Email",
+                    "type": "string"
+                  },
+                  "first_name": {
+                    "default": null,
+                    "description": "The customer's first name.",
+                    "nullable": true,
+                    "title": "First Name",
+                    "type": "string"
+                  },
+                  "id": {
+                    "default": null,
+                    "description": "The unique identifier for the customer.",
+                    "nullable": true,
+                    "title": "Id",
+                    "type": "integer"
+                  },
+                  "last_name": {
+                    "default": null,
+                    "description": "The customer's last name.",
+                    "nullable": true,
+                    "title": "Last Name",
+                    "type": "string"
+                  },
+                  "phone": {
+                    "default": null,
+                    "description": "The customer's phone number.",
+                    "nullable": true,
+                    "title": "Phone",
+                    "type": "string"
+                  },
+                  "tags": {
+                    "default": null,
+                    "description": "A comma-separated list of tags that have been added to the customer.",
+                    "nullable": true,
+                    "title": "Tags",
+                    "type": "string"
+                  },
+                  "updated_at": {
+                    "default": null,
+                    "description": "The date and time when the customer was last updated.",
+                    "nullable": true,
+                    "title": "Updated At",
+                    "type": "string"
+                  }
+                },
+                "title": "Customer",
+                "type": "object"
+              },
+              "customer_locale": {
+                "default": null,
+                "description": "The customer's language and region preference at the time of purchase (e.g., 'en', 'fr-CA', 'es-MX').",
+                "nullable": true,
+                "title": "Customer Locale",
+                "type": "string"
+              },
+              "device_id": {
+                "default": null,
+                "description": "The device ID, which will include the pos_device_id for POS orders.",
+                "nullable": true,
+                "title": "Device Id",
+                "type": "integer"
+              },
+              "discount_applications": {
+                "default": null,
+                "description": "List of discount applications with type, code/title, and amount information.",
+                "items": {
+                  "description": "Represents a discount application.",
+                  "properties": {
+                    "allocation_method": {
+                      "default": null,
+                      "description": "How the discount is allocated (across, each, one).",
+                      "nullable": true,
+                      "title": "Allocation Method",
+                      "type": "string"
+                    },
+                    "code": {
+                      "default": null,
+                      "description": "The discount code, if applicable.",
+                      "nullable": true,
+                      "title": "Code",
+                      "type": "string"
+                    },
+                    "description": {
+                      "default": null,
+                      "description": "The description of the discount.",
+                      "nullable": true,
+                      "title": "Description",
+                      "type": "string"
+                    },
+                    "target_selection": {
+                      "default": null,
+                      "description": "The selection method for line items (all, entitled, explicit).",
+                      "nullable": true,
+                      "title": "Target Selection",
+                      "type": "string"
+                    },
+                    "target_type": {
+                      "default": null,
+                      "description": "The type of item the discount applies to (line_item, shipping_line).",
+                      "nullable": true,
+                      "title": "Target Type",
+                      "type": "string"
+                    },
+                    "title": {
+                      "default": null,
+                      "description": "The title of the discount or the discount code.",
+                      "nullable": true,
+                      "title": "Title",
+                      "type": "string"
+                    },
+                    "type": {
+                      "default": null,
+                      "description": "Type of discount (fixed_amount, percentage, shipping, automatic, discount_code, manual, script).",
+                      "nullable": true,
+                      "title": "Type",
+                      "type": "string"
+                    },
+                    "value": {
+                      "default": null,
+                      "description": "The discount value.",
+                      "nullable": true,
+                      "title": "Value",
+                      "type": "string"
+                    },
+                    "value_type": {
+                      "default": null,
+                      "description": "The type of discount value (fixed_amount, percentage).",
+                      "nullable": true,
+                      "title": "Value Type",
+                      "type": "string"
+                    }
+                  },
+                  "title": "DiscountApplication",
+                  "type": "object"
+                },
+                "nullable": true,
+                "title": "Discount Applications",
+                "type": "array"
+              },
+              "discount_codes": {
+                "default": null,
+                "description": "Applied discounts with code, amount, and type.",
+                "items": {
+                  "description": "Represents a discount code applied to an order.",
+                  "properties": {
+                    "amount": {
+                      "default": null,
+                      "description": "The amount deducted from the order total.",
+                      "nullable": true,
+                      "title": "Amount",
+                      "type": "string"
+                    },
+                    "code": {
+                      "default": null,
+                      "description": "The discount code.",
+                      "nullable": true,
+                      "title": "Code",
+                      "type": "string"
+                    },
+                    "type": {
+                      "default": null,
+                      "description": "The type of discount.",
+                      "nullable": true,
+                      "title": "Type",
+                      "type": "string"
+                    }
+                  },
+                  "title": "DiscountCode",
+                  "type": "object"
+                },
+                "nullable": true,
+                "title": "Discount Codes",
+                "type": "array"
+              },
+              "email": {
+                "default": null,
+                "description": "The customer's email address.",
+                "nullable": true,
+                "title": "Email",
+                "type": "string"
+              },
+              "estimated_taxes": {
+                "default": null,
+                "description": "Whether taxes on the order are estimated.",
+                "nullable": true,
+                "title": "Estimated Taxes",
+                "type": "boolean"
+              },
+              "financial_status": {
+                "default": null,
+                "description": "The payment status of the order. Valid values: pending, authorized, partially_paid, paid, partially_refunded, refunded, voided.",
+                "nullable": true,
+                "title": "Financial Status",
+                "type": "string"
+              },
+              "fulfillment_status": {
+                "default": null,
+                "description": "The order's status in terms of fulfilled line items. Valid values: null (unfulfilled), fulfilled, partial, restocked.",
+                "nullable": true,
+                "title": "Fulfillment Status",
+                "type": "string"
+              },
+              "fulfillments": {
+                "default": null,
+                "description": "Array of fulfillment records, each containing delivery information, tracking numbers, and line items.",
+                "items": {
+                  "description": "Represents a fulfillment record for an order.",
+                  "properties": {
+                    "admin_graphql_api_id": {
+                      "default": null,
+                      "description": "The GraphQL API identifier for the fulfillment.",
+                      "nullable": true,
+                      "title": "Admin Graphql Api Id",
+                      "type": "string"
+                    },
+                    "created_at": {
+                      "default": null,
+                      "description": "The date and time when the fulfillment was created.",
+                      "nullable": true,
+                      "title": "Created At",
+                      "type": "string"
+                    },
+                    "id": {
+                      "default": null,
+                      "description": "The unique identifier for the fulfillment.",
+                      "nullable": true,
+                      "title": "Id",
+                      "type": "integer"
+                    },
+                    "line_items": {
+                      "default": null,
+                      "description": "Line items included in the fulfillment.",
+                      "items": {
+                        "description": "Represents a line item in an order.",
+                        "properties": {
+                          "admin_graphql_api_id": {
+                            "default": null,
+                            "description": "The GraphQL API identifier for the line item.",
+                            "nullable": true,
+                            "title": "Admin Graphql Api Id",
+                            "type": "string"
+                          },
+                          "discount_allocations": {
+                            "default": null,
+                            "description": "Discount allocations applied to the line item.",
+                            "items": {
+                              "description": "Represents a discount allocation applied to a line item.",
+                              "properties": {
+                                "amount": {
+                                  "default": null,
+                                  "description": "The discount amount allocated to the line item.",
+                                  "nullable": true,
+                                  "title": "Amount",
+                                  "type": "string"
+                                },
+                                "amount_set": {
+                                  "additionalProperties": false,
+                                  "default": null,
+                                  "description": "Represents a price in both shop and presentment currencies.",
+                                  "nullable": true,
+                                  "properties": {
+                                    "presentment_money": {
+                                      "additionalProperties": false,
+                                      "default": null,
+                                      "description": "Represents a monetary amount with currency.",
+                                      "nullable": true,
+                                      "properties": {
+                                        "amount": {
+                                          "default": null,
+                                          "description": "The amount in decimal format (e.g., '19.99').",
+                                          "nullable": true,
+                                          "title": "Amount",
+                                          "type": "string"
+                                        },
+                                        "currency_code": {
+                                          "default": null,
+                                          "description": "The three-letter currency code (ISO 4217).",
+                                          "nullable": true,
+                                          "title": "Currency Code",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "title": "Money",
+                                      "type": "object"
+                                    },
+                                    "shop_money": {
+                                      "additionalProperties": false,
+                                      "default": null,
+                                      "description": "Represents a monetary amount with currency.",
+                                      "nullable": true,
+                                      "properties": {
+                                        "amount": {
+                                          "default": null,
+                                          "description": "The amount in decimal format (e.g., '19.99').",
+                                          "nullable": true,
+                                          "title": "Amount",
+                                          "type": "string"
+                                        },
+                                        "currency_code": {
+                                          "default": null,
+                                          "description": "The three-letter currency code (ISO 4217).",
+                                          "nullable": true,
+                                          "title": "Currency Code",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "title": "Money",
+                                      "type": "object"
+                                    }
+                                  },
+                                  "title": "MoneySet",
+                                  "type": "object"
+                                },
+                                "discount_application_index": {
+                                  "default": null,
+                                  "description": "The index of the associated discount application in the order's discount_applications list.",
+                                  "nullable": true,
+                                  "title": "Discount Application Index",
+                                  "type": "integer"
+                                }
+                              },
+                              "title": "DiscountAllocation",
+                              "type": "object"
+                            },
+                            "nullable": true,
+                            "title": "Discount Allocations",
+                            "type": "array"
+                          },
+                          "duties": {
+                            "default": null,
+                            "description": "List of duty objects applicable to the line item.",
+                            "items": {
+                              "additionalProperties": true,
+                              "properties": {},
+                              "type": "object"
+                            },
+                            "nullable": true,
+                            "title": "Duties",
+                            "type": "array"
+                          },
+                          "fulfillable_quantity": {
+                            "default": null,
+                            "description": "The amount available to fulfill, calculated as follows: quantity - max(refunded_quantity, fulfilled_quantity) - pending_fulfilled_quantity - open_fulfilled_quantity.",
+                            "nullable": true,
+                            "title": "Fulfillable Quantity",
+                            "type": "integer"
+                          },
+                          "fulfillment_service": {
+                            "default": null,
+                            "description": "The fulfillment service for the variant. Returns 'manual' if none.",
+                            "nullable": true,
+                            "title": "Fulfillment Service",
+                            "type": "string"
+                          },
+                          "fulfillment_status": {
+                            "default": null,
+                            "description": "The fulfillment status of the line item.",
+                            "nullable": true,
+                            "title": "Fulfillment Status",
+                            "type": "string"
+                          },
+                          "gift_card": {
+                            "default": null,
+                            "description": "Whether the line item is a gift card.",
+                            "nullable": true,
+                            "title": "Gift Card",
+                            "type": "boolean"
+                          },
+                          "grams": {
+                            "default": null,
+                            "description": "The weight of the line item in grams.",
+                            "nullable": true,
+                            "title": "Grams",
+                            "type": "integer"
+                          },
+                          "id": {
+                            "default": null,
+                            "description": "The unique identifier for the line item.",
+                            "nullable": true,
+                            "title": "Id",
+                            "type": "integer"
+                          },
+                          "name": {
+                            "default": null,
+                            "description": "The name of the product variant.",
+                            "nullable": true,
+                            "title": "Name",
+                            "type": "string"
+                          },
+                          "price": {
+                            "default": null,
+                            "description": "The price of the line item including line-level discounts.",
+                            "nullable": true,
+                            "title": "Price",
+                            "type": "string"
+                          },
+                          "price_set": {
+                            "additionalProperties": false,
+                            "default": null,
+                            "description": "Represents a price in both shop and presentment currencies.",
+                            "nullable": true,
+                            "properties": {
+                              "presentment_money": {
+                                "additionalProperties": false,
+                                "default": null,
+                                "description": "Represents a monetary amount with currency.",
+                                "nullable": true,
+                                "properties": {
+                                  "amount": {
+                                    "default": null,
+                                    "description": "The amount in decimal format (e.g., '19.99').",
+                                    "nullable": true,
+                                    "title": "Amount",
+                                    "type": "string"
+                                  },
+                                  "currency_code": {
+                                    "default": null,
+                                    "description": "The three-letter currency code (ISO 4217).",
+                                    "nullable": true,
+                                    "title": "Currency Code",
+                                    "type": "string"
+                                  }
+                                },
+                                "title": "Money",
+                                "type": "object"
+                              },
+                              "shop_money": {
+                                "additionalProperties": false,
+                                "default": null,
+                                "description": "Represents a monetary amount with currency.",
+                                "nullable": true,
+                                "properties": {
+                                  "amount": {
+                                    "default": null,
+                                    "description": "The amount in decimal format (e.g., '19.99').",
+                                    "nullable": true,
+                                    "title": "Amount",
+                                    "type": "string"
+                                  },
+                                  "currency_code": {
+                                    "default": null,
+                                    "description": "The three-letter currency code (ISO 4217).",
+                                    "nullable": true,
+                                    "title": "Currency Code",
+                                    "type": "string"
+                                  }
+                                },
+                                "title": "Money",
+                                "type": "object"
+                              }
+                            },
+                            "title": "MoneySet",
+                            "type": "object"
+                          },
+                          "product_exists": {
+                            "default": null,
+                            "description": "Whether the product exists.",
+                            "nullable": true,
+                            "title": "Product Exists",
+                            "type": "boolean"
+                          },
+                          "product_id": {
+                            "default": null,
+                            "description": "The ID of the product. Can be null if the product was deleted.",
+                            "nullable": true,
+                            "title": "Product Id",
+                            "type": "integer"
+                          },
+                          "properties": {
+                            "default": null,
+                            "description": "Custom properties for the line item (name-value pairs).",
+                            "items": {
+                              "additionalProperties": true,
+                              "properties": {},
+                              "type": "object"
+                            },
+                            "nullable": true,
+                            "title": "Properties",
+                            "type": "array"
+                          },
+                          "quantity": {
+                            "default": null,
+                            "description": "The quantity of the line item.",
+                            "nullable": true,
+                            "title": "Quantity",
+                            "type": "integer"
+                          },
+                          "requires_shipping": {
+                            "default": null,
+                            "description": "Whether the line item requires shipping.",
+                            "nullable": true,
+                            "title": "Requires Shipping",
+                            "type": "boolean"
+                          },
+                          "sku": {
+                            "default": null,
+                            "description": "The SKU of the variant.",
+                            "nullable": true,
+                            "title": "Sku",
+                            "type": "string"
+                          },
+                          "tax_lines": {
+                            "default": null,
+                            "description": "Tax calculations applied to the line item.",
+                            "items": {
+                              "description": "Represents a tax line applied to an order or line item.",
+                              "properties": {
+                                "channel_liable": {
+                                  "default": null,
+                                  "description": "Whether the channel that submitted the tax line is liable for remitting.",
+                                  "nullable": true,
+                                  "title": "Channel Liable",
+                                  "type": "boolean"
+                                },
+                                "price": {
+                                  "default": null,
+                                  "description": "The tax amount.",
+                                  "nullable": true,
+                                  "title": "Price",
+                                  "type": "string"
+                                },
+                                "price_set": {
+                                  "additionalProperties": false,
+                                  "default": null,
+                                  "description": "Represents a price in both shop and presentment currencies.",
+                                  "nullable": true,
+                                  "properties": {
+                                    "presentment_money": {
+                                      "additionalProperties": false,
+                                      "default": null,
+                                      "description": "Represents a monetary amount with currency.",
+                                      "nullable": true,
+                                      "properties": {
+                                        "amount": {
+                                          "default": null,
+                                          "description": "The amount in decimal format (e.g., '19.99').",
+                                          "nullable": true,
+                                          "title": "Amount",
+                                          "type": "string"
+                                        },
+                                        "currency_code": {
+                                          "default": null,
+                                          "description": "The three-letter currency code (ISO 4217).",
+                                          "nullable": true,
+                                          "title": "Currency Code",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "title": "Money",
+                                      "type": "object"
+                                    },
+                                    "shop_money": {
+                                      "additionalProperties": false,
+                                      "default": null,
+                                      "description": "Represents a monetary amount with currency.",
+                                      "nullable": true,
+                                      "properties": {
+                                        "amount": {
+                                          "default": null,
+                                          "description": "The amount in decimal format (e.g., '19.99').",
+                                          "nullable": true,
+                                          "title": "Amount",
+                                          "type": "string"
+                                        },
+                                        "currency_code": {
+                                          "default": null,
+                                          "description": "The three-letter currency code (ISO 4217).",
+                                          "nullable": true,
+                                          "title": "Currency Code",
+                                          "type": "string"
+                                        }
+                                      },
+                                      "title": "Money",
+                                      "type": "object"
+                                    }
+                                  },
+                                  "title": "MoneySet",
+                                  "type": "object"
+                                },
+                                "rate": {
+                                  "default": null,
+                                  "description": "The tax rate.",
+                                  "nullable": true,
+                                  "title": "Rate",
+                                  "type": "number"
+                                },
+                                "title": {
+                                  "default": null,
+                                  "description": "The tax name.",
+                                  "nullable": true,
+                                  "title": "Title",
+                                  "type": "string"
+                                }
+                              },
+                              "title": "TaxLine",
+                              "type": "object"
+                            },
+                            "nullable": true,
+                            "title": "Tax Lines",
+                            "type": "array"
+                          },
+                          "taxable": {
+                            "default": null,
+                            "description": "Whether the line item is taxable.",
+                            "nullable": true,
+                            "title": "Taxable",
+                            "type": "boolean"
+                          },
+                          "title": {
+                            "default": null,
+                            "description": "The product title.",
+                            "nullable": true,
+                            "title": "Title",
+                            "type": "string"
+                          },
+                          "total_discount": {
+                            "default": null,
+                            "description": "The total discount amount applied to this line item.",
+                            "nullable": true,
+                            "title": "Total Discount",
+                            "type": "string"
+                          },
+                          "total_discount_set": {
+                            "additionalProperties": false,
+                            "default": null,
+                            "description": "Represents a price in both shop and presentment currencies.",
+                            "nullable": true,
+                            "properties": {
+                              "presentment_money": {
+                                "additionalProperties": false,
+                                "default": null,
+                                "description": "Represents a monetary amount with currency.",
+                                "nullable": true,
+                                "properties": {
+                                  "amount": {
+                                    "default": null,
+                                    "description": "The amount in decimal format (e.g., '19.99').",
+                                    "nullable": true,
+                                    "title": "Amount",
+                                    "type": "string"
+                                  },
+                                  "currency_code": {
+                                    "default": null,
+                                    "description": "The three-letter currency code (ISO 4217).",
+                                    "nullable": true,
+                                    "title": "Currency Code",
+                                    "type": "string"
+                                  }
+                                },
+                                "title": "Money",
+                                "type": "object"
+                              },
+                              "shop_money": {
+                                "additionalProperties": false,
+                                "default": null,
+                                "description": "Represents a monetary amount with currency.",
+                                "nullable": true,
+                                "properties": {
+                                  "amount": {
+                                    "default": null,
+                                    "description": "The amount in decimal format (e.g., '19.99').",
+                                    "nullable": true,
+                                    "title": "Amount",
+                                    "type": "string"
+                                  },
+                                  "currency_code": {
+                                    "default": null,
+                                    "description": "The three-letter currency code (ISO 4217).",
+                                    "nullable": true,
+                                    "title": "Currency Code",
+                                    "type": "string"
+                                  }
+                                },
+                                "title": "Money",
+                                "type": "object"
+                              }
+                            },
+                            "title": "MoneySet",
+                            "type": "object"
+                          },
+                          "variant_id": {
+                            "default": null,
+                            "description": "The ID of the specific product variant.",
+                            "nullable": true,
+                            "title": "Variant Id",
+                            "type": "integer"
+                          },
+                          "variant_title": {
+                            "default": null,
+                            "description": "The title of the product variant.",
+                            "nullable": true,
+                            "title": "Variant Title",
+                            "type": "string"
+                          },
+                          "vendor": {
+                            "default": null,
+                            "description": "The vendor of the product.",
+                            "nullable": true,
+                            "title": "Vendor",
+                            "type": "string"
+                          }
+                        },
+                        "title": "LineItem",
+                        "type": "object"
+                      },
+                      "nullable": true,
+                      "title": "Line Items",
+                      "type": "array"
+                    },
+                    "location_id": {
+                      "default": null,
+                      "description": "The ID of the location from which the order was fulfilled.",
+                      "nullable": true,
+                      "title": "Location Id",
+                      "type": "integer"
+                    },
+                    "name": {
+                      "default": null,
+                      "description": "The name of the fulfillment.",
+                      "nullable": true,
+                      "title": "Name",
+                      "type": "string"
+                    },
+                    "order_id": {
+                      "default": null,
+                      "description": "The ID of the order that the fulfillment belongs to.",
+                      "nullable": true,
+                      "title": "Order Id",
+                      "type": "integer"
+                    },
+                    "receipt": {
+                      "additionalProperties": true,
+                      "default": null,
+                      "description": "The receipt for the fulfillment.",
+                      "nullable": true,
+                      "title": "Receipt",
+                      "type": "object"
+                    },
+                    "service": {
+                      "default": null,
+                      "description": "The fulfillment service.",
+                      "nullable": true,
+                      "title": "Service",
+                      "type": "string"
+                    },
+                    "shipment_status": {
+                      "default": null,
+                      "description": "The shipment status of the fulfillment.",
+                      "nullable": true,
+                      "title": "Shipment Status",
+                      "type": "string"
+                    },
+                    "status": {
+                      "default": null,
+                      "description": "The fulfillment status.",
+                      "nullable": true,
+                      "title": "Status",
+                      "type": "string"
+                    },
+                    "tracking_company": {
+                      "default": null,
+                      "description": "The name of the tracking company.",
+                      "nullable": true,
+                      "title": "Tracking Company",
+                      "type": "string"
+                    },
+                    "tracking_number": {
+                      "default": null,
+                      "description": "The tracking number for the shipment.",
+                      "nullable": true,
+                      "title": "Tracking Number",
+                      "type": "string"
+                    },
+                    "tracking_numbers": {
+                      "default": null,
+                      "description": "A list of tracking numbers for the shipment.",
+                      "items": {
+                        "properties": {},
+                        "type": "string"
+                      },
+                      "nullable": true,
+                      "title": "Tracking Numbers",
+                      "type": "array"
+                    },
+                    "tracking_url": {
+                      "default": null,
+                      "description": "The URL to track the shipment.",
+                      "nullable": true,
+                      "title": "Tracking Url",
+                      "type": "string"
+                    },
+                    "tracking_urls": {
+                      "default": null,
+                      "description": "A list of URLs to track the shipment.",
+                      "items": {
+                        "properties": {},
+                        "type": "string"
+                      },
+                      "nullable": true,
+                      "title": "Tracking Urls",
+                      "type": "array"
+                    },
+                    "updated_at": {
+                      "default": null,
+                      "description": "The date and time when the fulfillment was last updated.",
+                      "nullable": true,
+                      "title": "Updated At",
+                      "type": "string"
+                    }
+                  },
+                  "title": "Fulfillment",
+                  "type": "object"
+                },
+                "nullable": true,
+                "title": "Fulfillments",
+                "type": "array"
+              },
+              "gateway": {
+                "default": null,
+                "description": "The handleized name of the payment gateway used for the transaction.",
+                "nullable": true,
+                "title": "Gateway",
+                "type": "string"
+              },
+              "id": {
+                "default": null,
+                "description": "The unique numeric identifier for the order.",
+                "nullable": true,
+                "title": "Id",
+                "type": "integer"
+              },
+              "landing_site": {
+                "default": null,
+                "description": "The website landing page the customer arrived at before placing the order. Can be null.",
+                "nullable": true,
+                "title": "Landing Site",
+                "type": "string"
+              },
+              "landing_site_ref": {
+                "default": null,
+                "description": "The landing site reference parameter.",
+                "nullable": true,
+                "title": "Landing Site Ref",
+                "type": "string"
+              },
+              "line_items": {
+                "default": null,
+                "description": "Product items in order with pricing, tax details, fulfillment information, and custom properties.",
+                "items": {
+                  "description": "Represents a line item in an order.",
+                  "properties": {
+                    "admin_graphql_api_id": {
+                      "default": null,
+                      "description": "The GraphQL API identifier for the line item.",
+                      "nullable": true,
+                      "title": "Admin Graphql Api Id",
+                      "type": "string"
+                    },
+                    "discount_allocations": {
+                      "default": null,
+                      "description": "Discount allocations applied to the line item.",
+                      "items": {
+                        "description": "Represents a discount allocation applied to a line item.",
+                        "properties": {
+                          "amount": {
+                            "default": null,
+                            "description": "The discount amount allocated to the line item.",
+                            "nullable": true,
+                            "title": "Amount",
+                            "type": "string"
+                          },
+                          "amount_set": {
+                            "additionalProperties": false,
+                            "default": null,
+                            "description": "Represents a price in both shop and presentment currencies.",
+                            "nullable": true,
+                            "properties": {
+                              "presentment_money": {
+                                "additionalProperties": false,
+                                "default": null,
+                                "description": "Represents a monetary amount with currency.",
+                                "nullable": true,
+                                "properties": {
+                                  "amount": {
+                                    "default": null,
+                                    "description": "The amount in decimal format (e.g., '19.99').",
+                                    "nullable": true,
+                                    "title": "Amount",
+                                    "type": "string"
+                                  },
+                                  "currency_code": {
+                                    "default": null,
+                                    "description": "The three-letter currency code (ISO 4217).",
+                                    "nullable": true,
+                                    "title": "Currency Code",
+                                    "type": "string"
+                                  }
+                                },
+                                "title": "Money",
+                                "type": "object"
+                              },
+                              "shop_money": {
+                                "additionalProperties": false,
+                                "default": null,
+                                "description": "Represents a monetary amount with currency.",
+                                "nullable": true,
+                                "properties": {
+                                  "amount": {
+                                    "default": null,
+                                    "description": "The amount in decimal format (e.g., '19.99').",
+                                    "nullable": true,
+                                    "title": "Amount",
+                                    "type": "string"
+                                  },
+                                  "currency_code": {
+                                    "default": null,
+                                    "description": "The three-letter currency code (ISO 4217).",
+                                    "nullable": true,
+                                    "title": "Currency Code",
+                                    "type": "string"
+                                  }
+                                },
+                                "title": "Money",
+                                "type": "object"
+                              }
+                            },
+                            "title": "MoneySet",
+                            "type": "object"
+                          },
+                          "discount_application_index": {
+                            "default": null,
+                            "description": "The index of the associated discount application in the order's discount_applications list.",
+                            "nullable": true,
+                            "title": "Discount Application Index",
+                            "type": "integer"
+                          }
+                        },
+                        "title": "DiscountAllocation",
+                        "type": "object"
+                      },
+                      "nullable": true,
+                      "title": "Discount Allocations",
+                      "type": "array"
+                    },
+                    "duties": {
+                      "default": null,
+                      "description": "List of duty objects applicable to the line item.",
+                      "items": {
+                        "additionalProperties": true,
+                        "properties": {},
+                        "type": "object"
+                      },
+                      "nullable": true,
+                      "title": "Duties",
+                      "type": "array"
+                    },
+                    "fulfillable_quantity": {
+                      "default": null,
+                      "description": "The amount available to fulfill, calculated as follows: quantity - max(refunded_quantity, fulfilled_quantity) - pending_fulfilled_quantity - open_fulfilled_quantity.",
+                      "nullable": true,
+                      "title": "Fulfillable Quantity",
+                      "type": "integer"
+                    },
+                    "fulfillment_service": {
+                      "default": null,
+                      "description": "The fulfillment service for the variant. Returns 'manual' if none.",
+                      "nullable": true,
+                      "title": "Fulfillment Service",
+                      "type": "string"
+                    },
+                    "fulfillment_status": {
+                      "default": null,
+                      "description": "The fulfillment status of the line item.",
+                      "nullable": true,
+                      "title": "Fulfillment Status",
+                      "type": "string"
+                    },
+                    "gift_card": {
+                      "default": null,
+                      "description": "Whether the line item is a gift card.",
+                      "nullable": true,
+                      "title": "Gift Card",
+                      "type": "boolean"
+                    },
+                    "grams": {
+                      "default": null,
+                      "description": "The weight of the line item in grams.",
+                      "nullable": true,
+                      "title": "Grams",
+                      "type": "integer"
+                    },
+                    "id": {
+                      "default": null,
+                      "description": "The unique identifier for the line item.",
+                      "nullable": true,
+                      "title": "Id",
+                      "type": "integer"
+                    },
+                    "name": {
+                      "default": null,
+                      "description": "The name of the product variant.",
+                      "nullable": true,
+                      "title": "Name",
+                      "type": "string"
+                    },
+                    "price": {
+                      "default": null,
+                      "description": "The price of the line item including line-level discounts.",
+                      "nullable": true,
+                      "title": "Price",
+                      "type": "string"
+                    },
+                    "price_set": {
+                      "additionalProperties": false,
+                      "default": null,
+                      "description": "Represents a price in both shop and presentment currencies.",
+                      "nullable": true,
+                      "properties": {
+                        "presentment_money": {
+                          "additionalProperties": false,
+                          "default": null,
+                          "description": "Represents a monetary amount with currency.",
+                          "nullable": true,
+                          "properties": {
+                            "amount": {
+                              "default": null,
+                              "description": "The amount in decimal format (e.g., '19.99').",
+                              "nullable": true,
+                              "title": "Amount",
+                              "type": "string"
+                            },
+                            "currency_code": {
+                              "default": null,
+                              "description": "The three-letter currency code (ISO 4217).",
+                              "nullable": true,
+                              "title": "Currency Code",
+                              "type": "string"
+                            }
+                          },
+                          "title": "Money",
+                          "type": "object"
+                        },
+                        "shop_money": {
+                          "additionalProperties": false,
+                          "default": null,
+                          "description": "Represents a monetary amount with currency.",
+                          "nullable": true,
+                          "properties": {
+                            "amount": {
+                              "default": null,
+                              "description": "The amount in decimal format (e.g., '19.99').",
+                              "nullable": true,
+                              "title": "Amount",
+                              "type": "string"
+                            },
+                            "currency_code": {
+                              "default": null,
+                              "description": "The three-letter currency code (ISO 4217).",
+                              "nullable": true,
+                              "title": "Currency Code",
+                              "type": "string"
+                            }
+                          },
+                          "title": "Money",
+                          "type": "object"
+                        }
+                      },
+                      "title": "MoneySet",
+                      "type": "object"
+                    },
+                    "product_exists": {
+                      "default": null,
+                      "description": "Whether the product exists.",
+                      "nullable": true,
+                      "title": "Product Exists",
+                      "type": "boolean"
+                    },
+                    "product_id": {
+                      "default": null,
+                      "description": "The ID of the product. Can be null if the product was deleted.",
+                      "nullable": true,
+                      "title": "Product Id",
+                      "type": "integer"
+                    },
+                    "properties": {
+                      "default": null,
+                      "description": "Custom properties for the line item (name-value pairs).",
+                      "items": {
+                        "additionalProperties": true,
+                        "properties": {},
+                        "type": "object"
+                      },
+                      "nullable": true,
+                      "title": "Properties",
+                      "type": "array"
+                    },
+                    "quantity": {
+                      "default": null,
+                      "description": "The quantity of the line item.",
+                      "nullable": true,
+                      "title": "Quantity",
+                      "type": "integer"
+                    },
+                    "requires_shipping": {
+                      "default": null,
+                      "description": "Whether the line item requires shipping.",
+                      "nullable": true,
+                      "title": "Requires Shipping",
+                      "type": "boolean"
+                    },
+                    "sku": {
+                      "default": null,
+                      "description": "The SKU of the variant.",
+                      "nullable": true,
+                      "title": "Sku",
+                      "type": "string"
+                    },
+                    "tax_lines": {
+                      "default": null,
+                      "description": "Tax calculations applied to the line item.",
+                      "items": {
+                        "description": "Represents a tax line applied to an order or line item.",
+                        "properties": {
+                          "channel_liable": {
+                            "default": null,
+                            "description": "Whether the channel that submitted the tax line is liable for remitting.",
+                            "nullable": true,
+                            "title": "Channel Liable",
+                            "type": "boolean"
+                          },
+                          "price": {
+                            "default": null,
+                            "description": "The tax amount.",
+                            "nullable": true,
+                            "title": "Price",
+                            "type": "string"
+                          },
+                          "price_set": {
+                            "additionalProperties": false,
+                            "default": null,
+                            "description": "Represents a price in both shop and presentment currencies.",
+                            "nullable": true,
+                            "properties": {
+                              "presentment_money": {
+                                "additionalProperties": false,
+                                "default": null,
+                                "description": "Represents a monetary amount with currency.",
+                                "nullable": true,
+                                "properties": {
+                                  "amount": {
+                                    "default": null,
+                                    "description": "The amount in decimal format (e.g., '19.99').",
+                                    "nullable": true,
+                                    "title": "Amount",
+                                    "type": "string"
+                                  },
+                                  "currency_code": {
+                                    "default": null,
+                                    "description": "The three-letter currency code (ISO 4217).",
+                                    "nullable": true,
+                                    "title": "Currency Code",
+                                    "type": "string"
+                                  }
+                                },
+                                "title": "Money",
+                                "type": "object"
+                              },
+                              "shop_money": {
+                                "additionalProperties": false,
+                                "default": null,
+                                "description": "Represents a monetary amount with currency.",
+                                "nullable": true,
+                                "properties": {
+                                  "amount": {
+                                    "default": null,
+                                    "description": "The amount in decimal format (e.g., '19.99').",
+                                    "nullable": true,
+                                    "title": "Amount",
+                                    "type": "string"
+                                  },
+                                  "currency_code": {
+                                    "default": null,
+                                    "description": "The three-letter currency code (ISO 4217).",
+                                    "nullable": true,
+                                    "title": "Currency Code",
+                                    "type": "string"
+                                  }
+                                },
+                                "title": "Money",
+                                "type": "object"
+                              }
+                            },
+                            "title": "MoneySet",
+                            "type": "object"
+                          },
+                          "rate": {
+                            "default": null,
+                            "description": "The tax rate.",
+                            "nullable": true,
+                            "title": "Rate",
+                            "type": "number"
+                          },
+                          "title": {
+                            "default": null,
+                            "description": "The tax name.",
+                            "nullable": true,
+                            "title": "Title",
+                            "type": "string"
+                          }
+                        },
+                        "title": "TaxLine",
+                        "type": "object"
+                      },
+                      "nullable": true,
+                      "title": "Tax Lines",
+                      "type": "array"
+                    },
+                    "taxable": {
+                      "default": null,
+                      "description": "Whether the line item is taxable.",
+                      "nullable": true,
+                      "title": "Taxable",
+                      "type": "boolean"
+                    },
+                    "title": {
+                      "default": null,
+                      "description": "The product title.",
+                      "nullable": true,
+                      "title": "Title",
+                      "type": "string"
+                    },
+                    "total_discount": {
+                      "default": null,
+                      "description": "The total discount amount applied to this line item.",
+                      "nullable": true,
+                      "title": "Total Discount",
+                      "type": "string"
+                    },
+                    "total_discount_set": {
+                      "additionalProperties": false,
+                      "default": null,
+                      "description": "Represents a price in both shop and presentment currencies.",
+                      "nullable": true,
+                      "properties": {
+                        "presentment_money": {
+                          "additionalProperties": false,
+                          "default": null,
+                          "description": "Represents a monetary amount with currency.",
+                          "nullable": true,
+                          "properties": {
+                            "amount": {
+                              "default": null,
+                              "description": "The amount in decimal format (e.g., '19.99').",
+                              "nullable": true,
+                              "title": "Amount",
+                              "type": "string"
+                            },
+                            "currency_code": {
+                              "default": null,
+                              "description": "The three-letter currency code (ISO 4217).",
+                              "nullable": true,
+                              "title": "Currency Code",
+                              "type": "string"
+                            }
+                          },
+                          "title": "Money",
+                          "type": "object"
+                        },
+                        "shop_money": {
+                          "additionalProperties": false,
+                          "default": null,
+                          "description": "Represents a monetary amount with currency.",
+                          "nullable": true,
+                          "properties": {
+                            "amount": {
+                              "default": null,
+                              "description": "The amount in decimal format (e.g., '19.99').",
+                              "nullable": true,
+                              "title": "Amount",
+                              "type": "string"
+                            },
+                            "currency_code": {
+                              "default": null,
+                              "description": "The three-letter currency code (ISO 4217).",
+                              "nullable": true,
+                              "title": "Currency Code",
+                              "type": "string"
+                            }
+                          },
+                          "title": "Money",
+                          "type": "object"
+                        }
+                      },
+                      "title": "MoneySet",
+                      "type": "object"
+                    },
+                    "variant_id": {
+                      "default": null,
+                      "description": "The ID of the specific product variant.",
+                      "nullable": true,
+                      "title": "Variant Id",
+                      "type": "integer"
+                    },
+                    "variant_title": {
+                      "default": null,
+                      "description": "The title of the product variant.",
+                      "nullable": true,
+                      "title": "Variant Title",
+                      "type": "string"
+                    },
+                    "vendor": {
+                      "default": null,
+                      "description": "The vendor of the product.",
+                      "nullable": true,
+                      "title": "Vendor",
+                      "type": "string"
+                    }
+                  },
+                  "title": "LineItem",
+                  "type": "object"
+                },
+                "nullable": true,
+                "title": "Line Items",
+                "type": "array"
+              },
+              "location_id": {
+                "default": null,
+                "description": "The ID of the physical location where the order was placed, particularly relevant for POS orders.",
+                "nullable": true,
+                "title": "Location Id",
+                "type": "integer"
+              },
+              "name": {
+                "default": null,
+                "description": "The order name, typically in the format '#1001'.",
+                "nullable": true,
+                "title": "Name",
+                "type": "string"
+              },
+              "note": {
+                "default": null,
+                "description": "Additional information or instructions added by merchants or customers, commonly used for special delivery instructions, gift messages, or internal processing notes.",
+                "nullable": true,
+                "title": "Note",
+                "type": "string"
+              },
+              "note_attributes": {
+                "default": null,
+                "description": "Additional data attached to the order, such as custom fields or calculated values.",
+                "items": {
+                  "description": "Represents a note attribute (custom field) on an order.",
+                  "properties": {
+                    "name": {
+                      "default": null,
+                      "description": "The attribute name.",
+                      "nullable": true,
+                      "title": "Name",
+                      "type": "string"
+                    },
+                    "value": {
+                      "default": null,
+                      "description": "The attribute value.",
+                      "nullable": true,
+                      "title": "Value",
+                      "type": "string"
+                    }
+                  },
+                  "title": "NoteAttribute",
+                  "type": "object"
+                },
+                "nullable": true,
+                "title": "Note Attributes",
+                "type": "array"
+              },
+              "number": {
+                "default": null,
+                "description": "The order number, a unique sequential number for the order.",
+                "nullable": true,
+                "title": "Number",
+                "type": "integer"
+              },
+              "order_number": {
+                "default": null,
+                "description": "The order number used by the shop.",
+                "nullable": true,
+                "title": "Order Number",
+                "type": "integer"
+              },
+              "order_status_url": {
+                "default": null,
+                "description": "The unique URL for the status page of the order, allowing customers to track order status.",
+                "nullable": true,
+                "title": "Order Status Url",
+                "type": "string"
+              },
+              "original_total_additional_fees_set": {
+                "additionalProperties": false,
+                "default": null,
+                "description": "Represents a price in both shop and presentment currencies.",
+                "nullable": true,
+                "properties": {
+                  "presentment_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  },
+                  "shop_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  }
+                },
+                "title": "MoneySet",
+                "type": "object"
+              },
+              "original_total_duties_set": {
+                "additionalProperties": false,
+                "default": null,
+                "description": "Represents a price in both shop and presentment currencies.",
+                "nullable": true,
+                "properties": {
+                  "presentment_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  },
+                  "shop_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  }
+                },
+                "title": "MoneySet",
+                "type": "object"
+              },
+              "payment_details": {
+                "additionalProperties": true,
+                "default": null,
+                "description": "Payment details including credit card information (masked) and payment method.",
+                "nullable": true,
+                "title": "Payment Details",
+                "type": "object"
+              },
+              "payment_gateway_names": {
+                "default": null,
+                "description": "List of payment gateway names used for the order.",
+                "items": {
+                  "properties": {},
+                  "type": "string"
+                },
+                "nullable": true,
+                "title": "Payment Gateway Names",
+                "type": "array"
+              },
+              "payment_terms": {
+                "additionalProperties": true,
+                "default": null,
+                "description": "Payment terms information for the order.",
+                "nullable": true,
+                "title": "Payment Terms",
+                "type": "object"
+              },
+              "phone": {
+                "default": null,
+                "description": "The customer's phone number for receiving SMS notifications.",
+                "nullable": true,
+                "title": "Phone",
+                "type": "string"
+              },
+              "po_number": {
+                "default": null,
+                "description": "The purchase order number associated with the order.",
+                "nullable": true,
+                "title": "Po Number",
+                "type": "string"
+              },
+              "presentment_currency": {
+                "default": null,
+                "description": "The currency code for the customer's local currency.",
+                "nullable": true,
+                "title": "Presentment Currency",
+                "type": "string"
+              },
+              "processed_at": {
+                "default": null,
+                "description": "The date and time when the order was processed in ISO 8601 format.",
+                "nullable": true,
+                "title": "Processed At",
+                "type": "string"
+              },
+              "processing_method": {
+                "default": null,
+                "description": "The payment processing method used.",
+                "nullable": true,
+                "title": "Processing Method",
+                "type": "string"
+              },
+              "reference": {
+                "default": null,
+                "description": "A valid URL to the original order on the originating surface, displayed to merchants on the Order Details page.",
+                "nullable": true,
+                "title": "Reference",
+                "type": "string"
+              },
+              "referring_site": {
+                "default": null,
+                "description": "The website or source that referred the customer to the store. Can be null.",
+                "nullable": true,
+                "title": "Referring Site",
+                "type": "string"
+              },
+              "refunds": {
+                "default": null,
+                "description": "Array of refund transactions applied to the order.",
+                "items": {
+                  "description": "Represents a refund applied to an order.",
+                  "properties": {
+                    "admin_graphql_api_id": {
+                      "default": null,
+                      "description": "The GraphQL API identifier for the refund.",
+                      "nullable": true,
+                      "title": "Admin Graphql Api Id",
+                      "type": "string"
+                    },
+                    "created_at": {
+                      "default": null,
+                      "description": "The date and time when the refund was created.",
+                      "nullable": true,
+                      "title": "Created At",
+                      "type": "string"
+                    },
+                    "id": {
+                      "default": null,
+                      "description": "The unique identifier for the refund.",
+                      "nullable": true,
+                      "title": "Id",
+                      "type": "integer"
+                    },
+                    "note": {
+                      "default": null,
+                      "description": "The reason for the refund.",
+                      "nullable": true,
+                      "title": "Note",
+                      "type": "string"
+                    },
+                    "order_adjustments": {
+                      "default": null,
+                      "description": "A list of order-level adjustments to the refund.",
+                      "items": {
+                        "additionalProperties": true,
+                        "properties": {},
+                        "type": "object"
+                      },
+                      "nullable": true,
+                      "title": "Order Adjustments",
+                      "type": "array"
+                    },
+                    "order_id": {
+                      "default": null,
+                      "description": "The ID of the order that the refund belongs to.",
+                      "nullable": true,
+                      "title": "Order Id",
+                      "type": "integer"
+                    },
+                    "processed_at": {
+                      "default": null,
+                      "description": "The date and time when the refund was processed.",
+                      "nullable": true,
+                      "title": "Processed At",
+                      "type": "string"
+                    },
+                    "refund_line_items": {
+                      "default": null,
+                      "description": "The list of refund line items.",
+                      "items": {
+                        "additionalProperties": true,
+                        "properties": {},
+                        "type": "object"
+                      },
+                      "nullable": true,
+                      "title": "Refund Line Items",
+                      "type": "array"
+                    },
+                    "restock": {
+                      "default": null,
+                      "description": "Whether to restock the items.",
+                      "nullable": true,
+                      "title": "Restock",
+                      "type": "boolean"
+                    },
+                    "transactions": {
+                      "default": null,
+                      "description": "The list of transactions associated with the refund.",
+                      "items": {
+                        "additionalProperties": true,
+                        "properties": {},
+                        "type": "object"
+                      },
+                      "nullable": true,
+                      "title": "Transactions",
+                      "type": "array"
+                    },
+                    "user_id": {
+                      "default": null,
+                      "description": "The ID of the user who performed the refund.",
+                      "nullable": true,
+                      "title": "User Id",
+                      "type": "integer"
+                    }
+                  },
+                  "title": "Refund",
+                  "type": "object"
+                },
+                "nullable": true,
+                "title": "Refunds",
+                "type": "array"
+              },
+              "shipping_address": {
+                "additionalProperties": false,
+                "default": null,
+                "description": "Represents a mailing address.",
+                "nullable": true,
+                "properties": {
+                  "address1": {
+                    "default": null,
+                    "description": "Street address line 1.",
+                    "nullable": true,
+                    "title": "Address1",
+                    "type": "string"
+                  },
+                  "address2": {
+                    "default": null,
+                    "description": "Street address line 2.",
+                    "nullable": true,
+                    "title": "Address2",
+                    "type": "string"
+                  },
+                  "city": {
+                    "default": null,
+                    "description": "City name.",
+                    "nullable": true,
+                    "title": "City",
+                    "type": "string"
+                  },
+                  "company": {
+                    "default": null,
+                    "description": "Company name.",
+                    "nullable": true,
+                    "title": "Company",
+                    "type": "string"
+                  },
+                  "country": {
+                    "default": null,
+                    "description": "Country name.",
+                    "nullable": true,
+                    "title": "Country",
+                    "type": "string"
+                  },
+                  "country_code": {
+                    "default": null,
+                    "description": "Two-letter country code.",
+                    "nullable": true,
+                    "title": "Country Code",
+                    "type": "string"
+                  },
+                  "first_name": {
+                    "default": null,
+                    "description": "First name.",
+                    "nullable": true,
+                    "title": "First Name",
+                    "type": "string"
+                  },
+                  "last_name": {
+                    "default": null,
+                    "description": "Last name.",
+                    "nullable": true,
+                    "title": "Last Name",
+                    "type": "string"
+                  },
+                  "latitude": {
+                    "default": null,
+                    "description": "Latitude coordinate.",
+                    "nullable": true,
+                    "title": "Latitude",
+                    "type": "number"
+                  },
+                  "longitude": {
+                    "default": null,
+                    "description": "Longitude coordinate.",
+                    "nullable": true,
+                    "title": "Longitude",
+                    "type": "number"
+                  },
+                  "name": {
+                    "default": null,
+                    "description": "Full name.",
+                    "nullable": true,
+                    "title": "Name",
+                    "type": "string"
+                  },
+                  "phone": {
+                    "default": null,
+                    "description": "Phone number.",
+                    "nullable": true,
+                    "title": "Phone",
+                    "type": "string"
+                  },
+                  "province": {
+                    "default": null,
+                    "description": "Province or state name.",
+                    "nullable": true,
+                    "title": "Province",
+                    "type": "string"
+                  },
+                  "province_code": {
+                    "default": null,
+                    "description": "Province or state code.",
+                    "nullable": true,
+                    "title": "Province Code",
+                    "type": "string"
+                  },
+                  "zip": {
+                    "default": null,
+                    "description": "Postal or ZIP code.",
+                    "nullable": true,
+                    "title": "Zip",
+                    "type": "string"
+                  }
+                },
+                "title": "Address",
+                "type": "object"
+              },
+              "shipping_lines": {
+                "default": null,
+                "description": "A summary of all shipping costs on the order, aggregating shipping charges, discounts, and taxes.",
+                "items": {
+                  "description": "Represents a shipping line in an order.",
+                  "properties": {
+                    "carrier_identifier": {
+                      "default": null,
+                      "description": "The carrier identifier.",
+                      "nullable": true,
+                      "title": "Carrier Identifier",
+                      "type": "string"
+                    },
+                    "code": {
+                      "default": null,
+                      "description": "The shipping method code.",
+                      "nullable": true,
+                      "title": "Code",
+                      "type": "string"
+                    },
+                    "delivery_category": {
+                      "default": null,
+                      "description": "The delivery category.",
+                      "nullable": true,
+                      "title": "Delivery Category",
+                      "type": "string"
+                    },
+                    "discount_allocations": {
+                      "default": null,
+                      "description": "Discount allocations applied to the shipping line.",
+                      "items": {
+                        "description": "Represents a discount allocation applied to a line item.",
+                        "properties": {
+                          "amount": {
+                            "default": null,
+                            "description": "The discount amount allocated to the line item.",
+                            "nullable": true,
+                            "title": "Amount",
+                            "type": "string"
+                          },
+                          "amount_set": {
+                            "additionalProperties": false,
+                            "default": null,
+                            "description": "Represents a price in both shop and presentment currencies.",
+                            "nullable": true,
+                            "properties": {
+                              "presentment_money": {
+                                "additionalProperties": false,
+                                "default": null,
+                                "description": "Represents a monetary amount with currency.",
+                                "nullable": true,
+                                "properties": {
+                                  "amount": {
+                                    "default": null,
+                                    "description": "The amount in decimal format (e.g., '19.99').",
+                                    "nullable": true,
+                                    "title": "Amount",
+                                    "type": "string"
+                                  },
+                                  "currency_code": {
+                                    "default": null,
+                                    "description": "The three-letter currency code (ISO 4217).",
+                                    "nullable": true,
+                                    "title": "Currency Code",
+                                    "type": "string"
+                                  }
+                                },
+                                "title": "Money",
+                                "type": "object"
+                              },
+                              "shop_money": {
+                                "additionalProperties": false,
+                                "default": null,
+                                "description": "Represents a monetary amount with currency.",
+                                "nullable": true,
+                                "properties": {
+                                  "amount": {
+                                    "default": null,
+                                    "description": "The amount in decimal format (e.g., '19.99').",
+                                    "nullable": true,
+                                    "title": "Amount",
+                                    "type": "string"
+                                  },
+                                  "currency_code": {
+                                    "default": null,
+                                    "description": "The three-letter currency code (ISO 4217).",
+                                    "nullable": true,
+                                    "title": "Currency Code",
+                                    "type": "string"
+                                  }
+                                },
+                                "title": "Money",
+                                "type": "object"
+                              }
+                            },
+                            "title": "MoneySet",
+                            "type": "object"
+                          },
+                          "discount_application_index": {
+                            "default": null,
+                            "description": "The index of the associated discount application in the order's discount_applications list.",
+                            "nullable": true,
+                            "title": "Discount Application Index",
+                            "type": "integer"
+                          }
+                        },
+                        "title": "DiscountAllocation",
+                        "type": "object"
+                      },
+                      "nullable": true,
+                      "title": "Discount Allocations",
+                      "type": "array"
+                    },
+                    "discounted_price": {
+                      "default": null,
+                      "description": "The discounted price of the shipping line.",
+                      "nullable": true,
+                      "title": "Discounted Price",
+                      "type": "string"
+                    },
+                    "discounted_price_set": {
+                      "additionalProperties": false,
+                      "default": null,
+                      "description": "Represents a price in both shop and presentment currencies.",
+                      "nullable": true,
+                      "properties": {
+                        "presentment_money": {
+                          "additionalProperties": false,
+                          "default": null,
+                          "description": "Represents a monetary amount with currency.",
+                          "nullable": true,
+                          "properties": {
+                            "amount": {
+                              "default": null,
+                              "description": "The amount in decimal format (e.g., '19.99').",
+                              "nullable": true,
+                              "title": "Amount",
+                              "type": "string"
+                            },
+                            "currency_code": {
+                              "default": null,
+                              "description": "The three-letter currency code (ISO 4217).",
+                              "nullable": true,
+                              "title": "Currency Code",
+                              "type": "string"
+                            }
+                          },
+                          "title": "Money",
+                          "type": "object"
+                        },
+                        "shop_money": {
+                          "additionalProperties": false,
+                          "default": null,
+                          "description": "Represents a monetary amount with currency.",
+                          "nullable": true,
+                          "properties": {
+                            "amount": {
+                              "default": null,
+                              "description": "The amount in decimal format (e.g., '19.99').",
+                              "nullable": true,
+                              "title": "Amount",
+                              "type": "string"
+                            },
+                            "currency_code": {
+                              "default": null,
+                              "description": "The three-letter currency code (ISO 4217).",
+                              "nullable": true,
+                              "title": "Currency Code",
+                              "type": "string"
+                            }
+                          },
+                          "title": "Money",
+                          "type": "object"
+                        }
+                      },
+                      "title": "MoneySet",
+                      "type": "object"
+                    },
+                    "id": {
+                      "default": null,
+                      "description": "The unique identifier for the shipping line.",
+                      "nullable": true,
+                      "title": "Id",
+                      "type": "integer"
+                    },
+                    "phone": {
+                      "default": null,
+                      "description": "The phone number for the shipping address.",
+                      "nullable": true,
+                      "title": "Phone",
+                      "type": "string"
+                    },
+                    "price": {
+                      "default": null,
+                      "description": "The shipping price.",
+                      "nullable": true,
+                      "title": "Price",
+                      "type": "string"
+                    },
+                    "price_set": {
+                      "additionalProperties": false,
+                      "default": null,
+                      "description": "Represents a price in both shop and presentment currencies.",
+                      "nullable": true,
+                      "properties": {
+                        "presentment_money": {
+                          "additionalProperties": false,
+                          "default": null,
+                          "description": "Represents a monetary amount with currency.",
+                          "nullable": true,
+                          "properties": {
+                            "amount": {
+                              "default": null,
+                              "description": "The amount in decimal format (e.g., '19.99').",
+                              "nullable": true,
+                              "title": "Amount",
+                              "type": "string"
+                            },
+                            "currency_code": {
+                              "default": null,
+                              "description": "The three-letter currency code (ISO 4217).",
+                              "nullable": true,
+                              "title": "Currency Code",
+                              "type": "string"
+                            }
+                          },
+                          "title": "Money",
+                          "type": "object"
+                        },
+                        "shop_money": {
+                          "additionalProperties": false,
+                          "default": null,
+                          "description": "Represents a monetary amount with currency.",
+                          "nullable": true,
+                          "properties": {
+                            "amount": {
+                              "default": null,
+                              "description": "The amount in decimal format (e.g., '19.99').",
+                              "nullable": true,
+                              "title": "Amount",
+                              "type": "string"
+                            },
+                            "currency_code": {
+                              "default": null,
+                              "description": "The three-letter currency code (ISO 4217).",
+                              "nullable": true,
+                              "title": "Currency Code",
+                              "type": "string"
+                            }
+                          },
+                          "title": "Money",
+                          "type": "object"
+                        }
+                      },
+                      "title": "MoneySet",
+                      "type": "object"
+                    },
+                    "requested_fulfillment_service_id": {
+                      "default": null,
+                      "description": "The requested fulfillment service ID.",
+                      "nullable": true,
+                      "title": "Requested Fulfillment Service Id",
+                      "type": "string"
+                    },
+                    "source": {
+                      "default": null,
+                      "description": "The source of the shipping line.",
+                      "nullable": true,
+                      "title": "Source",
+                      "type": "string"
+                    },
+                    "tax_lines": {
+                      "default": null,
+                      "description": "Tax calculations applied to the shipping line.",
+                      "items": {
+                        "description": "Represents a tax line applied to an order or line item.",
+                        "properties": {
+                          "channel_liable": {
+                            "default": null,
+                            "description": "Whether the channel that submitted the tax line is liable for remitting.",
+                            "nullable": true,
+                            "title": "Channel Liable",
+                            "type": "boolean"
+                          },
+                          "price": {
+                            "default": null,
+                            "description": "The tax amount.",
+                            "nullable": true,
+                            "title": "Price",
+                            "type": "string"
+                          },
+                          "price_set": {
+                            "additionalProperties": false,
+                            "default": null,
+                            "description": "Represents a price in both shop and presentment currencies.",
+                            "nullable": true,
+                            "properties": {
+                              "presentment_money": {
+                                "additionalProperties": false,
+                                "default": null,
+                                "description": "Represents a monetary amount with currency.",
+                                "nullable": true,
+                                "properties": {
+                                  "amount": {
+                                    "default": null,
+                                    "description": "The amount in decimal format (e.g., '19.99').",
+                                    "nullable": true,
+                                    "title": "Amount",
+                                    "type": "string"
+                                  },
+                                  "currency_code": {
+                                    "default": null,
+                                    "description": "The three-letter currency code (ISO 4217).",
+                                    "nullable": true,
+                                    "title": "Currency Code",
+                                    "type": "string"
+                                  }
+                                },
+                                "title": "Money",
+                                "type": "object"
+                              },
+                              "shop_money": {
+                                "additionalProperties": false,
+                                "default": null,
+                                "description": "Represents a monetary amount with currency.",
+                                "nullable": true,
+                                "properties": {
+                                  "amount": {
+                                    "default": null,
+                                    "description": "The amount in decimal format (e.g., '19.99').",
+                                    "nullable": true,
+                                    "title": "Amount",
+                                    "type": "string"
+                                  },
+                                  "currency_code": {
+                                    "default": null,
+                                    "description": "The three-letter currency code (ISO 4217).",
+                                    "nullable": true,
+                                    "title": "Currency Code",
+                                    "type": "string"
+                                  }
+                                },
+                                "title": "Money",
+                                "type": "object"
+                              }
+                            },
+                            "title": "MoneySet",
+                            "type": "object"
+                          },
+                          "rate": {
+                            "default": null,
+                            "description": "The tax rate.",
+                            "nullable": true,
+                            "title": "Rate",
+                            "type": "number"
+                          },
+                          "title": {
+                            "default": null,
+                            "description": "The tax name.",
+                            "nullable": true,
+                            "title": "Title",
+                            "type": "string"
+                          }
+                        },
+                        "title": "TaxLine",
+                        "type": "object"
+                      },
+                      "nullable": true,
+                      "title": "Tax Lines",
+                      "type": "array"
+                    },
+                    "title": {
+                      "default": null,
+                      "description": "The shipping method title.",
+                      "nullable": true,
+                      "title": "Title",
+                      "type": "string"
+                    }
+                  },
+                  "title": "ShippingLine",
+                  "type": "object"
+                },
+                "nullable": true,
+                "title": "Shipping Lines",
+                "type": "array"
+              },
+              "source_identifier": {
+                "default": null,
+                "description": "Source identifier field (unsupported and subject to change without notice).",
+                "nullable": true,
+                "title": "Source Identifier",
+                "type": "string"
+              },
+              "source_name": {
+                "default": null,
+                "description": "The source of the order (e.g., 'web', 'pos', 'api').",
+                "nullable": true,
+                "title": "Source Name",
+                "type": "string"
+              },
+              "source_url": {
+                "default": null,
+                "description": "The URL where the order originated.",
+                "nullable": true,
+                "title": "Source Url",
+                "type": "string"
+              },
+              "subtotal_price": {
+                "default": null,
+                "description": "The total price of the line items in the order before taxes and shipping.",
+                "nullable": true,
+                "title": "Subtotal Price",
+                "type": "string"
+              },
+              "subtotal_price_set": {
+                "additionalProperties": false,
+                "default": null,
+                "description": "Represents a price in both shop and presentment currencies.",
+                "nullable": true,
+                "properties": {
+                  "presentment_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  },
+                  "shop_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  }
+                },
+                "title": "MoneySet",
+                "type": "object"
+              },
+              "tags": {
+                "default": null,
+                "description": "A comma-separated list of tags that have been added to the order.",
+                "nullable": true,
+                "title": "Tags",
+                "type": "string"
+              },
+              "tax_lines": {
+                "default": null,
+                "description": "Tax calculations applied at the order level, including duties and import fees.",
+                "items": {
+                  "description": "Represents a tax line applied to an order or line item.",
+                  "properties": {
+                    "channel_liable": {
+                      "default": null,
+                      "description": "Whether the channel that submitted the tax line is liable for remitting.",
+                      "nullable": true,
+                      "title": "Channel Liable",
+                      "type": "boolean"
+                    },
+                    "price": {
+                      "default": null,
+                      "description": "The tax amount.",
+                      "nullable": true,
+                      "title": "Price",
+                      "type": "string"
+                    },
+                    "price_set": {
+                      "additionalProperties": false,
+                      "default": null,
+                      "description": "Represents a price in both shop and presentment currencies.",
+                      "nullable": true,
+                      "properties": {
+                        "presentment_money": {
+                          "additionalProperties": false,
+                          "default": null,
+                          "description": "Represents a monetary amount with currency.",
+                          "nullable": true,
+                          "properties": {
+                            "amount": {
+                              "default": null,
+                              "description": "The amount in decimal format (e.g., '19.99').",
+                              "nullable": true,
+                              "title": "Amount",
+                              "type": "string"
+                            },
+                            "currency_code": {
+                              "default": null,
+                              "description": "The three-letter currency code (ISO 4217).",
+                              "nullable": true,
+                              "title": "Currency Code",
+                              "type": "string"
+                            }
+                          },
+                          "title": "Money",
+                          "type": "object"
+                        },
+                        "shop_money": {
+                          "additionalProperties": false,
+                          "default": null,
+                          "description": "Represents a monetary amount with currency.",
+                          "nullable": true,
+                          "properties": {
+                            "amount": {
+                              "default": null,
+                              "description": "The amount in decimal format (e.g., '19.99').",
+                              "nullable": true,
+                              "title": "Amount",
+                              "type": "string"
+                            },
+                            "currency_code": {
+                              "default": null,
+                              "description": "The three-letter currency code (ISO 4217).",
+                              "nullable": true,
+                              "title": "Currency Code",
+                              "type": "string"
+                            }
+                          },
+                          "title": "Money",
+                          "type": "object"
+                        }
+                      },
+                      "title": "MoneySet",
+                      "type": "object"
+                    },
+                    "rate": {
+                      "default": null,
+                      "description": "The tax rate.",
+                      "nullable": true,
+                      "title": "Rate",
+                      "type": "number"
+                    },
+                    "title": {
+                      "default": null,
+                      "description": "The tax name.",
+                      "nullable": true,
+                      "title": "Title",
+                      "type": "string"
+                    }
+                  },
+                  "title": "TaxLine",
+                  "type": "object"
+                },
+                "nullable": true,
+                "title": "Tax Lines",
+                "type": "array"
+              },
+              "taxes_included": {
+                "default": null,
+                "description": "Whether taxes are included in the prices.",
+                "nullable": true,
+                "title": "Taxes Included",
+                "type": "boolean"
+              },
+              "test": {
+                "default": null,
+                "description": "Whether this is a test order.",
+                "nullable": true,
+                "title": "Test",
+                "type": "boolean"
+              },
+              "token": {
+                "default": null,
+                "description": "The unique token for the order.",
+                "nullable": true,
+                "title": "Token",
+                "type": "string"
+              },
+              "total_discounts": {
+                "default": null,
+                "description": "The total amount of discounts applied to the order.",
+                "nullable": true,
+                "title": "Total Discounts",
+                "type": "string"
+              },
+              "total_discounts_set": {
+                "additionalProperties": false,
+                "default": null,
+                "description": "Represents a price in both shop and presentment currencies.",
+                "nullable": true,
+                "properties": {
+                  "presentment_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  },
+                  "shop_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  }
+                },
+                "title": "MoneySet",
+                "type": "object"
+              },
+              "total_line_items_price": {
+                "default": null,
+                "description": "The sum of all line item prices before discounts, taxes, and shipping.",
+                "nullable": true,
+                "title": "Total Line Items Price",
+                "type": "string"
+              },
+              "total_line_items_price_set": {
+                "additionalProperties": false,
+                "default": null,
+                "description": "Represents a price in both shop and presentment currencies.",
+                "nullable": true,
+                "properties": {
+                  "presentment_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  },
+                  "shop_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  }
+                },
+                "title": "MoneySet",
+                "type": "object"
+              },
+              "total_outstanding": {
+                "default": null,
+                "description": "The outstanding amount remaining on the order.",
+                "nullable": true,
+                "title": "Total Outstanding",
+                "type": "string"
+              },
+              "total_price": {
+                "default": null,
+                "description": "The total price of the order including taxes and shipping.",
+                "nullable": true,
+                "title": "Total Price",
+                "type": "string"
+              },
+              "total_price_set": {
+                "additionalProperties": false,
+                "default": null,
+                "description": "Represents a price in both shop and presentment currencies.",
+                "nullable": true,
+                "properties": {
+                  "presentment_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  },
+                  "shop_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  }
+                },
+                "title": "MoneySet",
+                "type": "object"
+              },
+              "total_price_usd": {
+                "default": null,
+                "description": "The total price of the order in USD.",
+                "nullable": true,
+                "title": "Total Price Usd",
+                "type": "string"
+              },
+              "total_shipping_price_set": {
+                "additionalProperties": false,
+                "default": null,
+                "description": "Represents a price in both shop and presentment currencies.",
+                "nullable": true,
+                "properties": {
+                  "presentment_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  },
+                  "shop_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  }
+                },
+                "title": "MoneySet",
+                "type": "object"
+              },
+              "total_tax": {
+                "default": null,
+                "description": "The sum of all taxes applied to the order.",
+                "nullable": true,
+                "title": "Total Tax",
+                "type": "string"
+              },
+              "total_tax_set": {
+                "additionalProperties": false,
+                "default": null,
+                "description": "Represents a price in both shop and presentment currencies.",
+                "nullable": true,
+                "properties": {
+                  "presentment_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  },
+                  "shop_money": {
+                    "additionalProperties": false,
+                    "default": null,
+                    "description": "Represents a monetary amount with currency.",
+                    "nullable": true,
+                    "properties": {
+                      "amount": {
+                        "default": null,
+                        "description": "The amount in decimal format (e.g., '19.99').",
+                        "nullable": true,
+                        "title": "Amount",
+                        "type": "string"
+                      },
+                      "currency_code": {
+                        "default": null,
+                        "description": "The three-letter currency code (ISO 4217).",
+                        "nullable": true,
+                        "title": "Currency Code",
+                        "type": "string"
+                      }
+                    },
+                    "title": "Money",
+                    "type": "object"
+                  }
+                },
+                "title": "MoneySet",
+                "type": "object"
+              },
+              "total_tip_received": {
+                "default": null,
+                "description": "The sum of all tip amounts received for the order.",
+                "nullable": true,
+                "title": "Total Tip Received",
+                "type": "string"
+              },
+              "total_weight": {
+                "default": null,
+                "description": "The total weight of the order in grams. Returns 0 when there is no weight.",
+                "nullable": true,
+                "title": "Total Weight",
+                "type": "integer"
+              },
+              "updated_at": {
+                "default": null,
+                "description": "The date and time when the order was last updated in ISO 8601 format.",
+                "nullable": true,
+                "title": "Updated At",
+                "type": "string"
+              },
+              "user_id": {
+                "default": null,
+                "description": "The ID of the user who created the order.",
+                "nullable": true,
+                "title": "User Id",
+                "type": "integer"
+              }
+            },
+            "title": "Order",
+            "type": "object"
+          },
+          "title": "Orders",
+          "type": "array"
+        }
+      },
+      "required": [
+        "orders"
+      ],
+      "title": "Data",
+      "type": "object"
+    },
+    "error": {
+      "default": null,
+      "description": "Error if any occurred during the execution of the action",
+      "nullable": true,
+      "title": "Error",
+      "type": "string"
+    },
+    "successful": {
+      "description": "Whether or not the action execution was successful or not",
+      "title": "Successful",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "data",
+    "successful"
+  ],
+  "title": "GetOrderListResponseWrapper",
+  "type": "object"
+}"""
+)
+
+SHOPIFY_GET_CUSTOMER_OUTPUT_SCHEMA = json.loads(
+  """{
+  "properties": {
+    "data": {
+      "additionalProperties": false,
+      "description": "Data from the action execution",
+      "properties": {
+        "customer": {
+          "additionalProperties": false,
+          "description": "The customer resource containing all customer information",
+          "properties": {
+            "addresses": {
+              "description": "A list of the ten most recently updated addresses for the customer",
+              "items": {
+                "description": "Customer address information.",
+                "properties": {
+                  "address1": {
+                    "description": "The customer's mailing address",
+                    "title": "Address1",
+                    "type": "string"
+                  },
+                  "address2": {
+                    "default": null,
+                    "description": "An additional field for the customer's mailing address",
+                    "nullable": true,
+                    "title": "Address2",
+                    "type": "string"
+                  },
+                  "city": {
+                    "description": "The customer's city, town, or village",
+                    "title": "City",
+                    "type": "string"
+                  },
+                  "company": {
+                    "default": null,
+                    "description": "The customer's company name",
+                    "nullable": true,
+                    "title": "Company",
+                    "type": "string"
+                  },
+                  "country": {
+                    "description": "The customer's country",
+                    "title": "Country",
+                    "type": "string"
+                  },
+                  "country_code": {
+                    "description": "The two-letter country code corresponding to the country",
+                    "title": "Country Code",
+                    "type": "string"
+                  },
+                  "country_name": {
+                    "description": "The full name of the country",
+                    "title": "Country Name",
+                    "type": "string"
+                  },
+                  "customer_id": {
+                    "description": "The ID of the customer that the address belongs to",
+                    "title": "Customer Id",
+                    "type": "integer"
+                  },
+                  "default": {
+                    "description": "Whether this address is the default address for the customer",
+                    "title": "Default",
+                    "type": "boolean"
+                  },
+                  "first_name": {
+                    "default": null,
+                    "description": "The customer's first name",
+                    "nullable": true,
+                    "title": "First Name",
+                    "type": "string"
+                  },
+                  "id": {
+                    "description": "Unique identifier for the address",
+                    "title": "Id",
+                    "type": "integer"
+                  },
+                  "last_name": {
+                    "default": null,
+                    "description": "The customer's last name",
+                    "nullable": true,
+                    "title": "Last Name",
+                    "type": "string"
+                  },
+                  "name": {
+                    "default": null,
+                    "description": "The customer's name",
+                    "nullable": true,
+                    "title": "Name",
+                    "type": "string"
+                  },
+                  "phone": {
+                    "default": null,
+                    "description": "The customer's phone number at this address",
+                    "nullable": true,
+                    "title": "Phone",
+                    "type": "string"
+                  },
+                  "province": {
+                    "default": null,
+                    "description": "The customer's region name (province, state, prefecture, etc.)",
+                    "nullable": true,
+                    "title": "Province",
+                    "type": "string"
+                  },
+                  "province_code": {
+                    "default": null,
+                    "description": "The code for the region of the address",
+                    "nullable": true,
+                    "title": "Province Code",
+                    "type": "string"
+                  },
+                  "zip": {
+                    "description": "The customer's postal code or zip code",
+                    "title": "Zip",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "customer_id",
+                  "address1",
+                  "city",
+                  "country",
+                  "zip",
+                  "country_code",
+                  "country_name",
+                  "default"
+                ],
+                "title": "Address",
+                "type": "object"
+              },
+              "title": "Addresses",
+              "type": "array"
+            },
+            "admin_graphql_api_id": {
+              "description": "The GraphQL GID for the customer resource",
+              "title": "Admin Graphql Api Id",
+              "type": "string"
+            },
+            "created_at": {
+              "description": "The date and time (ISO 8601 format) when the customer was created",
+              "title": "Created At",
+              "type": "string"
+            },
+            "currency": {
+              "description": "The three-letter code (ISO 4217 format) for the currency that the customer used when they paid for their last order (deprecated field)",
+              "title": "Currency",
+              "type": "string"
+            },
+            "default_address": {
+              "additionalProperties": false,
+              "default": null,
+              "description": "Customer address information.",
+              "nullable": true,
+              "properties": {
+                "address1": {
+                  "description": "The customer's mailing address",
+                  "title": "Address1",
+                  "type": "string"
+                },
+                "address2": {
+                  "default": null,
+                  "description": "An additional field for the customer's mailing address",
+                  "nullable": true,
+                  "title": "Address2",
+                  "type": "string"
+                },
+                "city": {
+                  "description": "The customer's city, town, or village",
+                  "title": "City",
+                  "type": "string"
+                },
+                "company": {
+                  "default": null,
+                  "description": "The customer's company name",
+                  "nullable": true,
+                  "title": "Company",
+                  "type": "string"
+                },
+                "country": {
+                  "description": "The customer's country",
+                  "title": "Country",
+                  "type": "string"
+                },
+                "country_code": {
+                  "description": "The two-letter country code corresponding to the country",
+                  "title": "Country Code",
+                  "type": "string"
+                },
+                "country_name": {
+                  "description": "The full name of the country",
+                  "title": "Country Name",
+                  "type": "string"
+                },
+                "customer_id": {
+                  "description": "The ID of the customer that the address belongs to",
+                  "title": "Customer Id",
+                  "type": "integer"
+                },
+                "default": {
+                  "description": "Whether this address is the default address for the customer",
+                  "title": "Default",
+                  "type": "boolean"
+                },
+                "first_name": {
+                  "default": null,
+                  "description": "The customer's first name",
+                  "nullable": true,
+                  "title": "First Name",
+                  "type": "string"
+                },
+                "id": {
+                  "description": "Unique identifier for the address",
+                  "title": "Id",
+                  "type": "integer"
+                },
+                "last_name": {
+                  "default": null,
+                  "description": "The customer's last name",
+                  "nullable": true,
+                  "title": "Last Name",
+                  "type": "string"
+                },
+                "name": {
+                  "default": null,
+                  "description": "The customer's name",
+                  "nullable": true,
+                  "title": "Name",
+                  "type": "string"
+                },
+                "phone": {
+                  "default": null,
+                  "description": "The customer's phone number at this address",
+                  "nullable": true,
+                  "title": "Phone",
+                  "type": "string"
+                },
+                "province": {
+                  "default": null,
+                  "description": "The customer's region name (province, state, prefecture, etc.)",
+                  "nullable": true,
+                  "title": "Province",
+                  "type": "string"
+                },
+                "province_code": {
+                  "default": null,
+                  "description": "The code for the region of the address",
+                  "nullable": true,
+                  "title": "Province Code",
+                  "type": "string"
+                },
+                "zip": {
+                  "description": "The customer's postal code or zip code",
+                  "title": "Zip",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "customer_id",
+                "address1",
+                "city",
+                "country",
+                "zip",
+                "country_code",
+                "country_name",
+                "default"
+              ],
+              "title": "Address",
+              "type": "object"
+            },
+            "email": {
+              "description": "The unique email address of the customer",
+              "title": "Email",
+              "type": "string"
+            },
+            "email_marketing_consent": {
+              "additionalProperties": false,
+              "default": null,
+              "description": "Email marketing consent information.",
+              "nullable": true,
+              "properties": {
+                "consent_updated_at": {
+                  "default": null,
+                  "description": "The date and time (ISO 8601 format) when the customer consented or objected to receiving marketing material by email",
+                  "nullable": true,
+                  "title": "Consent Updated At",
+                  "type": "string"
+                },
+                "opt_in_level": {
+                  "default": null,
+                  "description": "The marketing subscription opt-in level. Valid values: single_opt_in, confirmed_opt_in, unknown",
+                  "nullable": true,
+                  "title": "Opt In Level",
+                  "type": "string"
+                },
+                "state": {
+                  "description": "The current email marketing state. Valid values: not_subscribed, subscribed, invalid, pending",
+                  "title": "State",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "state"
+              ],
+              "title": "EmailMarketingConsent",
+              "type": "object"
+            },
+            "first_name": {
+              "default": null,
+              "description": "Customer's given name",
+              "nullable": true,
+              "title": "First Name",
+              "type": "string"
+            },
+            "id": {
+              "description": "Unique identifier for the customer",
+              "title": "Id",
+              "type": "integer"
+            },
+            "last_name": {
+              "default": null,
+              "description": "Customer's family name",
+              "nullable": true,
+              "title": "Last Name",
+              "type": "string"
+            },
+            "last_order_id": {
+              "default": null,
+              "description": "The ID of the customer's last order",
+              "nullable": true,
+              "title": "Last Order Id",
+              "type": "integer"
+            },
+            "last_order_name": {
+              "default": null,
+              "description": "The name of the customer's last order (e.g., #1001)",
+              "nullable": true,
+              "title": "Last Order Name",
+              "type": "string"
+            },
+            "multipass_identifier": {
+              "default": null,
+              "description": "A unique identifier used in Shopify Multipass login (legacy field)",
+              "nullable": true,
+              "title": "Multipass Identifier",
+              "type": "string"
+            },
+            "note": {
+              "default": null,
+              "description": "A note about the customer for internal use by the merchant",
+              "nullable": true,
+              "title": "Note",
+              "type": "string"
+            },
+            "orders_count": {
+              "description": "The total number of orders associated with this customer",
+              "title": "Orders Count",
+              "type": "integer"
+            },
+            "phone": {
+              "default": null,
+              "description": "Customer's phone number in E.164 format",
+              "nullable": true,
+              "title": "Phone",
+              "type": "string"
+            },
+            "sms_marketing_consent": {
+              "additionalProperties": false,
+              "default": null,
+              "description": "SMS marketing consent information.",
+              "nullable": true,
+              "properties": {
+                "consent_collected_from": {
+                  "default": null,
+                  "description": "The source from which consent information was collected. Valid values: SHOPIFY, OTHER",
+                  "nullable": true,
+                  "title": "Consent Collected From",
+                  "type": "string"
+                },
+                "consent_updated_at": {
+                  "default": null,
+                  "description": "The date and time (ISO 8601 format) when the customer consented or objected to receiving marketing material by SMS",
+                  "nullable": true,
+                  "title": "Consent Updated At",
+                  "type": "string"
+                },
+                "opt_in_level": {
+                  "description": "The marketing subscription opt-in level. Valid values: single_opt_in, confirmed_opt_in, unknown",
+                  "title": "Opt In Level",
+                  "type": "string"
+                },
+                "state": {
+                  "description": "The current SMS marketing state. Valid values: not_subscribed, subscribed, pending",
+                  "title": "State",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "state",
+                "opt_in_level"
+              ],
+              "title": "SmsMarketingConsent",
+              "type": "object"
+            },
+            "state": {
+              "description": "The state of the customer account. Valid values: enabled, disabled",
+              "title": "State",
+              "type": "string"
+            },
+            "tags": {
+              "default": null,
+              "description": "Tags that the shop owner has attached to the customer, formatted as a string of comma-separated values",
+              "nullable": true,
+              "title": "Tags",
+              "type": "string"
+            },
+            "tax_exempt": {
+              "description": "Whether the customer is exempt from paying taxes on their order",
+              "title": "Tax Exempt",
+              "type": "boolean"
+            },
+            "tax_exemptions": {
+              "description": "The list of tax exemptions applied to the customer",
+              "items": {
+                "properties": {},
+                "type": "string"
+              },
+              "title": "Tax Exemptions",
+              "type": "array"
+            },
+            "total_spent": {
+              "description": "The total amount of money that the customer has spent across all their orders",
+              "title": "Total Spent",
+              "type": "string"
+            },
+            "updated_at": {
+              "description": "The date and time (ISO 8601 format) when the customer was last updated",
+              "title": "Updated At",
+              "type": "string"
+            },
+            "verified_email": {
+              "description": "Whether the customer has verified their email address",
+              "title": "Verified Email",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "id",
+            "email",
+            "created_at",
+            "updated_at",
+            "verified_email",
+            "state",
+            "orders_count",
+            "total_spent",
+            "tax_exempt",
+            "tax_exemptions",
+            "currency",
+            "addresses",
+            "admin_graphql_api_id"
+          ],
+          "title": "Customer",
+          "type": "object"
+        }
+      },
+      "required": [
+        "customer"
+      ],
+      "title": "Data",
+      "type": "object"
+    },
+    "error": {
+      "default": null,
+      "description": "Error if any occurred during the execution of the action",
+      "nullable": true,
+      "title": "Error",
+      "type": "string"
+    },
+    "successful": {
+      "description": "Whether or not the action execution was successful or not",
+      "title": "Successful",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "data",
+    "successful"
+  ],
+  "title": "GetCustomerResponseWrapper",
+  "type": "object"
+}"""
+)
+
+shopify_get_order_list_output_schema = SHOPIFY_GET_ORDER_LIST_OUTPUT_SCHEMA
+shopify_get_ordersby_id_output_schema = SHOPIFY_GET_ORDERSBY_ID_OUTPUT_SCHEMA
 shopify_update_order_output_schema = SHOPIFY_UPDATE_ORDER_OUTPUT_SCHEMA
+shopify_get_customer_output_schema = SHOPIFY_GET_CUSTOMER_OUTPUT_SCHEMA
