@@ -13,7 +13,7 @@ from ._common import ensure_authorized, _invoke_mcp_tool
 
 if TYPE_CHECKING:
     from mcp_agent.core.context import AgentContext
-from .slack_output_helper import slack_post_message_output_schema, slack_search_messages_output_schema
+from ..slack_output_helper import slack_post_message_output_schema, slack_search_messages_output_schema
 
 def _serialize_structured_param(value: Any) -> str | None:
     """

@@ -203,10 +203,13 @@ class ToolSpec:
         for param in self.parameters:
             param_type = param.annotation or "Any"
             if param.required:
-                input_params[param.name] = f"{param_type} (required)"
+                label = f"{param_type} (required)"
             else:
                 default_val = param.default_repr if param.default_repr is not None else repr(param.default)
-                input_params[param.name] = f"{param_type} (optional, default={default_val})"
+                label = f"{param_type} (optional, default={default_val})"
+            if param.description:
+                label = f"{label} - {param.description.strip()}"
+            input_params[param.name] = label
 
         # Get output_fields from schema
         from mcp_agent.knowledge.utils import flatten_schema_fields

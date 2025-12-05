@@ -9,12 +9,13 @@ from ._common import _clean_payload, _invoke_mcp_tool, ensure_authorized
 if TYPE_CHECKING:
     from mcp_agent.core.context import AgentContext
 
-from .shopify_output import (
+from ..shopify_output import (
     shopify_get_order_list_output_schema,
     shopify_get_orders_with_filters_output_schema,
     shopify_get_ordersby_id_output_schema,
     shopify_get_customer_output_schema,
     shopify_update_order_output_schema,
+    shopify_graph_ql_query_output_schema,
 )
 
 
@@ -287,3 +288,25 @@ def shopify_get_orders_with_filters(
     return _invoke_mcp_tool(context, provider, tool_name, payload)
 
 shopify_get_orders_with_filters.__tb_output_schema__ = shopify_get_orders_with_filters_output_schema
+
+
+def shopify_graph_ql_query(
+    context: "AgentContext",
+    query: str,
+    variables: dict | None = None,
+) -> ToolInvocationResult:
+    """
+    Execute a GraphQL operation against the Shopify Admin API.
+
+    Args:
+        query: The GraphQL query string to execute against the Shopify Admin API.
+        variables: Optional variables to supply to the query (dictionary).
+    """
+    provider = "shopify"
+    tool_name = "SHOPIFY_GRAPH_QL_QUERY"
+    ensure_authorized(context, provider)
+    payload = _clean_payload({"query": query, "variables": variables})
+    return _invoke_mcp_tool(context, provider, tool_name, payload)
+
+
+shopify_graph_ql_query.__tb_output_schema__ = shopify_graph_ql_query_output_schema

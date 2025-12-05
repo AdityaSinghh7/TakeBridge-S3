@@ -9474,7 +9474,215 @@ SHOPIFY_GET_CUSTOMER_OUTPUT_SCHEMA = json.loads(
 }"""
 )
 
+SHOPIFY_GRAPH_QL_QUERY_OUTPUT_SCHEMA = {
+  "properties": {
+    "data": {
+      "additionalProperties": True,
+      "default": None,
+      "description": "Contains the result of the executed GraphQL operation. The structure within this object mirrors the structure of the corresponding GraphQL request. At least one of 'data' or 'errors' will be present. May contain partial data if field-level errors occurred during execution.",
+      "nullable": True,
+      "title": "Data",
+      "type": "object"
+    },
+    "error": {
+      "default": None,
+      "description": "Error if any occurred during the execution of the action",
+      "nullable": True,
+      "title": "Error",
+      "type": "string"
+    },
+    "errors": {
+      "default": None,
+      "description": "Array of error objects containing information about errors that occurred during request processing or execution. At least one of 'data' or 'errors' will be present. Request errors (syntax/validation) will only include 'errors' without 'data'.",
+      "items": {
+        "description": "Represents an error that occurred during GraphQL request processing or execution.",
+        "properties": {
+          "extensions": {
+            "additionalProperties": False,
+            "default": None,
+            "description": "Additional error metadata specific to Shopify's GraphQL implementation.",
+            "nullable": True,
+            "properties": {
+              "code": {
+                "default": None,
+                "description": "Error type identifier enabling programmatic error matching. Examples: MAX_COST_EXCEEDED, INTERNAL_SERVER_ERROR, THROTTLED, UNAUTHENTICATED, etc.",
+                "nullable": True,
+                "title": "Code",
+                "type": "string"
+              },
+              "cost": {
+                "default": None,
+                "description": "The calculated cost of the query that exceeded limits. Present in MAX_COST_EXCEEDED errors.",
+                "nullable": True,
+                "title": "Cost",
+                "type": "integer"
+              },
+              "documentation": {
+                "default": None,
+                "description": "URL to relevant documentation for understanding and resolving the error.",
+                "nullable": True,
+                "title": "Documentation",
+                "type": "string"
+              },
+              "maxCost": {
+                "default": None,
+                "description": "The maximum allowed cost for a single query (typically 1000). Present in MAX_COST_EXCEEDED errors.",
+                "nullable": True,
+                "title": "Max Cost",
+                "type": "integer"
+              },
+              "requestId": {
+                "default": None,
+                "description": "Unique identifier for tracking the specific request, useful for debugging. Present in INTERNAL_SERVER_ERROR and other server-side errors.",
+                "nullable": True,
+                "title": "Request Id",
+                "type": "string"
+              }
+            },
+            "title": "ErrorExtensions",
+            "type": "object"
+          },
+          "locations": {
+            "default": None,
+            "description": "Array indicating where the error occurred in the GraphQL operation document.",
+            "items": {
+              "description": "Indicates where an error occurred in the GraphQL document.",
+              "properties": {
+                "column": {
+                  "description": "Column number where the error occurred in the query.",
+                  "title": "Column",
+                  "type": "integer"
+                },
+                "line": {
+                  "description": "Line number where the error occurred in the query.",
+                  "title": "Line",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "line",
+                "column"
+              ],
+              "title": "ErrorLocation",
+              "type": "object"
+            },
+            "nullable": True,
+            "title": "Locations",
+            "type": "array"
+          },
+          "message": {
+            "description": "Human-readable description of the error.",
+            "title": "Message",
+            "type": "string"
+          },
+          "path": {
+            "default": None,
+            "description": "Path to the field that caused the error, represented as an array of field names (strings) and list indices (integers).",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ],
+              "properties": {}
+            },
+            "nullable": True,
+            "title": "Path",
+            "type": "array"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "title": "GraphQLError",
+        "type": "object"
+      },
+      "nullable": True,
+      "title": "Errors",
+      "type": "array"
+    },
+    "extensions": {
+      "additionalProperties": False,
+      "default": None,
+      "description": "Implementation-specific metadata about the response, including query cost and rate limit status.",
+      "nullable": True,
+      "properties": {
+        "cost": {
+          "additionalProperties": False,
+          "default": None,
+          "description": "Query cost and rate limit information for the executed operation.",
+          "nullable": True,
+          "properties": {
+            "actualQueryCost": {
+              "default": None,
+              "description": "Actual cost calculated during execution based on the query results. May be lower than requestedQueryCost when connections return fewer edges than requested. The difference is refunded to the API client's bucket. Null when query is throttled.",
+              "nullable": True,
+              "title": "Actual Query Cost",
+              "type": "integer"
+            },
+            "requestedQueryCost": {
+              "description": "Calculated cost before execution based on the composition of fields selected in the request. Used to determine if the app has sufficient bucket capacity to proceed.",
+              "title": "Requested Query Cost",
+              "type": "integer"
+            },
+            "throttleStatus": {
+              "additionalProperties": False,
+              "description": "Current rate limit bucket status for the app-store combination.",
+              "properties": {
+                "currentlyAvailable": {
+                  "description": "Current available points remaining in the bucket after the query execution. Decreases with each query and increases at the restore rate.",
+                  "title": "Currently Available",
+                  "type": "number"
+                },
+                "maximumAvailable": {
+                  "description": "Maximum bucket capacity (total points available). Typically 1000.0 for standard plans.",
+                  "title": "Maximum Available",
+                  "type": "number"
+                },
+                "restoreRate": {
+                  "description": "Points restored per second as the bucket refills. Typically 50.0 points per second for the GraphQL Admin API.",
+                  "title": "Restore Rate",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "maximumAvailable",
+                "currentlyAvailable",
+                "restoreRate"
+              ],
+              "title": "Throttle Status",
+              "type": "object"
+            }
+          },
+          "required": [
+            "requestedQueryCost",
+            "throttleStatus"
+          ],
+          "title": "CostInformation",
+          "type": "object"
+        }
+      },
+      "title": "ResponseExtensions",
+      "type": "object"
+    },
+    "successful": {
+      "description": "Whether or not the action execution was successful or not",
+      "title": "Successful",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "successful"
+  ],
+  "title": "ShopifyGraphQLQueryResponseWrapper",
+  "type": "object"
+}
+
 shopify_get_order_list_output_schema = SHOPIFY_GET_ORDER_LIST_OUTPUT_SCHEMA
 shopify_get_ordersby_id_output_schema = SHOPIFY_GET_ORDERSBY_ID_OUTPUT_SCHEMA
 shopify_update_order_output_schema = SHOPIFY_UPDATE_ORDER_OUTPUT_SCHEMA
 shopify_get_customer_output_schema = SHOPIFY_GET_CUSTOMER_OUTPUT_SCHEMA
+shopify_graph_ql_query_output_schema = SHOPIFY_GRAPH_QL_QUERY_OUTPUT_SCHEMA
