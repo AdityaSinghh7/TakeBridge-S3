@@ -40,6 +40,8 @@ class ComposedStep:
     # Optional prompt snippet to send to the main agent loop.
     # Example: "Use gmail_search tool to retrieve the last 2 emails from the inbox."
     prompt: Optional[str] = None
+    # High-level result for this step (data to retrieve or success criteria for actions).
+    expected_outcome: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -73,5 +75,4 @@ __all__ = [
     "ComposedStep",
     "StepType",
 ]
-
 

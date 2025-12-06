@@ -1063,3 +1063,24 @@ class OSWorldACI(ACI):
     def fail(self):
         """End the current task with a failure. Use this when you believe the entire task is impossible to complete."""
         return """FAIL"""
+
+
+_OSWORLD_ACTION_NAMES: Optional[Tuple[str, ...]] = None
+
+
+def list_osworld_agent_actions() -> List[str]:
+    """
+    Return the names of OSWorldACI methods marked as agent actions.
+
+    Exposes the available CUA primitives (click, type, scroll, done, etc.)
+    without requiring other modules to inspect the class themselves.
+    """
+    global _OSWORLD_ACTION_NAMES
+    if _OSWORLD_ACTION_NAMES is None:
+        actions: List[str] = []
+        for attr_name in dir(OSWorldACI):
+            attr = getattr(OSWorldACI, attr_name, None)
+            if callable(attr) and getattr(attr, "is_agent_action", False):
+                actions.append(attr_name)
+        _OSWORLD_ACTION_NAMES = tuple(sorted(actions))
+    return list(_OSWORLD_ACTION_NAMES)

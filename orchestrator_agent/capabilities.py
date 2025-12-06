@@ -9,7 +9,7 @@ Capabilities are cached with a 5-minute TTL to balance freshness vs performance.
 
 from __future__ import annotations
 
-from typing import Dict, Any, Optional, TYPE_CHECKING
+from typing import Dict, Any, Optional, TYPE_CHECKING, List
 from datetime import datetime, timedelta
 import logging
 
@@ -148,7 +148,7 @@ def fetch_computer_capabilities(
     controller = _resolve_controller(request.metadata)
     if not controller:
         logger.warning("No controller available from metadata or environment")
-        return {"platform": "unknown", "available_apps": [], "active_windows": []}
+        return {"platform": "unknown", "available_apps": [], "active_windows": [], "actions": []}
 
     cache_key = f"computer:{request.user_id or 'default'}"
 
@@ -171,6 +171,17 @@ def fetch_computer_capabilities(
         apps_data = controller.get_apps(exclude_system=True)
         windows_data = controller.get_active_windows(exclude_system=True)
 
+        # Surface available OSWorld agent actions (click, type, scroll, etc.)
+        actions: List[str] = []
+        try:
+            from computer_use_agent.grounding.grounding_agent import (
+                list_osworld_agent_actions,
+            )
+
+            actions = list_osworld_agent_actions()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.debug("Unable to load OSWorld agent actions: %s", exc)
+
         # Persist the resolved platform back into request metadata for downstream use
         try:
             request.metadata["platform"] = platform
@@ -187,6 +198,7 @@ def fetch_computer_capabilities(
                 if isinstance(windows_data, dict)
                 else []
             ),
+            "actions": actions,
         }
 
         # Cache the result

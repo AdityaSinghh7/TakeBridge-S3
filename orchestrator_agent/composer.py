@@ -17,7 +17,7 @@ from shared.oai_client import respond_once, extract_assistant_text
 
 logger = logging.getLogger(__name__)
 
-COMPOSE_SCHEMA_VERSION = 1
+COMPOSE_SCHEMA_VERSION = 2
 
 
 def _summarize_capabilities(capabilities: Dict[str, Any]) -> Tuple[str, str]:
@@ -38,10 +38,11 @@ def _summarize_capabilities(capabilities: Dict[str, Any]) -> Tuple[str, str]:
     mcp_summary = "\n".join(provider_lines) if provider_lines else "None"
 
     apps = computer_caps.get("available_apps", []) or []
+    actions = computer_caps.get("actions", []) or []
     platform = computer_caps.get("platform", "unknown")
-    apps_summary = (
-        f"Platform: {platform}; Apps: " + (", ".join(apps) if apps else "None")
-    )
+    apps_label = ", ".join(apps) if apps else "None"
+    actions_label = ", ".join(actions) if actions else "None"
+    apps_summary = f"Platform: {platform}; Apps: {apps_label}; Actions: {actions_label}"
 
     return mcp_summary, apps_summary
 
@@ -51,87 +52,73 @@ def _build_compose_prompt(task: str, capabilities: Dict[str, Any]) -> str:
     mcp_summary, apps_summary = _summarize_capabilities(capabilities)
 
     prompt = f"""
-You are the Task Compose Agent for a higher-level orchestrator.
+You are the Task Decomposition Agent. 
 
-Your job:
-- Take a raw user task and the current capabilities (MCP providers/tools and desktop apps).
-- Decompose the task top-down into:
-  - Detailed tool/app-level steps (ComposedStep)
-- Prefer MCP tools when a suitable provider/tool exists.
-- Use computer-use (CUA) steps when desktop UI automation is required.
+Your goal is to decompose a user request into a high-level sequential plan. 
+You have two sub-agents you can delegate work to:
+1. **MCP Agent**: Uses API tools (providers) to fetch data, search, or interact with services.
+2. **Computer Use Agent (CUA)**: Uses a desktop GUI to interact with applications (open apps, navigate websites, type documents).
 
-You MUST respond with a single JSON object that matches this schema exactly:
+### **Planning Rules**
+1. **Granularity**: Create **medium-level tasks**. Do not generate atomic actions (like "click button" or "type key"). 
+   - Both agents are capable of handling multi-turn instructions.
+   - Example (Good): "Research the history of Rome and summarize it."
+   - Example (Bad): "Open browser", "Type 'Rome'", "Press Enter".
+
+2. **Delegation**:
+   - Assign tasks to **MCP** when a suitable tool/provider exists (faster, more reliable).
+   - Assign tasks to **CUA** when UI interaction is required or no API tool exists.
+
+3. **Step Boundaries**: Create a new step only when:
+   - **Data Transfer**: Information fetched by one agent is needed by the next.
+   - **Context Switch**: Switching from API work to Desktop work (or vice versa).
+   - **Logical Isolation**: A distinct phase of the project is complete.
+
+4. **Task Definition**:
+   - For **MCP**: You MUST mention the `provider_id` and `tool_names` capable of doing the work.
+   - For **CUA**: You MUST mention the `app_name` required.
+
+### **Defining Outcomes (`expected_outcome`)**
+You must clearly define what the orchestrator should expect at the end of each step:
+- **For Retrieval Steps** (e.g., Search, Read): Define exactly what **data** needs to be returned for future steps (e.g., "The body text of the last 3 emails").
+- **For Mutation/Action Steps** (e.g., Send, Save, Type): Define the **success criteria** or state change (e.g., "Confirmation that the file 'report.txt' is saved on Desktop").
+
+### **Output Schema**
+Respond with a single JSON object matching this schema:
 
 {{
-  "schema_version": 1,
   "original_task": "string",
-  "notes": "optional string or null",
   "steps": [
     {{
       "id": "step-1",
       "type": "mcp" | "cua",
-      "provider_id": "gmail",        // for MCP steps, if known
-      "tool_id": "gmail.get_last_emails",  // canonical provider.tool id, if known
-      "tool_name": "gmail_get_last_emails", // optional display name
-
-      "app_name": "LibreOffice Writer", // for CUA steps, if known
+      "description": "High-level description of what this step achieves",
       
-
-      "prompt": "Short, explicit instruction that will be sent to the main agent loop for this step"
+      // Routing Metadata
+      "provider_id": "google_workspace",   // Required for MCP
+      "tool_id": "gmail_search",           // Primary tool hint (optional)
+      "app_name": "Chrome",                // Required for CUA
+      
+      // The Instruction
+      "prompt": "The actual natural language instruction sent to the sub-agent. Be descriptive.",
+      
+      // The Outcome
+      "expected_outcome": "Description of the data returned OR the action completed."
     }}
   ]
 }}
 
-CRITICAL REQUIREMENTS FOR THE "prompt" FIELD:
-
-Each step's "prompt" field will be concatenated into a single task string that is sent to the main AI agent loop. Therefore:
-
-1. **Self-contained**: Each prompt must be understandable on its own, without template variables or placeholders.
-
-2. **No template syntax**: NEVER use template variables like {{step-1.emails}}, {{step-2.summary}}, or any other placeholder syntax. The main AI agent will not understand these.
-
-3. **Reference previous steps naturally**: When a step depends on data from a previous step, describe what that previous step accomplished in natural language.
-
-   ✅ GOOD examples:
-   - "Use the gmail_search tool to retrieve the last 2 emails from the user's inbox. Return full message bodies including subject, sender, and content.
-   - "Type the emails' summary into the new LibreOffice Writer document."
-
-   ❌ BAD examples (DO NOT USE):
-   - "Summarize: {{step-1.emails}}" 
-   - "Type {{step-2.summary}} into the document"
-   - "Use the data from {{previous_step}}"
-
-4. **For MCP steps**: Be explicit about which tool to use.
-   - Example: "Use the gmail_search tool to retrieve the last 2 emails from the user's inbox. Return full message bodies including subject, sender, and content."
-
-5. **For CUA steps**: Clearly state the action and application.
-   - Example: "Using CUA, open LibreOffice Writer application."
-   - Example: "Using CUA, type a concise email summary  into the new document in LibreOffice Writer."
-
-
-7. **Flow naturally**: When concatenated, the prompts should read like a numbered list of instructions that the main AI agent can follow sequentially.
-
-Capabilities summary (use only these providers/apps when possible):
-
-MCP providers:
+### **Capabilities**
+**MCP Providers (APIs):**
 {mcp_summary}
 
-Desktop apps:
+**Computer Use Agent (GUI + action primitives):**
 {apps_summary}
 
-Example of good prompt structure (do NOT include this example in your output, it is only guidance):
-
-For a Gmail + LibreOffice task:
-- Step 1 (MCP): "Use the gmail_search tool to retrieve the last 2 emails from the user's inbox. Return full message bodies including subject, sender, and content."
-- Step 2 (CUA): "Using CUA, open LibreOffice Writer application."
-- Step 3 (CUA): "Using CUA, type the concise email summary of the emails into the new document in LibreOffice Writer."
-- Step 4 (CUA): "Using CUA, save the current document as 'email_summary.odt' in the Documents folder."
-
-Important:
-- Use realistic provider_id / tool_id / app_name values based on the capabilities summary when possible.
-- It is OK if some fields are left null when you are not sure, but keep the structure valid.
-- Each prompt must be self-contained and reference previous steps by describing what they accomplished.
-- Keep the JSON concise but complete.
+### **Prompting Best Practices**
+- The `prompt` field should be self-contained. 
+- If a step needs data from a previous step, reference it naturally (e.g., "Using the email summary retrieved in the previous step..."). 
+- DO NOT use template variables like `{{step1.result}}`. Use English.
 
 Now the user task you must decompose will be provided separately as 'original_task'.
 """
@@ -244,6 +231,7 @@ def _normalize_plan_dict(
         # Extract and clean the prompt field
         raw_prompt = s.get("prompt")
         cleaned_prompt = _clean_prompt_template_vars(raw_prompt, sid) if raw_prompt else None
+        outcome = s.get("expected_outcome")
 
         step = ComposedStep(
             id=sid,
@@ -255,6 +243,7 @@ def _normalize_plan_dict(
             app_name=s.get("app_name"),
             action_kind=s.get("action_kind"),
             prompt=cleaned_prompt,
+            expected_outcome=outcome,
         )
 
         # Light normalization
@@ -365,5 +354,3 @@ def compose_plan(
 
 
 __all__ = ["compose_plan", "COMPOSE_SCHEMA_VERSION"]
-
-
