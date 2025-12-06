@@ -184,6 +184,14 @@ try:
 except Exception as _e:  # pragma: no cover
     logger.warning("Failed to mount task compose routes: %s", _e)
 
+# Mount workflow/run routes
+try:
+    from server.api.routes_workflows import router as workflows_router  # type: ignore
+    app.include_router(workflows_router)
+    logger.info("Mounted workflow routes")
+except Exception as _e:  # pragma: no cover
+    logger.warning("Failed to mount workflow routes: %s", _e)
+
 
 def _parse_orchestrate_request(payload: Dict[str, Any]) -> OrchestrateRequest:
     try:

@@ -63,6 +63,19 @@ def get_step_id() -> Optional[str]:
     return _current_step_id.get()
 
 
+def _json_safe(val: Any) -> Any:
+    """Recursively coerce values to JSON-serializable forms."""
+    try:
+        json.dumps(val)
+        return val
+    except TypeError:
+        if isinstance(val, dict):
+            return {k: _json_safe(v) for k, v in val.items()}
+        if isinstance(val, (list, tuple)):
+            return [_json_safe(v) for v in val]
+        return str(val)
+
+
 class HierarchicalLogger:
     """Manages hierarchical log files for multi-agent systems.
 
@@ -186,14 +199,15 @@ class AgentLogger:
             "step_id": self.step_id,
             "data": self._truncate_payload(data, max_value_len) if truncate else data,
         }
+        entry_safe = _json_safe(entry)
 
         # Append to JSONL file
         with open(self.main_log, "a") as f:
-            f.write(json.dumps(entry) + "\n")
+            f.write(json.dumps(entry_safe) + "\n")
 
         # Also emit to server logs (truncated for readability)
         truncated_data = self._truncate_payload(data, max_value_len=500)
-        print(f"[{self.agent}] {event}: {json.dumps(truncated_data)}")
+        print(f"[{self.agent}] {event}: {json.dumps(_json_safe(truncated_data))}")
 
     def log_full_payload(self, name: str, data: Any) -> None:
         """Log full payload without truncation to raw/ directory.

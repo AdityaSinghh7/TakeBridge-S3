@@ -8,6 +8,7 @@ that reflects the user's MCP + computer-use capabilities.
 """
 
 import logging
+import uuid
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
@@ -23,6 +24,7 @@ from orchestrator_agent.data_types import OrchestratorRequest
 from server.api.auth import CurrentUser, get_current_user
 from vm_manager.vm_wrapper import ensure_workspace
 from vm_manager.config import settings
+from shared.supabase_client import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -109,9 +111,41 @@ async def compose_task(
     logger.info(f"Calling compose_plan for task: {task[:100]}...")
     plan = compose_plan(task, capabilities, tool_constraints=tool_constraints)
     logger.info(f"compose_plan completed - returned plan with {len(plan.get('steps', []))} steps, schema_version={plan.get('schema_version')}")
-    return plan
+    # Persist/update workflow in Supabase
+    client = get_supabase_client(current_user.token)
+    workflow_id = payload.get("workflow_id") or str(uuid.uuid4())
+    folder_id = payload.get("folder_id")
+    workflow_name = payload.get("name") or task[:80]
+    workflow_description = payload.get("description")
+
+    status_value = "active"
+    try:
+        existing = client.table("workflows").select("status").eq("id", workflow_id).single().execute()
+        if existing.data and existing.data.get("status"):
+            status_value = existing.data["status"]
+    except Exception:
+        status_value = "active"
+
+    upsert_payload = {
+        "id": workflow_id,
+        "user_id": user_id,
+        "folder_id": folder_id,
+        "name": workflow_name,
+        "prompt": task,
+        "description": workflow_description,
+        "definition_json": plan,
+        "status": status_value,
+    }
+
+    try:
+        client.table("workflows").upsert(upsert_payload, on_conflict="id").execute()
+    except Exception as exc:
+        logger.exception("Failed to upsert workflow in Supabase: %s", exc)
+        raise HTTPException(status_code=500, detail="failed_to_save_workflow")
+
+    plan_with_id = {**plan, "workflow_id": workflow_id, "folder_id": folder_id}
+    return plan_with_id
 
 
 __all__ = ["router"]
-
 
