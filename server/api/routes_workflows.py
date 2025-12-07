@@ -8,7 +8,6 @@ import uuid
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse
 from sqlalchemy import text
 from postgrest.exceptions import APIError
 
@@ -146,43 +145,6 @@ def enqueue_workflow_run(
         db.close()
 
     return {"run_id": run_id, "status": "queued", "credits_remaining": credit_row[0]}
-
-
-@router.get("/runs/{run_id}/events")
-async def stream_run_events(
-    run_id: str,
-    current_user: CurrentUser = Depends(get_current_user),
-) -> StreamingResponse:
-    """
-    SSE stream of run_events mirrored in Supabase.
-    Polls every ~1s; emits events in order.
-    """
-    client = get_supabase_client(current_user.token)
-    last_ts: Optional[str] = None
-
-    async def _event_stream():
-        nonlocal last_ts
-        while True:
-            # Fetch new events
-            q = client.table("run_events").select("*").eq("run_id", run_id).order("ts", desc=False).limit(200)
-            if last_ts:
-                q = q.gt("ts", last_ts)
-            res = q.execute()
-            events = res.data or []
-            for evt in events:
-                last_ts = evt.get("ts") or last_ts
-                yield _format_sse("run_event", evt)
-
-            # Check run status to decide whether to continue streaming
-            status_res = client.table("workflow_runs").select("status").eq("id", run_id).single().execute()
-            status_val = (status_res.data or {}).get("status")
-            if status_val in TERMINAL_STATUSES:
-                yield _format_sse("run_completed", {"status": status_val})
-                break
-
-            await asyncio.sleep(1.0)
-
-    return StreamingResponse(_event_stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
 
 @router.get("/workflows")

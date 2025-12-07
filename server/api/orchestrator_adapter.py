@@ -42,9 +42,10 @@ def orchestrate_to_orchestrator(
         OrchestratorRequest compatible with orchestrator_agent runtime
     """
     # Create tenant context
+    req_id = run_id or uuid.uuid4().hex
     tenant = TenantContext(
         tenant_id=user_id or "default",
-        request_id=uuid.uuid4().hex,
+        request_id=req_id,
         user_id=user_id,
     )
 

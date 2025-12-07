@@ -21,7 +21,9 @@ from shared.supabase_client import get_service_supabase_client
 logger = logging.getLogger(__name__)
 
 INTERNAL_API_TOKEN = os.getenv("INTERNAL_API_TOKEN") or ""
-EXECUTOR_BASE_URL = os.getenv("EXECUTOR_BASE_URL", "http://127.0.0.1:8000")
+# Default to https to match Procfile (self-signed local cert); override via env if needed.
+EXECUTOR_BASE_URL = os.getenv("EXECUTOR_BASE_URL", "https://127.0.0.1:8000")
+INTERNAL_VERIFY_SSL = os.getenv("INTERNAL_VERIFY_SSL", "false").lower() in {"1", "true", "yes"}
 NOTIFY_CHANNEL = "workflow_run_queued"
 IS_POSTGRES = DB_URL.startswith("postgres")
 
@@ -133,7 +135,14 @@ def trigger_execution(run_id: str, workflow_id: str, user_id: str, task: str, co
     payload = _json_safe(payload)
     # Ensure full JSON-serializability (e.g., UUIDs) before sending
     payload = json.loads(json.dumps(payload, default=str))
-    with requests.post(url, json=payload, headers=headers, stream=True, timeout=None) as resp:
+    with requests.post(
+        url,
+        json=payload,
+        headers=headers,
+        stream=True,
+        timeout=None,
+        verify=INTERNAL_VERIFY_SSL,
+    ) as resp:
         if resp.status_code >= 300:
             text_body = ""
             try:
