@@ -25,6 +25,7 @@ def orchestrate_to_orchestrator(
     user_id: Optional[str] = None,
     tool_constraints: Optional[Dict[str, Any]] = None,
     workspace: Optional[Dict[str, Any]] = None,
+    run_id: Optional[str] = None,
 ) -> OrchestratorRequest:
     """Convert OrchestrateRequest to OrchestratorRequest.
 
@@ -93,6 +94,8 @@ def orchestrate_to_orchestrator(
         metadata["tool_constraints_dict"] = tool_constraints
     if workspace:
         metadata["workspace"] = workspace
+    if run_id:
+        metadata["run_id"] = run_id
 
     # Optional composed plan passed through from the original request payload
     composed_plan = getattr(req, "composed_plan", None)

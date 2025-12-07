@@ -18,7 +18,7 @@ from dataclasses import asdict
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
-from fastapi import Body, FastAPI, HTTPException, Depends
+from fastapi import Body, FastAPI, HTTPException, Depends, Header
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -44,6 +44,9 @@ from vm_manager.config import settings
 from orchestrator_agent.data_types import OrchestratorRequest
 from shared.run_context import RUN_LOG_ID
 from .auth import get_current_user, CurrentUser
+from shared.supabase_client import get_service_supabase_client
+from shared.db.engine import SessionLocal
+from sqlalchemy import text
 try:
     from dotenv import load_dotenv  # type: ignore
 except Exception:  # pragma: no cover
@@ -222,6 +225,18 @@ async def _execute_orchestrator(
             reset_current_emitter(token)
 
 
+def _json_safe(val: Any) -> Any:
+    try:
+        json.dumps(val)
+        return val
+    except Exception:
+        if isinstance(val, dict):
+            return {k: _json_safe(v) for k, v in val.items()}
+        if isinstance(val, (list, tuple)):
+            return [_json_safe(v) for v in val]
+        return str(val)
+
+
 def _format_sse_event(event: str, data: Optional[Any] = None) -> bytes:
     parts = [f"event: {event}"]
     if data is not None:
@@ -233,11 +248,41 @@ def _format_sse_event(event: str, data: Optional[Any] = None) -> bytes:
     parts.append("")
     return ("\n".join(parts)).encode("utf-8")
 
+
+def _update_run_status(run_id: str, status: str, summary: Optional[str] = None):
+    db = SessionLocal()
+    try:
+        db.execute(
+            text(
+                """
+                UPDATE workflow_runs
+                SET status = :status,
+                    summary = COALESCE(:summary, summary),
+                    ended_at = CASE WHEN :terminal THEN NOW() ELSE ended_at END,
+                    updated_at = NOW()
+                WHERE id = :run_id
+                """
+            ),
+            {
+                "status": status,
+                "summary": summary,
+                "run_id": run_id,
+                "terminal": status in {"success", "error", "attention", "cancelled"},
+            },
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
+
 def _create_streaming_response(
     request: OrchestrateRequest,
     user_id: Optional[str] = None,
     tool_constraints: Optional[Dict[str, Any]] = None,
     workspace: Optional[Dict[str, Any]] = None,
+    run_id: Optional[str] = None,
+    workflow_id: Optional[str] = None,
 ) -> StreamingResponse:
     """Create streaming response using orchestrator agent.
 
@@ -246,6 +291,8 @@ def _create_streaming_response(
         user_id: Optional user ID for multi-tenancy
         tool_constraints: Optional tool constraints dict
         workspace: Optional workspace context (id, controller_base_url, vnc_url)
+        run_id: Optional workflow_run id to persist events/status
+        workflow_id: Optional workflow id for context
 
     Returns:
         StreamingResponse with SSE events
@@ -261,6 +308,45 @@ def _create_streaming_response(
     queue.put_nowait(first_chunk)
     queue.put_nowait(_format_sse_event("response.in_progress", {"status": "running"}))
 
+    def _persist_run_event(event: str, data: Optional[Any]) -> None:
+        if not run_id:
+            return
+        try:
+            client = get_service_supabase_client()
+            client.table("run_events").insert(
+                {
+                    "run_id": run_id,
+                    "kind": event,
+                    "message": str(
+                        data.get("message")
+                        if isinstance(data, dict)
+                        else data if data is not None
+                        else event
+                    ),
+                    "payload": _json_safe(data) if data is not None else {},
+                }
+            ).execute()
+        except Exception:
+            logger.debug("Failed to persist run_event for run_id=%s event=%s", run_id, event)
+
+        try:
+            db = SessionLocal()
+            db.execute(
+                text(
+                    """
+                    UPDATE workflow_runs
+                    SET last_heartbeat_at = NOW(), updated_at = NOW()
+                    WHERE id = :run_id
+                    """
+                ),
+                {"run_id": run_id},
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+        finally:
+            db.close()
+
     def _publish(event: str, data: Optional[Any] = None) -> None:
         chunk = _format_sse_event(event, data)
         try:
@@ -274,6 +360,11 @@ def _create_streaming_response(
         except RuntimeError as exc:
             if "closed" not in str(exc).lower():
                 raise
+        # Persist event if linked to a run
+        try:
+            _persist_run_event(event, data)
+        except Exception:
+            pass
 
     emitter = StreamEmitter(_publish)
 
@@ -312,6 +403,7 @@ def _create_streaming_response(
         heartbeat = None
         log_token = None
         handler = None
+        run_id_local = run_id or None
         try:
             from server.api.orchestrator_adapter import orchestrate_to_orchestrator
 
@@ -320,10 +412,11 @@ def _create_streaming_response(
                 user_id=user_id,
                 tool_constraints=tool_constraints,
                 workspace=workspace,
+                run_id=run_id,
             )
-            run_id = getattr(orch_request, "request_id", None) or "run"
-            handler = _attach_run_log_handler(run_id)
-            log_token = RUN_LOG_ID.set(run_id)
+            run_id_local = run_id or getattr(orch_request, "request_id", None) or "run"
+            handler = _attach_run_log_handler(run_id_local)
+            log_token = RUN_LOG_ID.set(run_id_local)
 
             # Start keepalive after run_id is bound so any logs it emits are tagged.
             heartbeat = asyncio.create_task(_emit_keepalive())
@@ -356,6 +449,8 @@ def _create_streaming_response(
                 error_payload = {"error": str(exc)}
                 await queue.put(_format_sse_event("response.failed", error_payload))
                 await queue.put(_format_sse_event("error", error_payload))
+                if run_id:
+                    _update_run_status(run_id, "error", summary=str(exc))
         else:
             await queue.put(_format_sse_event("response", result_dict))
             await queue.put(
@@ -367,6 +462,15 @@ def _create_streaming_response(
                     },
                 )
             )
+            if run_id:
+                summary = "; ".join(
+                    [
+                        r.get("final_summary") or ""
+                        for r in result_dict.get("steps", [])
+                        if isinstance(r, dict)
+                    ]
+                )
+                _update_run_status(run_id, result_dict.get("status") or "success", summary=summary or None)
         finally:
             if heartbeat:
                 heartbeat.cancel()
@@ -492,10 +596,15 @@ async def orchestrate_stream_post(
     # Extract user_id from header or env
     user_id = current_user.sub
 
-    # Ensure workspace/VM and derive controller defaults
-    workspace_obj = ensure_workspace(user_id)
+    run_id = payload.get("run_id")
+
+    # Ensure workspace/VM and derive controller defaults (unless provided)
     controller_data = dict(payload.get("controller") or {})
-    base_url = controller_data.get("base_url") or workspace_obj.controller_base_url
+    base_url = controller_data.get("base_url")
+    workspace_obj = None
+    if not base_url:
+        workspace_obj = ensure_workspace(user_id)
+        base_url = workspace_obj.controller_base_url
     if not base_url:
         raise HTTPException(status_code=500, detail="Workspace controller_base_url is missing")
     parsed = urlparse(base_url) if base_url else None
@@ -522,15 +631,101 @@ async def orchestrate_stream_post(
     if composed_plan is not None:
         setattr(request, "composed_plan", composed_plan)
 
-    workspace_info = {
-        "id": workspace_obj.id,
-        "controller_base_url": workspace_obj.controller_base_url,
-        "vnc_url": workspace_obj.vnc_url,
-        "controller_host": host,
-        "controller_port": port,
-    }
+    workspace_info = payload.get("workspace") or (
+        {
+            "id": workspace_obj.id,
+            "controller_base_url": workspace_obj.controller_base_url,
+            "vnc_url": workspace_obj.vnc_url,
+            "controller_host": host,
+            "controller_port": port,
+        }
+        if workspace_obj
+        else {
+            "controller_base_url": base_url,
+            "controller_host": host,
+            "controller_port": port,
+        }
+    )
 
-    return _create_streaming_response(request, user_id, tool_constraints, workspace_info)
+    return _create_streaming_response(request, user_id, tool_constraints, workspace_info, run_id=run_id)
+
+
+def _require_internal_token(token: Optional[str]) -> None:
+    expected = os.getenv("INTERNAL_API_TOKEN")
+    if not expected or token != expected:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+
+@app.post("/internal/runs/{run_id}/execute")
+async def internal_execute_run(
+    run_id: str,
+    payload: Dict[str, Any] = Body(...),
+    x_internal_token: Optional[str] = Header(default=None),
+) -> StreamingResponse:
+    """
+    Internal endpoint for worker to trigger execution for a queued run.
+    """
+    _require_internal_token(x_internal_token)
+
+    user_id = payload.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id required")
+
+    task = (payload.get("task") or "").strip()
+    if not task:
+        raise HTTPException(status_code=400, detail="task required")
+
+    controller_data = dict(payload.get("controller") or {})
+    base_url = controller_data.get("base_url")
+    workspace_obj = None
+    if not base_url:
+        workspace_obj = ensure_workspace(user_id)
+        base_url = workspace_obj.controller_base_url
+    if not base_url:
+        raise HTTPException(status_code=500, detail="Workspace controller_base_url is missing")
+    parsed = urlparse(base_url) if base_url else None
+    host = controller_data.get("host") or (parsed.hostname if parsed else None)
+    port = controller_data.get("port") or (parsed.port if parsed else settings.AGENT_CONTROLLER_PORT)
+    controller_data.update(
+        {
+            "base_url": base_url,
+            "host": host,
+            "port": port,
+        }
+    )
+
+    payload = {**payload, "controller": controller_data, "task": task}
+    tool_constraints = payload.get("tool_constraints")
+    composed_plan = payload.get("composed_plan")
+
+    request = _parse_orchestrate_request(payload)
+    if composed_plan is not None:
+        setattr(request, "composed_plan", composed_plan)
+
+    workspace_info = payload.get("workspace") or (
+        {
+            "id": workspace_obj.id,
+            "controller_base_url": workspace_obj.controller_base_url,
+            "vnc_url": workspace_obj.vnc_url,
+            "controller_host": host,
+            "controller_port": port,
+        }
+        if workspace_obj
+        else {
+            "controller_base_url": base_url,
+            "controller_host": host,
+            "controller_port": port,
+        }
+    )
+
+    return _create_streaming_response(
+        request,
+        user_id=user_id,
+        tool_constraints=tool_constraints,
+        workspace=workspace_info,
+        run_id=run_id,
+        workflow_id=payload.get("workflow_id"),
+    )
 
 
 @app.get("/config")
