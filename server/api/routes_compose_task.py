@@ -10,21 +10,16 @@ that reflects the user's MCP + computer-use capabilities.
 import logging
 import uuid
 from typing import Any, Dict, Optional
-from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
 from orchestrator_agent.capabilities import (
     fetch_mcp_capabilities,
     _normalize_platform,
-    fetch_computer_capabilities,
 )
 from orchestrator_agent.composer import compose_plan
 from orchestrator_agent.data_types import OrchestratorRequest
 from server.api.auth import CurrentUser, get_current_user
-from vm_manager.vm_wrapper import ensure_workspace
-from vm_manager.config import settings
-from shared.supabase_client import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -69,25 +64,8 @@ async def compose_task(
     platform_override = payload.get("platform")
     platform = _normalize_platform(platform_override) if platform_override else None
 
-    # Ensure we have a per-user workspace and derive controller connection details
-    workspace = ensure_workspace(user_id)
-    base_url = workspace.controller_base_url
-    if not base_url:
-        raise HTTPException(
-            status_code=500,
-            detail="Workspace controller_base_url is missing for compose_task",
-        )
-
-    parsed = urlparse(base_url)
-    host = parsed.hostname if parsed else None
-    port = parsed.port or settings.AGENT_CONTROLLER_PORT
-
-    controller_metadata = {
-        "base_url": base_url,
-        "host": host,
-        "port": port,
-        # timeout is optional; VMControllerClient will use its default if omitted
-    }
+    # For now, avoid per-user VM lookup; use a stubbed capability view.
+    controller_metadata: Dict[str, Any] = {}
 
     capability_request = OrchestratorRequest.from_task(
         tenant_id=user_id,
@@ -98,8 +76,16 @@ async def compose_task(
         user_id=user_id,
     )
 
-    # Fetch live computer capabilities (platform, available apps, active windows)
-    computer_caps = fetch_computer_capabilities(capability_request, force_refresh=False)
+    # Stubbed computer capabilities (no VM call)
+    computer_caps = {
+        "platform": platform or "darwin",
+        "apps": [
+            {"name": "Google Chrome", "id": "chrome"},
+            {"name": "VS Code", "id": "code"},
+            {"name": "Terminal", "id": "terminal"},
+        ],
+        "active_window": None,
+    }
 
     # Combine capabilities
     capabilities = {
@@ -111,41 +97,16 @@ async def compose_task(
     logger.info(f"Calling compose_plan for task: {task[:100]}...")
     plan = compose_plan(task, capabilities, tool_constraints=tool_constraints)
     logger.info(f"compose_plan completed - returned plan with {len(plan.get('steps', []))} steps, schema_version={plan.get('schema_version')}")
-    # Persist/update workflow in Supabase
-    client = get_supabase_client(current_user.token)
-    workflow_id = payload.get("workflow_id") or str(uuid.uuid4())
-    folder_id = payload.get("folder_id")
-    workflow_name = payload.get("name") or task[:80]
-    workflow_description = payload.get("description")
+    draft_id = str(uuid.uuid4())
+    suggested_name = payload.get("name") or task[:80]
+    suggested_description = payload.get("description")
 
-    status_value = "active"
-    try:
-        existing = client.table("workflows").select("status").eq("id", workflow_id).single().execute()
-        if existing.data and existing.data.get("status"):
-            status_value = existing.data["status"]
-    except Exception:
-        status_value = "active"
-
-    upsert_payload = {
-        "id": workflow_id,
-        "user_id": user_id,
-        "folder_id": folder_id,
-        "name": workflow_name,
-        "prompt": task,
-        "description": workflow_description,
-        "definition_json": plan,
-        "status": status_value,
+    return {
+        "plan": plan,
+        "suggested_name": suggested_name,
+        "suggested_description": suggested_description,
+        "draft_id": draft_id,
     }
-
-    try:
-        client.table("workflows").upsert(upsert_payload, on_conflict="id").execute()
-    except Exception as exc:
-        logger.exception("Failed to upsert workflow in Supabase: %s", exc)
-        raise HTTPException(status_code=500, detail="failed_to_save_workflow")
-
-    plan_with_id = {**plan, "workflow_id": workflow_id, "folder_id": folder_id}
-    return plan_with_id
 
 
 __all__ = ["router"]
-

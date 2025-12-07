@@ -30,6 +30,7 @@ from server.api.orchestrator_adapter import orchestrate_to_orchestrator
 from orchestrator_agent.runtime import OrchestratorRuntime
 from shared.db.engine import SessionLocal
 from shared.supabase_client import get_service_supabase_client
+from shared.streaming import StreamEmitter, set_current_emitter, reset_current_emitter
 from vm_manager.aws_vm_manager import create_agent_instance_for_user, terminate_instance
 from vm_manager.config import settings
 
@@ -160,6 +161,45 @@ def record_event(run_id: str, kind: str, message: str, payload: Optional[Dict[st
         ).execute()
     except Exception as exc:  # pragma: no cover - scaffolding
         logger.warning("Failed to record event for run %s: %s", run_id, exc)
+
+
+def _build_run_emitter(run_id: str) -> StreamEmitter:
+    """
+    Create a StreamEmitter that mirrors orchestrator stream events into run_events.
+    """
+    noisy_suffixes = (
+        ".output.delta",
+        ".reasoning.delta",
+        ".stream.completed",
+        ".stream.error",
+    )
+
+    def _publish(event: str, data: Optional[Any] = None) -> None:
+        # Drop high-volume token streams; keep higher-level lifecycle events.
+        for suffix in noisy_suffixes:
+            if event.endswith(suffix):
+                return
+
+        payload_dict: Dict[str, Any] = {}
+        message = event
+        if data is not None:
+            try:
+                if isinstance(data, dict):
+                    payload_dict = data
+                    message = str(
+                        data.get("message")
+                        or data.get("text")
+                        or data.get("status")
+                        or event
+                    )
+                else:
+                    payload_dict = {"value": _json_safe(data)}
+                    message = str(data)
+            except Exception:
+                payload_dict = {"value": str(data)}
+        record_event(run_id, event, message, payload_dict)
+
+    return StreamEmitter(_publish)
 
 
 def update_run_status(run_id: str, status: str, summary: Optional[str] = None, vm_id: Optional[str] = None):
@@ -308,9 +348,13 @@ async def run_once(claimed_by: str = "worker") -> bool:
     import asyncio
 
     hb_task = asyncio.create_task(_heartbeat_loop())
+    emitter_token = None
+    emitter = _build_run_emitter(run_id)
 
     try:
         record_event(run_id, "execution", "Run started")
+        # Attach emitter so orchestrator stream events land in run_events
+        emitter_token = set_current_emitter(emitter)
         orch_req = orchestrate_to_orchestrator(
             orch_request,
             user_id=user_id,
@@ -327,6 +371,9 @@ async def run_once(claimed_by: str = "worker") -> bool:
         update_run_status(run_id, "error", summary=str(exc), vm_id=vm_id)
         record_event(run_id, "error", "Run failed", {"error": str(exc)})
     finally:
+        if emitter_token:
+            with contextlib.suppress(Exception):
+                reset_current_emitter(emitter_token)
         hb_task.cancel()
         with contextlib.suppress(Exception, asyncio.CancelledError):
             await hb_task
