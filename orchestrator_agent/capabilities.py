@@ -94,13 +94,14 @@ def fetch_mcp_capabilities(user_id: str, force_refresh: bool = False) -> Dict[st
             ]
         }
     """
-    cache_key = f"mcp:{user_id}"
+    user_id_str = str(user_id)
+    cache_key = f"mcp:{user_id_str}"
 
     # Check cache
     if not force_refresh and cache_key in _capability_cache:
         cached_data, cached_at = _capability_cache[cache_key]
         if datetime.utcnow() - cached_at < CACHE_TTL:
-            logger.debug(f"Using cached MCP capabilities for user {user_id}")
+            logger.debug(f"Using cached MCP capabilities for user {user_id_str}")
             return cached_data
 
     # Fetch fresh data
@@ -108,12 +109,12 @@ def fetch_mcp_capabilities(user_id: str, force_refresh: bool = False) -> Dict[st
         from mcp_agent.knowledge.search import get_inventory_view
         from mcp_agent.core.context import AgentContext
 
-        context = AgentContext(user_id=user_id)
+        context = AgentContext(user_id=user_id_str)
         inventory = get_inventory_view(context)
 
         # Cache the result
         _capability_cache[cache_key] = (inventory, datetime.utcnow())
-        logger.debug(f"Fetched and cached MCP capabilities for user {user_id}")
+        logger.debug(f"Fetched and cached MCP capabilities for user {user_id_str}")
         return inventory
 
     except Exception as e:

@@ -16,6 +16,7 @@ security = HTTPBearer(auto_error=False)
 class CurrentUser(BaseModel):
     sub: str
     email: str | None = None
+    token: str
 
 
 def get_current_user(
@@ -98,4 +99,4 @@ def get_current_user(
         )
 
     logger.debug(f"Authenticated user: {sub}")
-    return CurrentUser(sub=sub, email=email)
+    return CurrentUser(sub=sub, email=email, token=token)
