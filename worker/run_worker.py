@@ -7,6 +7,7 @@ event persistence, and status updates; the worker only claims and triggers.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from typing import Any, Dict, Optional
@@ -23,6 +24,21 @@ INTERNAL_API_TOKEN = os.getenv("INTERNAL_API_TOKEN") or ""
 EXECUTOR_BASE_URL = os.getenv("EXECUTOR_BASE_URL", "http://127.0.0.1:8000")
 NOTIFY_CHANNEL = "workflow_run_queued"
 IS_POSTGRES = DB_URL.startswith("postgres")
+
+
+def _json_safe(val: Any) -> Any:
+    """Recursively coerce values to JSON-serializable forms."""
+    try:
+        import json
+
+        json.dumps(val)
+        return val
+    except Exception:
+        if isinstance(val, dict):
+            return {k: _json_safe(v) for k, v in val.items()}
+        if isinstance(val, (list, tuple)):
+            return [_json_safe(v) for v in val]
+        return str(val)
 
 
 def claim_next_run(claimed_by: str) -> Optional[Dict[str, Any]]:
@@ -114,6 +130,9 @@ def trigger_execution(run_id: str, workflow_id: str, user_id: str, task: str, co
         "task": task,
         "composed_plan": composed_plan,
     }
+    payload = _json_safe(payload)
+    # Ensure full JSON-serializability (e.g., UUIDs) before sending
+    payload = json.loads(json.dumps(payload, default=str))
     with requests.post(url, json=payload, headers=headers, stream=True, timeout=None) as resp:
         if resp.status_code >= 300:
             text_body = ""
