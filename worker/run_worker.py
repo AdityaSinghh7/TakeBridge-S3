@@ -126,6 +126,7 @@ def fetch_workflow(workflow_id: str) -> Dict[str, Any]:
 def trigger_execution(run_id: str, workflow_id: str, user_id: str, task: str, composed_plan: Optional[Dict[str, Any]]):
     url = f"{EXECUTOR_BASE_URL}/internal/runs/{run_id}/execute"
     headers = {"X-Internal-Token": INTERNAL_API_TOKEN} if INTERNAL_API_TOKEN else {}
+    verify_arg = os.getenv("REQUESTS_CA_BUNDLE") or os.getenv("CURL_CA_BUNDLE") or os.getenv("EXECUTOR_CA_BUNDLE")
     payload = {
         "user_id": user_id,
         "workflow_id": workflow_id,
