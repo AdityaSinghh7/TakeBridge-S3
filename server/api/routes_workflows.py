@@ -6,6 +6,7 @@ import logging
 import time
 import uuid
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
@@ -236,6 +237,82 @@ def get_workflow(
     workflow = res.data
     workflow["plan"] = workflow.get("definition_json")
     return {"workflow": workflow}
+
+
+@router.get("/runs/{run_id}/vm")
+def get_run_vm(
+    run_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Return VNC connection info for a run (host, port, password, secure?, path?).
+    """
+    db = SessionLocal()
+    try:
+        row = db.execute(
+            text(
+                """
+                SELECT wr.user_id, wr.vm_id, wr.environment, vi.endpoint
+                FROM workflow_runs wr
+                LEFT JOIN vm_instances vi ON vi.id = wr.vm_id
+                WHERE wr.id = :run_id
+                """
+            ),
+            {"run_id": run_id},
+        ).mappings().first()
+
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run_not_found")
+        if row["user_id"] != current_user.sub:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run_not_found")
+
+        endpoint = row.get("endpoint")
+        env = row.get("environment")
+        if env and not endpoint:
+            try:
+                env_json = json.loads(env) if isinstance(env, str) else env
+                endpoint = env_json.get("endpoint")
+            except Exception:
+                endpoint = None
+
+        if isinstance(endpoint, str):
+            try:
+                endpoint = json.loads(endpoint)
+            except Exception:
+                endpoint = {}
+
+        endpoint = endpoint or {}
+
+        vnc_url = endpoint.get("vnc_url")
+        host = endpoint.get("host")
+        port = endpoint.get("port")
+        password = endpoint.get("password")
+        path = endpoint.get("path")
+        secure = None
+
+        if vnc_url:
+            parsed = urlparse(vnc_url)
+            host = host or parsed.hostname
+            port = port or parsed.port
+            path = path or parsed.path
+            secure = parsed.scheme in {"wss", "https"}
+        elif endpoint.get("controller_base_url"):
+            parsed = urlparse(endpoint.get("controller_base_url"))
+            host = host or parsed.hostname
+            port = port or parsed.port
+            secure = parsed.scheme in {"wss", "https"}
+
+        vm_info = {
+            "host": host,
+            "port": port,
+            "password": password,
+            "secure": secure,
+            "path": path,
+        }
+
+        return {"vm": vm_info}
+    finally:
+        db.close()
 
 
 @router.patch("/workflows/{workflow_id}")
