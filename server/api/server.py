@@ -47,6 +47,45 @@ from .auth import get_current_user, CurrentUser
 from shared.supabase_client import get_service_supabase_client
 from shared.db.engine import SessionLocal
 from sqlalchemy import text
+
+# Whitelisted events for persistence (see docs/latest_frontend_connection_guide.md).
+PERSISTED_EVENTS = {
+    # Orchestrator Agent
+    "orchestrator.planning.completed",
+    "orchestrator.step.completed",
+    # Computer-Use Agent
+    "runner.started",
+    "runner.step.agent_response",
+    "runner.step.completed",
+    "runner.step.behavior",
+    "runner.completed",
+    "worker.reflection.completed",
+    "worker.step.ready",
+    "code_agent.session.started",
+    "code_agent.step.response",
+    "code_agent.step.execution",
+    "code_agent.step.completed",
+    "code_agent.session.completed",
+    "grounding.generate_coords.started",
+    "grounding.generate_coords.completed",
+    "grounding.generate_coords.service_failed",
+    "grounding.generate_text_coords.started",
+    "grounding.generate_text_coords.completed",
+    "behavior_narrator.completed",
+    # MCP Agent
+    "mcp.task.started",
+    "mcp.task.completed",
+    "mcp.planner.failed",
+    "mcp.llm.completed",
+    "mcp.action.planned",
+    "mcp.action.started",
+    "mcp.action.failed",
+    "mcp.action.completed",
+    "mcp.sandbox.run",
+    "mcp.observation_processor.completed",
+    "mcp.summary.created",
+    "mcp.high_signal",
+}
 try:
     from dotenv import load_dotenv  # type: ignore
 except Exception:  # pragma: no cover
@@ -309,7 +348,7 @@ def _create_streaming_response(
     queue.put_nowait(_format_sse_event("response.in_progress", {"status": "running"}))
 
     def _persist_run_event(event: str, data: Optional[Any]) -> None:
-        if not run_id:
+        if not run_id or event not in PERSISTED_EVENTS:
             return
         try:
             client = get_service_supabase_client()
