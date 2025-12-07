@@ -138,10 +138,13 @@ def run_mcp_agent(
     # Bind step_id to context for hierarchical logging
     set_step_id(step.step_id)
 
+    user_id_val = request.user_id or (request.tenant.user_id if request.tenant else None)
+    user_id_str = str(user_id_val) if user_id_val is not None else "orchestrator"
+
     logger.info(
         "bridge.mcp.start task=%s user_id=%s step=%s",
         step.next_task,
-        (request.user_id or request.tenant.user_id if request.tenant else None),
+        user_id_str,
         step.step_id,
     )
     try:
@@ -161,8 +164,7 @@ def run_mcp_agent(
 
         raw_result = execute_mcp_task(
             step.next_task,
-            user_id=(request.user_id or request.tenant.user_id if request.tenant else None)
-            or "orchestrator",
+            user_id=user_id_str,
             budget=None,
             extra_context=extra_context,
         )
