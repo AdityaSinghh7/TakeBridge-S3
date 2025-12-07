@@ -146,10 +146,48 @@ def fetch_computer_capabilities(
         }
     """
     # Use controller from request metadata
+    def _list_actions() -> List[str]:
+        try:
+            from computer_use_agent.grounding.grounding_agent import (
+                list_osworld_agent_actions,
+            )
+
+            return list_osworld_agent_actions()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            logger.debug("Unable to load OSWorld agent actions: %s", exc)
+            return []
+
+    def _fallback_caps() -> Dict[str, Any]:
+        """Stubbed capabilities when controller is unavailable or fails."""
+        platform_hint = _normalize_platform(
+            getattr(request, "platform", None)
+            or request.metadata.get("platform")
+            or "darwin"
+        )
+        return {
+            "platform": platform_hint or "unknown",
+            "available_apps": [
+                "Google Chrome",
+                "VS Code",
+                "Terminal",
+                "Files",
+                "TextEdit",
+                "Finder",
+                "LibreOffice",
+            ],
+            "active_windows": [],
+            "actions": _list_actions(),
+        }
+
     controller = _resolve_controller(request.metadata)
     if not controller:
         logger.warning("No controller available from metadata or environment")
-        return {"platform": "unknown", "available_apps": [], "active_windows": [], "actions": []}
+        result = _fallback_caps()
+        _capability_cache[f"computer:{request.user_id or 'default'}"] = (
+            result,
+            datetime.utcnow(),
+        )
+        return result
 
     cache_key = f"computer:{request.user_id or 'default'}"
 
@@ -173,15 +211,7 @@ def fetch_computer_capabilities(
         windows_data = controller.get_active_windows(exclude_system=True)
 
         # Surface available OSWorld agent actions (click, type, scroll, etc.)
-        actions: List[str] = []
-        try:
-            from computer_use_agent.grounding.grounding_agent import (
-                list_osworld_agent_actions,
-            )
-
-            actions = list_osworld_agent_actions()
-        except Exception as exc:  # pragma: no cover - defensive guard
-            logger.debug("Unable to load OSWorld agent actions: %s", exc)
+        actions: List[str] = _list_actions()
 
         # Persist the resolved platform back into request metadata for downstream use
         try:
@@ -209,7 +239,12 @@ def fetch_computer_capabilities(
 
     except Exception as e:
         logger.warning(f"Failed to fetch computer capabilities: {e}", exc_info=True)
-        return {"platform": "unknown", "available_apps": [], "active_windows": []}
+        result = _fallback_caps()
+        _capability_cache[f"computer:{request.user_id or 'default'}"] = (
+            result,
+            datetime.utcnow(),
+        )
+        return result
 
 
 def build_capability_context(

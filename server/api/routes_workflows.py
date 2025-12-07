@@ -13,7 +13,7 @@ from sqlalchemy import text
 from postgrest.exceptions import APIError
 
 from server.api.auth import CurrentUser, get_current_user
-from shared.db.engine import SessionLocal
+from shared.db.engine import SessionLocal, DB_URL
 from shared.supabase_client import get_supabase_client
 from uuid import UUID
 
@@ -119,6 +119,20 @@ def enqueue_workflow_run(
                 "environment": json.dumps(environment),
             },
         )
+
+        # Notify listeners (Postgres only) that a run was enqueued.
+        if DB_URL.startswith("postgres"):
+            db.execute(
+                text(
+                    """
+                    SELECT pg_notify(
+                        'workflow_run_queued',
+                        json_build_object('run_id', :run_id, 'user_id', :user_id)::text
+                    )
+                    """
+                ),
+                {"run_id": run_id, "user_id": user_id},
+            )
 
         db.commit()
 

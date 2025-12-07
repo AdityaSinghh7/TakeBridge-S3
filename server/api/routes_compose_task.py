@@ -15,6 +15,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from orchestrator_agent.capabilities import (
     fetch_mcp_capabilities,
+    fetch_computer_capabilities,
     _normalize_platform,
 )
 from orchestrator_agent.composer import compose_plan
@@ -64,7 +65,6 @@ async def compose_task(
     platform_override = payload.get("platform")
     platform = _normalize_platform(platform_override) if platform_override else None
 
-    # For now, avoid per-user VM lookup; use a stubbed capability view.
     controller_metadata: Dict[str, Any] = {}
 
     capability_request = OrchestratorRequest.from_task(
@@ -76,16 +76,8 @@ async def compose_task(
         user_id=user_id,
     )
 
-    # Stubbed computer capabilities (no VM call)
-    computer_caps = {
-        "platform": platform or "darwin",
-        "apps": [
-            {"name": "Google Chrome", "id": "chrome"},
-            {"name": "VS Code", "id": "code"},
-            {"name": "Terminal", "id": "terminal"},
-        ],
-        "active_window": None,
-    }
+    # Computer capabilities (with fallback when controller is unavailable)
+    computer_caps = fetch_computer_capabilities(capability_request, force_refresh=False)
 
     # Combine capabilities
     capabilities = {

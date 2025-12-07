@@ -11,12 +11,14 @@ This is a synchronous placeholder showing how to:
 from __future__ import annotations
 
 import contextlib
+import asyncio
 import json
 import logging
 import time
 import uuid
 from typing import Any, Dict, Optional, Union
 from urllib.parse import urlparse
+import select
 
 from sqlalchemy import text
 
@@ -28,7 +30,7 @@ from computer_use_agent.orchestrator.data_types import (
 )
 from server.api.orchestrator_adapter import orchestrate_to_orchestrator
 from orchestrator_agent.runtime import OrchestratorRuntime
-from shared.db.engine import SessionLocal
+from shared.db.engine import SessionLocal, DB_URL
 from shared.supabase_client import get_service_supabase_client
 from shared.streaming import StreamEmitter, set_current_emitter, reset_current_emitter
 from vm_manager.aws_vm_manager import create_agent_instance_for_user, terminate_instance
@@ -38,6 +40,17 @@ logger = logging.getLogger(__name__)
 
 HEARTBEAT_INTERVAL = 30  # seconds
 ATTENTION_TIMEOUT = 180  # seconds
+NOTIFY_CHANNEL = "workflow_run_queued"
+IS_POSTGRES = DB_URL.startswith("postgres")
+def _normalize_pg_dsn(url: str) -> str:
+    """
+    Convert SQLAlchemy-style postgres URLs (e.g., postgresql+psycopg2://) to psycopg2 DSN.
+    """
+    if url.startswith("postgresql+psycopg2://"):
+        return url.replace("postgresql+psycopg2://", "postgresql://", 1)
+    if url.startswith("postgresql+psycopg://"):
+        return url.replace("postgresql+psycopg://", "postgresql://", 1)
+    return url
 
 
 def claim_next_run(claimed_by: str) -> Optional[Dict[str, Any]]:
@@ -345,8 +358,6 @@ async def run_once(claimed_by: str = "worker") -> bool:
             await asyncio.sleep(HEARTBEAT_INTERVAL)
             heartbeat(run_id)
 
-    import asyncio
-
     hb_task = asyncio.create_task(_heartbeat_loop())
     emitter_token = None
     emitter = _build_run_emitter(run_id)
@@ -391,16 +402,75 @@ async def worker_loop():
     """
     Simple loop to process queued runs.
     """
-    import asyncio
+    notify_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
 
-    while True:
-        processed = await run_once()
-        if not processed:
-            await asyncio.sleep(2)
+    async def _poll_loop():
+        while True:
+            processed = await run_once()
+            if not processed:
+                await asyncio.sleep(2)
+
+    async def _notification_dispatcher():
+        while True:
+            payload = await notify_queue.get()
+            try:
+                # Drain queued runs aggressively when notified.
+                while await run_once():
+                    pass
+            except Exception as exc:
+                logger.exception("Failed to process notification payload=%s err=%s", payload, exc)
+
+    async def _listen_for_notifications():
+        if not IS_POSTGRES:
+            logger.info("Notification listener disabled (DB_URL is not Postgres)")
+            return
+
+        try:
+            import psycopg2
+            from psycopg2 import extensions
+        except Exception as exc:  # pragma: no cover - import guard
+            logger.warning("psycopg2 not available; notification listener disabled: %s", exc)
+            return
+
+        while True:
+            conn = None
+            try:
+                conn = psycopg2.connect(_normalize_pg_dsn(DB_URL))
+                conn.set_isolation_level(extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+                cur = conn.cursor()
+                cur.execute(f"LISTEN {NOTIFY_CHANNEL};")
+                logger.info("Listening for notifications on channel '%s'", NOTIFY_CHANNEL)
+
+                while True:
+                    # Run select in a thread to avoid blocking the event loop.
+                    ready = await asyncio.to_thread(select.select, [conn], [], [], 5.0)
+                    if not ready[0]:
+                        continue
+                    conn.poll()
+                    while conn.notifies:
+                        notify = conn.notifies.pop(0)
+                        payload = {}
+                        try:
+                            payload = json.loads(getattr(notify, "payload", "") or "{}")
+                        except Exception:
+                            logger.warning("Failed to parse notification payload: %s", getattr(notify, "payload", None))
+                        await notify_queue.put(payload)
+            except Exception as exc:
+                logger.warning("Notification listener error; reconnecting: %s", exc)
+                await asyncio.sleep(2)
+            finally:
+                if conn:
+                    with contextlib.suppress(Exception):
+                        conn.close()
+
+    tasks = [asyncio.create_task(_poll_loop())]
+    if IS_POSTGRES:
+        tasks.append(asyncio.create_task(_notification_dispatcher()))
+        tasks.append(asyncio.create_task(_listen_for_notifications()))
+
+    await asyncio.gather(*tasks)
 
 
 if __name__ == "__main__":  # pragma: no cover
-    import asyncio
-
     logging.basicConfig(level=logging.INFO)
     asyncio.run(worker_loop())
