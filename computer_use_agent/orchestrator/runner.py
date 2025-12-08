@@ -49,7 +49,15 @@ def _execute_remote_pyautogui(controller: VMControllerClient, code: str) -> Dict
         "import base64, sys\n"
         "exec(base64.b64decode('{payload}').decode('utf-8'))"
     ).format(payload=payload)
-    return controller.execute(["python3", "-c", python_cmd])
+    # Choose python executable based on remote platform (python3 may not exist on Windows)
+    python_exe = "python3"
+    try:
+        platform_val = controller.get_platform()
+        if isinstance(platform_val, str) and platform_val.lower().startswith("win"):
+            python_exe = "python"
+    except Exception:
+        pass
+    return controller.execute([python_exe, "-c", python_cmd])
 
 
 def _build_grounding_prompts(

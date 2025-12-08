@@ -10,8 +10,6 @@ import threading
 import time
 import traceback
 import uuid
-import re
-import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -25,6 +23,9 @@ from PIL import Image, ImageGrab
 from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
+import logging
+import re
+import shutil
 
 platform_name: str = platform.system()
 
@@ -35,14 +36,10 @@ elif platform_name == "Linux":
     from Xlib import display
     from pyxcursor import Xcursor
 
-
 app = Flask(__name__)
 CORS(app)
 
 try:
-    import logging
-    import sys
-
     app.logger.setLevel(logging.INFO)
     if not any(isinstance(h, logging.StreamHandler) for h in app.logger.handlers):
         _handler = logging.StreamHandler(sys.stdout)
@@ -68,6 +65,10 @@ _open_windows: Dict[str, Dict[str, Any]] = {}
 _window_watcher_started = False
 _recent_launches: Dict[str, float] = {}
 _last_focused_app_id: Optional[str] = None
+
+# Legacy APPS dict is kept for compatibility with some Linux watcher code,
+# but /apps and /apps/open no longer depend on it.
+APPS: Dict[str, Dict[str, Any]] = {}
 
 LOCK_DIR = Path("/home/user/server")
 try:
@@ -97,267 +98,6 @@ def _public_host_port() -> Tuple[str, int]:
         except Exception:
             host = "localhost"
     return host, port
-
-def _normalize_app_id(name: str) -> str:
-    """
-    Turn a human-readable app name or class into a stable, URL-safe id.
-    Example: 'Windows PowerShell' -> 'windows-powershell'
-    """
-    name = name.strip().lower()
-    name = re.sub(r'[^a-z0-9]+', '-', name)
-    return name.strip('-') or 'unknown'
-
-
-def _scan_linux_apps() -> List[Dict[str, Any]]:
-    desktop_dirs = [
-        "/usr/share/applications",
-        "/usr/local/share/applications",
-        os.path.expanduser("~/.local/share/applications"),
-    ]
-    apps: List[Dict[str, Any]] = []
-
-    for d in desktop_dirs:
-        if not os.path.isdir(d):
-            continue
-        for entry in os.listdir(d):
-            if not entry.endswith(".desktop"):
-                continue
-            path = os.path.join(d, entry)
-            name = None
-            exec_cmd = None
-            hidden = False
-            nodisplay = False
-
-            try:
-                with open(path, "r", encoding="utf-8", errors="ignore") as fh:
-                    for line in fh:
-                        line = line.strip()
-                        if line.startswith("Name=") and name is None:
-                            name = line.split("=", 1)[1].strip()
-                        elif line.startswith("Exec=") and exec_cmd is None:
-                            raw = line.split("=", 1)[1].strip()
-                            # Strip field codes like %U, %u, %f, etc.
-                            exec_cmd = " ".join(
-                                t for t in shlex.split(raw) if not t.startswith("%")
-                            )
-                        elif line.startswith("NoDisplay="):
-                            nodisplay = line.split("=", 1)[1].strip().lower() == "true"
-                        elif line.startswith("Hidden="):
-                            hidden = line.split("=", 1)[1].strip().lower() == "true"
-            except Exception:
-                continue
-
-            if not name or not exec_cmd:
-                continue
-            if hidden or nodisplay:
-                continue
-
-            app_id = _normalize_app_id(name)
-            is_system = d.startswith("/usr/share")  # rough heuristic
-
-            apps.append({
-                "id": app_id,
-                "name": name,
-                "exec": exec_cmd,
-                "path": path,
-                "kind": "desktop",
-                "is_system": is_system,
-                "platform": "Linux",
-            })
-
-    return apps
-
-def _scan_windows_apps() -> List[Dict[str, Any]]:
-    """
-    Discover installed apps on Windows using PowerShell Get-StartApps.
-
-    Returns a list of:
-      {
-        "id": <normalized id>,
-        "name": <display name>,
-        "app_id": <raw AppID from Windows>,
-        "kind": "startapps",
-        "is_system": bool,
-        "platform": "Windows",
-      }
-    """
-    apps: List[Dict[str, Any]] = []
-
-    # Prefer PowerShell Get-StartApps
-    try:
-        ps_cmd = [
-            "powershell",
-            "-NoProfile",
-            "-Command",
-            "Get-StartApps | Select-Object Name,AppID | ConvertTo-Json -Depth 2"
-        ]
-        res = subprocess.run(
-            ps_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=5,
-        )
-        if res.returncode == 0 and res.stdout.strip():
-            raw = res.stdout.strip()
-            try:
-                data = json.loads(raw)
-            except json.JSONDecodeError:
-                data = []
-
-            # Get-StartApps returns either an object or an array
-            items = data if isinstance(data, list) else [data]
-
-            for item in items:
-                name = (item.get("Name") or "").strip()
-                appid = (item.get("AppID") or "").strip()
-                if not name:
-                    continue
-
-                norm_id = _normalize_app_id(name)
-
-                lower_name = name.lower()
-                is_system = (
-                    lower_name.startswith("windows ") or
-                    "update" in lower_name or
-                    "uninstall" in lower_name
-                )
-
-                apps.append({
-                    "id": norm_id,
-                    "name": name,
-                    "app_id": appid,
-                    "kind": "startapps",
-                    "is_system": is_system,
-                    "platform": "Windows",
-                })
-
-            # If we got anything, we're done
-            if apps:
-                return apps
-
-    except Exception as exc:
-        logger.warning("Get-StartApps scan failed: %s", exc)
-
-    # Fallback: old .lnk-based scan if Get-StartApps fails
-    try:
-        start_menu_dirs: List[str] = []
-        programdata = os.environ.get("ProgramData")
-        appdata = os.environ.get("APPDATA")
-
-        if programdata:
-            start_menu_dirs.append(
-                os.path.join(programdata, r"Microsoft\Windows\Start Menu\Programs")
-            )
-        if appdata:
-            start_menu_dirs.append(
-                os.path.join(appdata, r"Microsoft\Windows\Start Menu\Programs")
-            )
-
-        seen_ids = set()
-
-        for base in start_menu_dirs:
-            if not base or not os.path.isdir(base):
-                continue
-            for root, _, files in os.walk(base):
-                for fname in files:
-                    if not fname.lower().endswith(".lnk"):
-                        continue
-                    full = os.path.join(root, fname)
-                    name = os.path.splitext(fname)[0].strip()
-                    if not name:
-                        continue
-
-                    app_id = _normalize_app_id(name)
-                    if app_id in seen_ids:
-                        continue
-                    seen_ids.add(app_id)
-
-                    lower_name = name.lower()
-                    is_system = (
-                        lower_name.startswith("windows ") or
-                        "update" in lower_name or
-                        "uninstall" in lower_name
-                    )
-
-                    apps.append({
-                        "id": app_id,
-                        "name": name,
-                        "path": full,
-                        "kind": "shortcut",
-                        "is_system": is_system,
-                        "platform": "Windows",
-                    })
-    except Exception as exc:
-        logger.warning("Fallback .lnk scan failed: %s", exc)
-
-    return apps
-
-
-def _scan_macos_apps() -> List[Dict[str, Any]]:
-    apps: List[Dict[str, Any]] = []
-    app_dirs = [
-        "/Applications",
-        "/System/Applications",
-        os.path.expanduser("~/Applications"),
-    ]
-
-    seen_ids = set()
-
-    for base in app_dirs:
-        if not os.path.isdir(base):
-            continue
-        for entry in os.listdir(base):
-            if not entry.endswith(".app"):
-                continue
-            full = os.path.join(base, entry)
-            name = entry[:-4]  # strip .app
-            app_id = _normalize_app_id(name)
-            if app_id in seen_ids:
-                continue
-            seen_ids.add(app_id)
-
-            is_system = full.startswith("/System/Applications")
-
-            apps.append({
-                "id": app_id,
-                "name": name,
-                "path": full,
-                "kind": "bundle",
-                "is_system": is_system,
-                "platform": "Darwin",
-            })
-
-    return apps
-
-_host_apps_cache: Optional[List[Dict[str, Any]]] = None
-_host_apps_cache_ts: float = 0.0
-_HOST_APPS_TTL = 30.0  # seconds
-
-
-def _scan_host_apps(force: bool = False) -> List[Dict[str, Any]]:
-    """
-    Cross-platform scan of installed GUI-ish apps.
-    We keep a short-lived cache to avoid walking the filesystem on every request.
-    """
-    global _host_apps_cache, _host_apps_cache_ts
-
-    now = time.time()
-    if not force and _host_apps_cache is not None and (now - _host_apps_cache_ts) < _HOST_APPS_TTL:
-        return list(_host_apps_cache)
-
-    if platform_name == "Linux":
-        apps = _scan_linux_apps()
-    elif platform_name == "Windows":
-        apps = _scan_windows_apps()
-    elif platform_name == "Darwin":
-        apps = _scan_macos_apps()
-    else:
-        apps = []
-
-    _host_apps_cache = apps
-    _host_apps_cache_ts = now
-    return list(apps)
 
 
 def _sse_format(data: Dict[str, Any]) -> str:
@@ -440,6 +180,7 @@ def _remove_window(app_id: str) -> bool:
 
 
 def _prune_stale_windows() -> None:
+    # Legacy Linux behaviour that depended on APPS; with APPS empty this does nothing.
     if platform_name != "Linux":
         return
     to_remove: List[str] = []
@@ -450,13 +191,18 @@ def _prune_stale_windows() -> None:
             cls = APPS.get(app_id, {}).get("class")
             if not cls:
                 continue
-            res = subprocess.run([
-                "xdotool",
-                "search",
-                "--onlyvisible",
-                "--class",
-                str(cls),
-            ], capture_output=True, text=True, timeout=1)
+            res = subprocess.run(
+                [
+                    "xdotool",
+                    "search",
+                    "--onlyvisible",
+                    "--class",
+                    str(cls),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=1,
+            )
             if res.returncode != 0 or not res.stdout.strip():
                 to_remove.append(app_id)
         except Exception:
@@ -470,6 +216,7 @@ def _prune_stale_windows() -> None:
 
 
 def _detect_new_user_opened_windows() -> None:
+    # Legacy Linux watcher using APPS. With APPS empty, this is effectively a no-op.
     if platform_name != "Linux":
         return
     cooldown = float(os.environ.get("STREAM_WATCHER_COOLDOWN", "30"))
@@ -488,13 +235,18 @@ def _detect_new_user_opened_windows() -> None:
             if lock_path.exists():
                 logger.debug("Skipping %s launch due to active lock %s", app_id, lock_path)
                 continue
-            res = subprocess.run([
-                "xdotool",
-                "search",
-                "--onlyvisible",
-                "--class",
-                str(cls),
-            ], capture_output=True, text=True, timeout=1)
+            res = subprocess.run(
+                [
+                    "xdotool",
+                    "search",
+                    "--onlyvisible",
+                    "--class",
+                    str(cls),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=1,
+            )
             if res.returncode != 0 or not res.stdout.strip():
                 continue
             if USE_GLOBAL_DESKTOP_VNC:
@@ -565,6 +317,7 @@ def _log_request_details(endpoint_name: str) -> None:
 
 
 def _active_window_tokens() -> Tuple[Optional[str], List[str]]:
+    # Legacy Linux helper; no longer used for mapping, but kept for focus watcher.
     if platform_name != "Linux":
         return None, []
     wid = None
@@ -605,6 +358,7 @@ def _active_window_tokens() -> Tuple[Optional[str], List[str]]:
 
 
 def _map_class_to_app_id_from_tokens(tokens: List[str]) -> Optional[str]:
+    # Legacy APPS-based mapping; with APPS empty this returns None.
     if not tokens:
         return None
     toks = [t.strip().lower() for t in tokens if t]
@@ -772,123 +526,30 @@ def _get_machine_architecture() -> str:
 
 
 def _default_outlook_launch() -> str:
-    # Launch Outlook PWA via Chrome/Chromium app-id with the Default profile.
-    # App ID from your WM_CLASS: crx_faolnafnngnfdaknnbpnkhgohbobgegn
+    # Kept for compatibility; currently not used by default app mapping.
     try:
         for bin_name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
             if shutil.which(bin_name):
                 return f"{bin_name} --profile-directory=Default --app-id=faolnafnngnfdaknnbpnkhgohbobgegn"
     except Exception:
         pass
-    # Fallback to google-chrome; shell will error if not present
     return "google-chrome --profile-directory=Default --app-id=faolnafnngnfdaknnbpnkhgohbobgegn"
 
 
-APPS: Dict[str, Dict[str, Any]] = {
-    "chrome": {
-        "bin": "/usr/bin/google-chrome",
-        "class": "google-chrome",
-        "ws": 6093,
-        "launch": "/usr/bin/google-chrome --new-window --start-maximized --no-first-run --disable-restore-session-state --no-default-browser-check --disable-dev-shm-usage",
-    },
-    "code": {
-        "bin": "/usr/bin/code",
-        "class": "code",
-        "ws": 6091,
-        "launch": "code",
-    },
-    "calc": {
-        "bin": "/usr/bin/libreoffice",
-        "class": "libreoffice-calc",
-        "ws": 6094,
-        "launch": "libreoffice --calc",
-    },
-    "writer": {
-        "bin": "/usr/bin/libreoffice",
-        "class": "libreoffice-writer",
-        "ws": 6095,
-        "launch": "libreoffice --writer",
-    },
-    "libreoffice": {
-        "bin": "/usr/bin/libreoffice",
-        "class": "libreoffice",
-        "ws": 6090,
-        "launch": "libreoffice --writer",
-    },
-    "terminal": {
-        "bin": "/usr/bin/gnome-terminal",
-        "class": "gnome-terminal-server",
-        "ws": 6100,
-        "launch": "bash -lc 'command -v gnome-terminal >/dev/null 2>&1 && gnome-terminal || command -v x-terminal-emulator >/dev/null 2>&1 && x-terminal-emulator || command -v xterm >/dev/null 2>&1 && xterm || command -v konsole >/dev/null 2>&1 && konsole || command -v tilix >/dev/null 2>&1 && tilix || command -v mate-terminal >/dev/null 2>&1 && mate-terminal || command -v alacritty >/dev/null 2>&1 && alacritty || command -v kitty >/dev/null 2>&1 && kitty'",
-    },
-    "files": {
-        "bin": "/usr/bin/nautilus",
-        "class": "nautilus",
-        "ws": 6101,
-        "launch": "nautilus",
-    },
-    "impress": {
-        "bin": "/usr/bin/libreoffice",
-        "class": "libreoffice-impress",
-        "ws": 6102,
-        "launch": "libreoffice --impress",
-    },
-    "gimp": {
-        "bin": "/usr/bin/gimp",
-        "class": "gimp",
-        "ws": 6103,
-        "launch": "gimp",
-    },
-    "vlc": {
-        "bin": "/usr/bin/vlc",
-        "class": "vlc",
-        "ws": 6104,
-        "launch": "vlc",
-    },
-    "outlook": {
-        "bin": "/usr/bin/google-chrome",
-        "class": "google-chrome",
-        "ws": 6092,
-        "launch": _default_outlook_launch(),
-    },
-    "gedit": {
-        "bin": "/usr/bin/gedit",
-        "class": "gedit",
-        "ws": 6105,
-        "launch": "gedit",
-    },
-    "evince": {
-        "bin": "/usr/bin/evince",
-        "class": "evince",
-        "ws": 6106,
-        "launch": "evince",
-    },
-    "slack": {
-        "bin": "/usr/bin/slack",
-        "class": "slack",
-        "ws": 6107,
-        "launch": "slack",
-    },
-    "mailspring": {
-        "bin": "/snap/bin/mailspring",
-        "class": "Mailspring",
-        "ws": 6109,
-        "launch": "/snap/bin/mailspring",
-    },
-    "firefox": {
-        "bin": "/usr/bin/firefox",
-        "class": "firefox",
-        "ws": 6108,
-        "launch": "firefox",
-    },
-}
+# ---------- App discovery + default app mapping ----------
+
+def _normalize_app_id(name: str) -> str:
+    name = name.strip().lower()
+    name = re.sub(r"[^a-z0-9]+", "-", name)
+    return name.strip("-") or "unknown"
+
 
 def _lc(s: str) -> str:
     return s.lower()
 
 
 DEFAULT_APPS_BY_PLATFORM: Dict[str, List[Dict[str, Any]]] = {
-    # ---- Windows defaults (logical TakeBridge app IDs) ----
+    # ---- Windows defaults ----
     "Windows": [
         {
             "id": "chrome",
@@ -903,7 +564,7 @@ DEFAULT_APPS_BY_PLATFORM: Dict[str, List[Dict[str, Any]]] = {
         {
             "id": "libreoffice",
             "label": "LibreOffice",
-            "match": ["libreoffice "],  # generic launcher
+            "match": ["libreoffice "],
         },
         {
             "id": "libreoffice-writer",
@@ -936,7 +597,6 @@ DEFAULT_APPS_BY_PLATFORM: Dict[str, List[Dict[str, Any]]] = {
             "match": ["tightvnc viewer"],
         },
     ],
-
     # ---- Linux defaults ----
     "Linux": [
         {
@@ -975,7 +635,6 @@ DEFAULT_APPS_BY_PLATFORM: Dict[str, List[Dict[str, Any]]] = {
             "match": ["visual studio code", "code"],
         },
     ],
-
     # ---- macOS defaults ----
     "Darwin": [
         {
@@ -1007,31 +666,365 @@ DEFAULT_APPS_BY_PLATFORM: Dict[str, List[Dict[str, Any]]] = {
 }
 
 
-try:
-    if isinstance(APPS.get("terminal"), dict):
-        APPS["terminal"]["launch"] = "gnome-terminal"
-except Exception:
-    pass
-
-
-
 def _get_default_app_specs_for_platform() -> List[Dict[str, Any]]:
     return DEFAULT_APPS_BY_PLATFORM.get(platform_name, [])
 
 
+def _scan_linux_apps() -> List[Dict[str, Any]]:
+    desktop_dirs = [
+        "/usr/share/applications",
+        "/usr/local/share/applications",
+        os.path.expanduser("~/.local/share/applications"),
+    ]
+    apps: List[Dict[str, Any]] = []
+
+    for d in desktop_dirs:
+        if not os.path.isdir(d):
+            continue
+        for entry in os.listdir(d):
+            if not entry.endswith(".desktop"):
+                continue
+            path = os.path.join(d, entry)
+            name = None
+            exec_cmd = None
+            hidden = False
+            nodisplay = False
+
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if line.startswith("Name=") and name is None:
+                            name = line.split("=", 1)[1].strip()
+                        elif line.startswith("Exec=") and exec_cmd is None:
+                            raw = line.split("=", 1)[1].strip()
+                            exec_cmd = " ".join(
+                                t for t in shlex.split(raw) if not t.startswith("%")
+                            )
+                        elif line.startswith("NoDisplay="):
+                            nodisplay = line.split("=", 1)[1].strip().lower() == "true"
+                        elif line.startswith("Hidden="):
+                            hidden = line.split("=", 1)[1].strip().lower() == "true"
+            except Exception:
+                continue
+
+            if not name or not exec_cmd:
+                continue
+            if hidden or nodisplay:
+                continue
+
+            app_id = _normalize_app_id(name)
+            is_system = d.startswith("/usr/share")
+
+            apps.append({
+                "id": app_id,
+                "name": name,
+                "exec": exec_cmd,
+                "path": path,
+                "kind": "desktop",
+                "is_system": is_system,
+                "platform": "Linux",
+            })
+
+    return apps
+
+
+def _scan_windows_apps() -> List[Dict[str, Any]]:
+    """
+    Discover installed apps on Windows using PowerShell Get-StartApps.
+
+    We aggressively classify most entries as system utilities and only keep
+    a small set of obviously user-facing apps as non-system.
+    """
+    apps: List[Dict[str, Any]] = []
+
+    USER_APP_KEYWORDS = [
+        "chrome",
+        "edge",
+        "firefox",
+        "libreoffice",
+        "word",
+        "excel",
+        "powerpoint",
+        "notepad",
+        "vim",
+        "gvim",
+        "tightvnc viewer",
+        "viewer",
+        "python",
+    ]
+
+    SYSTEM_NAME_KEYWORDS = [
+        "administrative tools",
+        "component services",
+        "computer management",
+        "control panel",
+        "defragment",
+        "disk cleanup",
+        "event viewer",
+        "local security policy",
+        "magnifier",
+        "math input panel",
+        "narrator",
+        "odbc data sources",
+        "on-screen keyboard",
+        "performance monitor",
+        "recovery drive",
+        "register tightvnc service",
+        "unregister tightvnc service",
+        "run tightvnc service",
+        "start tightvnc service",
+        "stop tightvnc service",
+        "services",
+        "settings",
+        "snipping tool",
+        "steps recorder",
+        "system configuration",
+        "system information",
+        "task manager",
+        "task scheduler",
+        "this pc",
+        "windows defender firewall",
+        "windows memory diagnostic",
+        "windows security",
+        "windows server backup",
+        "speech recognition",
+        "xps viewer",
+    ]
+
+    SYSTEM_APPID_KEYWORDS = [
+        "\\system32\\",
+        ".msc",
+        "controlpanel",
+        "windows.explorer",
+        "windows.shell.rundialog",
+        "sechealthui",
+    ]
+
+    try:
+        ps_cmd = [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "Get-StartApps | Select-Object Name,AppID | ConvertTo-Json -Depth 2"
+        ]
+        res = subprocess.run(
+            ps_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=5,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            raw = res.stdout.strip()
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                data = []
+
+            items = data if isinstance(data, list) else [data]
+
+            for item in items:
+                name = (item.get("Name") or "").strip()
+                appid = (item.get("AppID") or "").strip()
+                if not name:
+                    continue
+
+                lower_name = name.lower()
+                lower_appid = appid.lower()
+                norm_id = _normalize_app_id(name)
+
+                is_user_app = any(k in lower_name for k in USER_APP_KEYWORDS)
+
+                if is_user_app:
+                    is_system = False
+                else:
+                    looks_guid = appid.startswith("{") and "}" in appid
+                    has_system_keyword = (
+                        lower_name.startswith("windows ") or
+                        any(k in lower_name for k in SYSTEM_NAME_KEYWORDS) or
+                        any(k in lower_appid for k in SYSTEM_APPID_KEYWORDS)
+                    )
+                    is_system = looks_guid or has_system_keyword or True
+
+                apps.append({
+                    "id": norm_id,
+                    "name": name,
+                    "app_id": appid,
+                    "kind": "startapps",
+                    "is_system": is_system,
+                    "platform": "Windows",
+                })
+
+            return apps
+
+    except Exception as exc:
+        logger.warning("Get-StartApps scan failed: %s", exc)
+
+    # Fallback to .lnk scan if Get-StartApps fails
+    try:
+        start_menu_dirs: List[str] = []
+        programdata = os.environ.get("ProgramData")
+        appdata = os.environ.get("APPDATA")
+
+        if programdata:
+            start_menu_dirs.append(
+                os.path.join(programdata, r"Microsoft\Windows\Start Menu\Programs")
+            )
+        if appdata:
+            start_menu_dirs.append(
+                os.path.join(appdata, r"Microsoft\Windows\Start Menu\Programs")
+            )
+
+        seen_ids = set()
+
+        for base in start_menu_dirs:
+            if not base or not os.path.isdir(base):
+                continue
+            for root, _, files in os.walk(base):
+                for fname in files:
+                    if not fname.lower().endswith(".lnk"):
+                        continue
+                    full = os.path.join(root, fname)
+                    name = os.path.splitext(fname)[0].strip()
+                    if not name:
+                        continue
+
+                    lower_name = name.lower()
+                    norm_id = _normalize_app_id(name)
+                    if norm_id in seen_ids:
+                        continue
+                    seen_ids.add(norm_id)
+
+                    is_user_app = any(k in lower_name for k in USER_APP_KEYWORDS)
+                    is_system = not is_user_app
+
+                    apps.append({
+                        "id": norm_id,
+                        "name": name,
+                        "path": full,
+                        "kind": "shortcut",
+                        "is_system": is_system,
+                        "platform": "Windows",
+                    })
+    except Exception as exc:
+        logger.warning("Fallback .lnk scan failed: %s", exc)
+
+    return apps
+
+
+def _scan_macos_apps() -> List[Dict[str, Any]]:
+    apps: List[Dict[str, Any]] = []
+    app_dirs = [
+        "/Applications",
+        "/System/Applications",
+        os.path.expanduser("~/Applications"),
+    ]
+
+    seen_ids = set()
+
+    for base in app_dirs:
+        if not os.path.isdir(base):
+            continue
+        for entry in os.listdir(base):
+            if not entry.endswith(".app"):
+                continue
+            full = os.path.join(base, entry)
+            name = entry[:-4]
+            app_id = _normalize_app_id(name)
+            if app_id in seen_ids:
+                continue
+            seen_ids.add(app_id)
+
+            is_system = full.startswith("/System/Applications")
+
+            apps.append({
+                "id": app_id,
+                "name": name,
+                "path": full,
+                "kind": "bundle",
+                "is_system": is_system,
+                "platform": "Darwin",
+            })
+
+    return apps
+
+
+_host_apps_cache: Optional[List[Dict[str, Any]]] = None
+_host_apps_cache_ts: float = 0.0
+_HOST_APPS_TTL = 30.0
+
+
+def _scan_host_apps(force: bool = False) -> List[Dict[str, Any]]:
+    global _host_apps_cache, _host_apps_cache_ts
+    now = time.time()
+    if not force and _host_apps_cache is not None and (now - _host_apps_cache_ts) < _HOST_APPS_TTL:
+        return list(_host_apps_cache)
+
+    if platform_name == "Linux":
+        apps = _scan_linux_apps()
+    elif platform_name == "Windows":
+        apps = _scan_windows_apps()
+    elif platform_name == "Darwin":
+        apps = _scan_macos_apps()
+    else:
+        apps = []
+
+    _host_apps_cache = apps
+    _host_apps_cache_ts = now
+    return list(apps)
+
+
+def _match_default_apps_to_host() -> List[Dict[str, Any]]:
+    """
+    Intersect the TakeBridge default app list with the apps actually present
+    on this host by matching substrings against discovered app metadata.
+    """
+    host_apps = _scan_host_apps()
+    specs = _get_default_app_specs_for_platform()
+    resolved: List[Dict[str, Any]] = []
+
+    def host_text(app: Dict[str, Any]) -> str:
+        parts = [
+            str(app.get("name", "")),
+            str(app.get("id", "")),
+            str(app.get("app_id", "")),
+            str(app.get("exec", "")),
+            str(app.get("path", "")),
+        ]
+        return " ".join(parts).lower()
+
+    host_with_text = [(app, host_text(app)) for app in host_apps]
+
+    for spec in specs:
+        wanted_id = spec["id"]
+        label = spec.get("label", wanted_id)
+        patterns = [p.lower() for p in spec.get("match", []) if p]
+
+        matched_app: Optional[Dict[str, Any]] = None
+        for app, text in host_with_text:
+            if any(p in text for p in patterns):
+                matched_app = app
+                break
+
+        if matched_app:
+            resolved.append({
+                "id": wanted_id,
+                "label": label,
+                "host": matched_app,
+            })
+
+    return resolved
+
 
 def _map_window_to_default_app(window: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
-    Given a raw window descriptor (title, wmClass/cls, etc.), try to map it
-    to one of the TakeBridge default app specs for this platform.
-
-    Returns the matching spec or None.
+    Given a raw window descriptor, map it to one of the TakeBridge default apps.
     """
     specs = _get_default_app_specs_for_platform()
     if not specs:
         return None
 
-    # Build a searchable text blob out of common window fields
     parts = [
         str(window.get("title", "")),
         str(window.get("wmClass", "")),
@@ -1050,49 +1043,11 @@ def _map_window_to_default_app(window: Dict[str, Any]) -> Optional[Dict[str, Any
     return None
 
 
-
-def _discover_available_apps() -> Dict[str, Dict[str, Any]]:
-    """
-    Return a subset of APPS that are actually available on this host,
-    based on their configured 'bin' or the executable in 'launch'.
-    Platform-agnostic: works for Linux, Windows, and macOS.
-    """
-    available: Dict[str, Dict[str, Any]] = {}
-
-    for app_id, meta in APPS.items():
-        bin_path = meta.get("bin")
-        launch_cmd = meta.get("launch")
-        is_available = False
-
-        # 1) If an absolute binary path is provided, check that it exists
-        if isinstance(bin_path, str) and bin_path.strip():
-            if os.path.isabs(bin_path) and os.path.exists(bin_path):
-                is_available = True
-            elif shutil.which(bin_path):
-                is_available = True
-
-        # 2) Otherwise, look at the first token of the launch command and see if it's on PATH
-        if not is_available and isinstance(launch_cmd, str) and launch_cmd.strip():
-            try:
-                first_token = shlex.split(launch_cmd)[0]
-                if shutil.which(first_token):
-                    is_available = True
-            except Exception:
-                pass
-
-        if is_available:
-            available[app_id] = meta
-
-    return available
-
-
 def _list_active_windows_from_host() -> List[Dict[str, Any]]:
     """
     Inspect the host desktop to discover visible windows/apps.
-
-    For each window, we try to map it to one of the TakeBridge default apps
-    for this platform. Only windows that match a default app are returned, and
-    their id/appId are normalized to logical IDs like 'chrome', 'edge', etc.
+    Only windows that map to TakeBridge default apps are returned,
+    and their id/appId are normalized to logical IDs.
     """
 
     # ---------- Linux ----------
@@ -1153,10 +1108,8 @@ def _list_active_windows_from_host() -> List[Dict[str, Any]]:
                     "wid": wid,
                 }
 
-                # Map to a default app (chrome, libreoffice, etc.)
                 spec = _map_window_to_default_app(window)
                 if not spec:
-                    # Skip non-default apps/windows
                     continue
 
                 logical_id = spec["id"]
@@ -1219,7 +1172,6 @@ def _list_active_windows_from_host() -> List[Dict[str, Any]]:
 
                 spec = _map_window_to_default_app(window)
                 if not spec:
-                    # Skip windows that aren't in our TakeBridge default app set
                     return
 
                 logical_id = spec["id"]
@@ -1314,10 +1266,15 @@ def _list_active_windows_from_host() -> List[Dict[str, Any]]:
             with _open_windows_lock:
                 return list(_open_windows.values())
 
-    # ---------- Fallback ----------
     with _open_windows_lock:
         return list(_open_windows.values())
 
+
+try:
+    if isinstance(APPS.get("terminal"), dict):
+        APPS["terminal"]["launch"] = "gnome-terminal"
+except Exception:
+    pass
 
 
 @app.get("/health")
@@ -1350,7 +1307,6 @@ def apps_open():
         if platform_name == "Windows":
             app_id = host_app.get("app_id")
             if host_app.get("kind") == "startapps" and app_id:
-                # Launch via Start menu ID
                 ps_cmd = [
                     "powershell",
                     "-NoProfile",
@@ -1366,7 +1322,10 @@ def apps_open():
             if path and path.endswith(".app"):
                 subprocess.Popen(["open", path])
             else:
-                return jsonify({"status": "error", "message": "no launchable path for app"}), 500
+                cmd = host_app.get("exec") or path
+                if not cmd:
+                    return jsonify({"status": "error", "message": "no launchable path for app"}), 500
+                subprocess.Popen(["open", cmd])
 
         elif platform_name == "Linux":
             exec_cmd = host_app.get("exec")
@@ -1381,7 +1340,6 @@ def apps_open():
         logger.error("apps_open failed to launch %s: %s", logical_id, exc)
         return jsonify({"status": "error", "message": f"failed to launch app: {exc}"}), 500
 
-    # maintain your existing VNC/open-window behaviour
     host, ws_port = _public_host_port()
     window, created = _ensure_window(logical_id)
     window["title"] = name
@@ -1404,17 +1362,13 @@ def apps_close():
     _start_window_watcher_once()
     data = request.get_json(force=True, silent=True) or {}
     key = data.get("app")
-
-    available_apps = _discover_available_apps()
-    if key not in available_apps:
-        if key in APPS:
-            return jsonify({"status": "error", "message": f"app '{key}' not available on this host"}), 400
-        return jsonify({"status": "error", "message": "unknown app"}), 400
-
-    meta = available_apps[key]
+    if not key:
+        return jsonify({"status": "error", "message": "missing 'app'"}), 400
+    # For close, we don't need default mapping; we just try CLOSE_SH if present.
     if not os.path.isfile(CLOSE_SH):
         return jsonify({"status": "error", "message": f"{CLOSE_SH} not found"}), 500
-    cmd = [CLOSE_SH, key, meta["bin"], str(meta["ws"]), meta["class"]]
+    # This script may be legacy and expect certain args; we pass placeholders.
+    cmd = [CLOSE_SH, key, "", "0", ""]
     logger.info("close_app invoking %s", " ".join(cmd))
     proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     output = (proc.stdout or "").strip()
@@ -1546,7 +1500,6 @@ def capture_screen_with_cursor():
         try:
             img = ImageGrab.grab(bbox=None, include_layered_windows=True)
         except OSError:
-            # Fallback that we already know works from REPL
             img = ImageGrab.grab()
         try:
             cursor, (hotspotx, hotspoty) = get_cursor()
@@ -1802,15 +1755,12 @@ def run_bash_script():
 def get_available_apps():
     """
     Return only the TakeBridge default apps that are actually present on this host.
-
-    - Logical IDs are stable across machines (e.g. "chrome", "edge", "libreoffice-writer").
-    - Under the hood we match them to whatever the OS reports via Get-StartApps / .desktop / .app.
     """
     include_details = request.args.get("details", "false").strip().lower() in {"1", "true", "yes"}
 
     resolved = _match_default_apps_to_host()
-
     app_ids = [r["id"] for r in resolved]
+
     resp: Dict[str, Any] = {
         "status": "success",
         "platform": platform_name,
@@ -1819,11 +1769,9 @@ def get_available_apps():
     }
 
     if include_details:
-        # We expose the host metadata under "host" so you can debug if needed.
         resp["details"] = resolved
 
     return jsonify(resp)
-
 
 
 @app.get("/active_windows")
@@ -1836,8 +1784,6 @@ def active_windows():
         'total_windows': len(windows),
         'windows': windows,
     })
-
-
 
 
 if __name__ == '__main__':
