@@ -140,8 +140,12 @@ def _safe_parse_json(text: str) -> Optional[Dict[str, Any]]:
             text = text.strip()
     try:
         return json.loads(text)
-    except Exception:
-        logger.warning("Task compose agent returned non-JSON output; text=%r", text[:400])
+    except Exception as exc:
+        logger.warning(
+            "Task compose agent returned non-JSON output; error=%s text=%r",
+            exc,
+            text[:400],
+        )
         return None
 
 
