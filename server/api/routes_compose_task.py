@@ -15,7 +15,6 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 
 from orchestrator_agent.capabilities import (
     fetch_mcp_capabilities,
-    fetch_computer_capabilities,
     _normalize_platform,
 )
 from orchestrator_agent.composer import compose_plan
@@ -67,7 +66,7 @@ async def compose_task(
 
     controller_metadata: Dict[str, Any] = {}
 
-    capability_request = OrchestratorRequest.from_task(
+    OrchestratorRequest.from_task(
         tenant_id=user_id,
         task=task,
         max_steps=1,
@@ -76,8 +75,19 @@ async def compose_task(
         user_id=user_id,
     )
 
-    # Computer capabilities (with fallback when controller is unavailable)
-    computer_caps = fetch_computer_capabilities(capability_request, force_refresh=False)
+    # Stubbed computer capabilities (no per-user VM)
+    stub_apps = [
+        "Google Chrome",
+        "Firefox",
+        "VS Code",
+        "Terminal",
+        "LibreOffice Writer",
+    ]
+    computer_caps = {
+        "platform": platform or "darwin",
+        "available_apps": stub_apps,
+        "active_windows": [],
+    }
 
     # Combine capabilities
     capabilities = {

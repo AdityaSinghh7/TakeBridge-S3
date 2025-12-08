@@ -47,7 +47,7 @@ def _execute_remote_pyautogui(controller: VMControllerClient, code: str) -> Dict
     payload = base64.b64encode(script.encode("utf-8")).decode("utf-8")
     # Prefer single-line command on Windows to avoid CreateProcess arg issues.
     # Keep payload quoted so it survives JSON transport on Windows.
-    python_cmd_template = "import base64, sys; exec(base64.b64decode(\\\"{payload}\\\").decode('utf-8'))"
+    python_cmd_template = "import base64, sys; exec(base64.b64decode(\"{payload}\").decode())"
     # Choose python executable based on remote platform (python3 may not exist on Windows)
     python_exe = "python3"
     try:
