@@ -49,8 +49,44 @@ from shared.supabase_client import get_service_supabase_client
 from shared.db.engine import SessionLocal
 from sqlalchemy import text
 
-# Persist all events by default (set to a set(...) to restrict).
-PERSISTED_EVENTS = None
+# Persisted event whitelist (see docs/latest_frontend_connection_guide.md)
+PERSISTED_EVENTS = {
+    # Orchestrator Agent
+    "orchestrator.planning.completed",
+    "orchestrator.step.completed",
+    # Computer-Use Agent
+    "runner.started",
+    "runner.step.agent_response",
+    "runner.step.behavior",
+    "runner.step.completed",
+    "runner.completed",
+    "worker.reflection.completed",
+    "worker.step.ready",
+    "code_agent.session.started",
+    "code_agent.session.completed",
+    "code_agent.step.response",
+    "code_agent.step.execution",
+    "code_agent.step.completed",
+    "grounding.generate_coords.started",
+    "grounding.generate_coords.completed",
+    "grounding.generate_coords.service_failed",
+    "grounding.generate_text_coords.started",
+    "grounding.generate_text_coords.completed",
+    "behavior_narrator.completed",
+    # MCP Agent
+    "mcp.task.started",
+    "mcp.task.completed",
+    "mcp.planner.failed",
+    "mcp.llm.completed",
+    "mcp.action.planned",
+    "mcp.action.started",
+    "mcp.action.failed",
+    "mcp.action.completed",
+    "mcp.sandbox.run",
+    "mcp.observation_processor.completed",
+    "mcp.summary.created",
+    "mcp.high_signal",
+}
 try:
     from dotenv import load_dotenv  # type: ignore
 except Exception:  # pragma: no cover
