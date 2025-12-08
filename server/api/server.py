@@ -14,8 +14,9 @@ import json
 import logging
 import os
 import time
+import uuid
 from dataclasses import asdict
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 from urllib.parse import urlparse
 
 from fastapi import Body, FastAPI, HTTPException, Depends, Header
@@ -39,7 +40,7 @@ from shared.streaming import (
     reset_current_emitter,
     set_current_emitter,
 )
-from vm_manager.vm_wrapper import ensure_workspace
+from vm_manager.aws_vm_manager import create_agent_instance_for_user
 from vm_manager.config import settings
 from orchestrator_agent.data_types import OrchestratorRequest
 from shared.run_context import RUN_LOG_ID
@@ -48,44 +49,8 @@ from shared.supabase_client import get_service_supabase_client
 from shared.db.engine import SessionLocal
 from sqlalchemy import text
 
-# Whitelisted events for persistence (see docs/latest_frontend_connection_guide.md).
-PERSISTED_EVENTS = {
-    # Orchestrator Agent
-    "orchestrator.planning.completed",
-    "orchestrator.step.completed",
-    # Computer-Use Agent
-    "runner.started",
-    "runner.step.agent_response",
-    "runner.step.completed",
-    "runner.step.behavior",
-    "runner.completed",
-    "worker.reflection.completed",
-    "worker.step.ready",
-    "code_agent.session.started",
-    "code_agent.step.response",
-    "code_agent.step.execution",
-    "code_agent.step.completed",
-    "code_agent.session.completed",
-    "grounding.generate_coords.started",
-    "grounding.generate_coords.completed",
-    "grounding.generate_coords.service_failed",
-    "grounding.generate_text_coords.started",
-    "grounding.generate_text_coords.completed",
-    "behavior_narrator.completed",
-    # MCP Agent
-    "mcp.task.started",
-    "mcp.task.completed",
-    "mcp.planner.failed",
-    "mcp.llm.completed",
-    "mcp.action.planned",
-    "mcp.action.started",
-    "mcp.action.failed",
-    "mcp.action.completed",
-    "mcp.sandbox.run",
-    "mcp.observation_processor.completed",
-    "mcp.summary.created",
-    "mcp.high_signal",
-}
+# Persist all events by default (set to a set(...) to restrict).
+PERSISTED_EVENTS = None
 try:
     from dotenv import load_dotenv  # type: ignore
 except Exception:  # pragma: no cover
@@ -276,6 +241,74 @@ def _json_safe(val: Any) -> Any:
         return str(val)
 
 
+def _touch_run_row(run_id: str) -> None:
+    db = SessionLocal()
+    try:
+        db.execute(
+            text(
+                """
+                UPDATE workflow_runs
+                SET last_heartbeat_at = NOW(), updated_at = NOW()
+                WHERE id = :run_id
+                """
+            ),
+            {"run_id": run_id},
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
+
+
+def _insert_run_event(
+    run_id: Optional[str],
+    kind: str,
+    message: str,
+    payload: Optional[Dict[str, Any]] = None,
+) -> None:
+    if not run_id:
+        return
+    try:
+        client = get_service_supabase_client()
+        client.table("run_events").insert(
+            {
+                "id": str(uuid.uuid4()),
+                "run_id": run_id,
+                "kind": kind,
+                "message": message,
+                "payload": _json_safe(payload) if payload else {},
+            }
+        ).execute()
+    except Exception:
+        logger.debug("Failed to insert run_event run_id=%s kind=%s", run_id, kind)
+    _touch_run_row(run_id)
+
+
+def _persist_run_event(run_id: Optional[str], event: str, data: Optional[Any]) -> None:
+    if not run_id:
+        return
+    if PERSISTED_EVENTS is not None and event not in PERSISTED_EVENTS:
+        return
+    if isinstance(data, dict):
+        message = str(data.get("message") or data.get("status") or event)
+    elif data is not None:
+        message = str(data)
+    else:
+        message = event
+    _insert_run_event(run_id, event, message, data if data is not None else {})
+
+
+def _build_run_event_emitter(run_id: str) -> StreamEmitter:
+    def _publish(event: str, data: Optional[Any] = None) -> None:
+        try:
+            _persist_run_event(run_id, event, data)
+        except Exception:
+            logger.debug("Failed to persist run event via emitter run_id=%s event=%s", run_id, event)
+
+    return StreamEmitter(_publish)
+
+
 def _format_sse_event(event: str, data: Optional[Any] = None) -> bytes:
     parts = [f"event: {event}"]
     if data is not None:
@@ -315,6 +348,108 @@ def _update_run_status(run_id: str, status: str, summary: Optional[str] = None):
     finally:
         db.close()
 
+
+def _normalize_controller_payload(controller_data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    base_url = controller_data.get("base_url")
+    if not base_url:
+        raise RuntimeError("controller_base_url_missing")
+    parsed = urlparse(base_url)
+    host = controller_data.get("host") or (parsed.hostname if parsed else None)
+    port = controller_data.get("port") or (parsed.port or settings.AGENT_CONTROLLER_PORT)
+    controller_payload = {
+        "base_url": base_url,
+        "host": host,
+        "port": port,
+    }
+    workspace_info = {
+        "id": controller_data.get("id") or str(uuid.uuid4()),
+        "controller_base_url": base_url,
+        "vnc_url": controller_data.get("vnc_url"),
+        "controller_host": host,
+        "controller_port": port,
+    }
+    return controller_payload, workspace_info
+
+
+def _provision_controller_session(user_id: str, run_id: Optional[str] = None) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    instance_id, controller_base_url, vnc_url = create_agent_instance_for_user(user_id)
+    parsed = urlparse(controller_base_url)
+    host = parsed.hostname if parsed else None
+    port = parsed.port or settings.AGENT_CONTROLLER_PORT
+    controller_payload = {
+        "base_url": controller_base_url,
+        "host": host,
+        "port": port,
+    }
+    workspace_info = {
+        "id": str(uuid.uuid4()),
+        "controller_base_url": controller_base_url,
+        "vnc_url": vnc_url,
+        "controller_host": host,
+        "controller_port": port,
+    }
+
+    endpoint = {
+        "controller_base_url": controller_base_url,
+        "vnc_url": vnc_url,
+        "host": host,
+        "port": port,
+        "instance_id": instance_id,
+    }
+
+    if run_id:
+        vm_id = workspace_info["id"]
+        db = SessionLocal()
+        try:
+            db.execute(
+                text(
+                    """
+                    INSERT INTO vm_instances (id, run_id, status, provider, spec, endpoint, created_at)
+                    VALUES (:id, :run_id, :status, :provider, :spec, :endpoint, NOW())
+                    """
+                ),
+                {
+                    "id": vm_id,
+                    "run_id": run_id,
+                    "status": "ready",
+                    "provider": "aws",
+                    "spec": json.dumps(
+                        {"instance_type": settings.AGENT_INSTANCE_TYPE, "region": settings.AWS_REGION}
+                    ),
+                    "endpoint": json.dumps(endpoint),
+                },
+            )
+            db.execute(
+                text(
+                    """
+                    UPDATE workflow_runs
+                    SET vm_id = :vm_id,
+                        environment = :env,
+                        updated_at = NOW()
+                    WHERE id = :run_id
+                    """
+                ),
+                {"vm_id": vm_id, "env": json.dumps({"endpoint": endpoint}), "run_id": run_id},
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    return controller_payload, workspace_info
+
+
+def _resolve_controller_session(
+    user_id: str,
+    controller_override: Optional[Dict[str, Any]] = None,
+    run_id: Optional[str] = None,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    if controller_override and controller_override.get("base_url"):
+        return _normalize_controller_payload(controller_override)
+    return _provision_controller_session(user_id, run_id)
+
 def _create_streaming_response(
     request: OrchestrateRequest,
     user_id: Optional[str] = None,
@@ -347,45 +482,6 @@ def _create_streaming_response(
     queue.put_nowait(first_chunk)
     queue.put_nowait(_format_sse_event("response.in_progress", {"status": "running"}))
 
-    def _persist_run_event(event: str, data: Optional[Any]) -> None:
-        if not run_id or event not in PERSISTED_EVENTS:
-            return
-        try:
-            client = get_service_supabase_client()
-            client.table("run_events").insert(
-                {
-                    "run_id": run_id,
-                    "kind": event,
-                    "message": str(
-                        data.get("message")
-                        if isinstance(data, dict)
-                        else data if data is not None
-                        else event
-                    ),
-                    "payload": _json_safe(data) if data is not None else {},
-                }
-            ).execute()
-        except Exception:
-            logger.debug("Failed to persist run_event for run_id=%s event=%s", run_id, event)
-
-        try:
-            db = SessionLocal()
-            db.execute(
-                text(
-                    """
-                    UPDATE workflow_runs
-                    SET last_heartbeat_at = NOW(), updated_at = NOW()
-                    WHERE id = :run_id
-                    """
-                ),
-                {"run_id": run_id},
-            )
-            db.commit()
-        except Exception:
-            db.rollback()
-        finally:
-            db.close()
-
     def _publish(event: str, data: Optional[Any] = None) -> None:
         chunk = _format_sse_event(event, data)
         try:
@@ -399,11 +495,11 @@ def _create_streaming_response(
         except RuntimeError as exc:
             if "closed" not in str(exc).lower():
                 raise
-        # Persist event if linked to a run
-        try:
-            _persist_run_event(event, data)
-        except Exception:
-            pass
+        if run_id:
+            try:
+                _persist_run_event(run_id, event, data)
+            except Exception:
+                pass
 
     emitter = StreamEmitter(_publish)
 
@@ -554,22 +650,11 @@ async def orchestrate(
     # Extract user_id from header or env
     user_id = current_user.sub
 
-    # Ensure workspace/VM and derive controller defaults
-    workspace_obj = ensure_workspace(user_id)
-    controller_data = dict(payload.get("controller") or {})
-    base_url = controller_data.get("base_url") or workspace_obj.controller_base_url
-    if not base_url:
-        raise HTTPException(status_code=500, detail="Workspace controller_base_url is missing")
-    parsed = urlparse(base_url) if base_url else None
-    host = controller_data.get("host") or (parsed.hostname if parsed else None)
-    port = controller_data.get("port") or (parsed.port if parsed else settings.AGENT_CONTROLLER_PORT)
-    controller_data.update(
-        {
-            "base_url": base_url,
-            "host": host,
-            "port": port,
-        }
-    )
+    controller_override = payload.get("controller")
+    try:
+        controller_data, workspace_info = _resolve_controller_session(user_id, controller_override)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
     payload = {**payload, "controller": controller_data}
 
     request = _parse_orchestrate_request(payload)
@@ -579,13 +664,7 @@ async def orchestrate(
         request,
         user_id=user_id,
         tool_constraints=tool_constraints,
-        workspace={
-            "id": workspace_obj.id,
-            "controller_base_url": workspace_obj.controller_base_url,
-            "vnc_url": workspace_obj.vnc_url,
-            "controller_host": host,
-            "controller_port": port,
-        },
+        workspace=workspace_info,
     )
 
     try:
@@ -637,27 +716,11 @@ async def orchestrate_stream_post(
 
     run_id = payload.get("run_id")
 
-    # Ensure workspace/VM and derive controller defaults (unless provided)
-    controller_data = dict(payload.get("controller") or {})
-    base_url = controller_data.get("base_url")
-    workspace_obj = None
-    if not base_url:
-        workspace_obj = ensure_workspace(user_id)
-        base_url = workspace_obj.controller_base_url
-    if not base_url:
-        raise HTTPException(status_code=500, detail="Workspace controller_base_url is missing")
-    parsed = urlparse(base_url) if base_url else None
-    host = controller_data.get("host") or (parsed.hostname if parsed else None)
-    port = controller_data.get("port") or (parsed.port if parsed else settings.AGENT_CONTROLLER_PORT)
-    controller_data.update(
-        {
-            "base_url": base_url,
-            "host": host,
-            "port": port,
-        }
-    )
-
-    # Rebuild payload with controller defaults merged in
+    controller_override = payload.get("controller")
+    try:
+        controller_data, workspace_info = _resolve_controller_session(user_id, controller_override, run_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
     payload = {**payload, "controller": controller_data}
 
     # Extract tool_constraints and optional composed_plan from payload
@@ -670,21 +733,7 @@ async def orchestrate_stream_post(
     if composed_plan is not None:
         setattr(request, "composed_plan", composed_plan)
 
-    workspace_info = payload.get("workspace") or (
-        {
-            "id": workspace_obj.id,
-            "controller_base_url": workspace_obj.controller_base_url,
-            "vnc_url": workspace_obj.vnc_url,
-            "controller_host": host,
-            "controller_port": port,
-        }
-        if workspace_obj
-        else {
-            "controller_base_url": base_url,
-            "controller_host": host,
-            "controller_port": port,
-        }
-    )
+    workspace_info = payload.get("workspace") or workspace_info
 
     return _create_streaming_response(request, user_id, tool_constraints, workspace_info, run_id=run_id)
 
@@ -714,24 +763,11 @@ async def internal_execute_run(
     if not task:
         raise HTTPException(status_code=400, detail="task required")
 
-    controller_data = dict(payload.get("controller") or {})
-    base_url = controller_data.get("base_url")
-    workspace_obj = None
-    if not base_url:
-        workspace_obj = ensure_workspace(user_id)
-        base_url = workspace_obj.controller_base_url
-    if not base_url:
-        raise HTTPException(status_code=500, detail="Workspace controller_base_url is missing")
-    parsed = urlparse(base_url) if base_url else None
-    host = controller_data.get("host") or (parsed.hostname if parsed else None)
-    port = controller_data.get("port") or (parsed.port if parsed else settings.AGENT_CONTROLLER_PORT)
-    controller_data.update(
-        {
-            "base_url": base_url,
-            "host": host,
-            "port": port,
-        }
-    )
+    controller_override = payload.get("controller")
+    try:
+        controller_data, workspace_info = _resolve_controller_session(user_id, controller_override, run_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
     payload = {**payload, "controller": controller_data, "task": task}
     tool_constraints = payload.get("tool_constraints")
@@ -740,22 +776,7 @@ async def internal_execute_run(
     request = _parse_orchestrate_request(payload)
     if composed_plan is not None:
         setattr(request, "composed_plan", composed_plan)
-
-    workspace_info = payload.get("workspace") or (
-        {
-            "id": workspace_obj.id,
-            "controller_base_url": workspace_obj.controller_base_url,
-            "vnc_url": workspace_obj.vnc_url,
-            "controller_host": host,
-            "controller_port": port,
-        }
-        if workspace_obj
-        else {
-            "controller_base_url": base_url,
-            "controller_host": host,
-            "controller_port": port,
-        }
-    )
+    workspace_info = payload.get("workspace") or workspace_info
 
     return _create_streaming_response(
         request,

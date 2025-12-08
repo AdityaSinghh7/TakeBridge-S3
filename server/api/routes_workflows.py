@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 from typing import Any, Dict, Optional
@@ -23,6 +24,7 @@ router = APIRouter(prefix="/api", tags=["workflows"])
 
 RUN_CREDIT_COST = 10
 TERMINAL_STATUSES = {"success", "error", "attention", "cancelled"}
+VNC_DEFAULT_PASSWORD = os.getenv("VNC_DEFAULT_PASSWORD", "password")
 
 
 def _format_sse(event: str, data: Optional[Any] = None) -> bytes:
@@ -201,6 +203,8 @@ def get_workflow(
     return {"workflow": workflow}
 
 
+
+
 @router.get("/runs/{run_id}/vm")
 def get_run_vm(
     run_id: str,
@@ -221,15 +225,14 @@ def get_run_vm(
                 """
             ),
             {"run_id": run_id},
-        ).mappings().first()
-
-        if not row:
+        )
+        res = row.mappings().all()
+        match = next((dict(r) for r in res if str(r.get("user_id")) == current_user.sub), None)
+        if not match:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run_not_found")
-        if row["user_id"] != current_user.sub:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run_not_found")
 
-        endpoint = row.get("endpoint")
-        env = row.get("environment")
+        endpoint = match.get("endpoint")
+        env = match.get("environment")
         if env and not endpoint:
             try:
                 env_json = json.loads(env) if isinstance(env, str) else env
@@ -248,15 +251,15 @@ def get_run_vm(
         vnc_url = endpoint.get("vnc_url")
         host = endpoint.get("host")
         port = endpoint.get("port")
-        password = endpoint.get("password")
-        path = endpoint.get("path")
+        password = endpoint.get("password") or VNC_DEFAULT_PASSWORD
+        path = endpoint.get("path") or ""
         secure = None
 
         if vnc_url:
             parsed = urlparse(vnc_url)
-            host = host or parsed.hostname
-            port = port or parsed.port
-            path = path or parsed.path
+            host = parsed.hostname or host
+            port = parsed.port or port
+            path = parsed.path or path
             secure = parsed.scheme in {"wss", "https"}
         elif endpoint.get("controller_base_url"):
             parsed = urlparse(endpoint.get("controller_base_url"))
@@ -270,6 +273,7 @@ def get_run_vm(
             "password": password,
             "secure": secure,
             "path": path,
+            "vnc_url": vnc_url,
         }
 
         return {"vm": vm_info}
