@@ -1570,14 +1570,10 @@ def execute_command():
     if platform_name == "Windows" and not shell and isinstance(command, list) and command:
         if command[0] in ("python3", "python"):
             command[0] = sys.executable
-    started = time.time()
-    acquired = _exec_lock.acquire(timeout=5)
-    if not acquired:
-        return jsonify({'status': 'error', 'message': 'executor busy'}), 503
-    try:
+    def _try_run(cmd_to_run):
         flags = subprocess.CREATE_NO_WINDOW if platform_name == "Windows" else 0
-        result = subprocess.run(
-            command,
+        return subprocess.run(
+            cmd_to_run,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             shell=shell,
@@ -1585,6 +1581,34 @@ def execute_command():
             timeout=120,
             creationflags=flags,
         )
+    started = time.time()
+    acquired = _exec_lock.acquire(timeout=5)
+    if not acquired:
+        return jsonify({'status': 'error', 'message': 'executor busy'}), 503
+    try:
+        result = _try_run(command)
+        # Retry once with a fixed payload if Windows python -c base64 string lost quotes
+        if (
+            platform_name == "Windows"
+            and not shell
+            and isinstance(command, list)
+            and len(command) >= 3
+            and command[0] in (sys.executable, "python", "python3")
+            and command[1] == "-c"
+            and result.returncode != 0
+        ):
+            code_str = command[2]
+            if "base64.b64decode(" in code_str:
+                fixed_code = re.sub(
+                    r"base64\\.b64decode\\(([^\"'\\)]+)\\)",
+                    r'base64.b64decode("\\1")',
+                    code_str,
+                )
+                if fixed_code != code_str:
+                    patched_cmd = list(command)
+                    patched_cmd[2] = fixed_code
+                    logger.info("Retrying execute_command with patched base64 payload")
+                    result = _try_run(patched_cmd)
         duration = time.time() - started
         logger.info(
             "execute_command finished returncode=%s duration=%.2fs",
