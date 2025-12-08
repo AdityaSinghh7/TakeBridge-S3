@@ -45,10 +45,8 @@ def _execute_remote_pyautogui(controller: VMControllerClient, code: str) -> Dict
     """Execute the generated pyautogui script on the remote VM via the controller."""
     script = code.strip()
     payload = base64.b64encode(script.encode("utf-8")).decode("utf-8")
-    python_cmd = (
-        "import base64, sys\n"
-        "exec(base64.b64decode('{payload}').decode('utf-8'))"
-    ).format(payload=payload)
+    # Prefer single-line command on Windows to avoid CreateProcess arg issues.
+    python_cmd_template = "import base64, sys; exec(base64.b64decode('{payload}').decode('utf-8'))"
     # Choose python executable based on remote platform (python3 may not exist on Windows)
     python_exe = "python3"
     try:
@@ -56,12 +54,20 @@ def _execute_remote_pyautogui(controller: VMControllerClient, code: str) -> Dict
         if isinstance(platform_val, str) and platform_val.lower().startswith("win"):
             python_exe = "python"
     except Exception:
-        pass
+        platform_val = None  # fallback
+    python_cmd = python_cmd_template.format(payload=payload)
+
     try:
         preview = script[:200].replace("\n", "\\n")
-        logger.info("Executing remote pyautogui via %s - code preview: %s", python_exe, preview)
+        logger.info(
+            "Executing remote pyautogui via %s platform=%s - code preview: %s",
+            python_exe,
+            str(platform_val),
+            preview,
+        )
     except Exception:
         logger.debug("Executing remote pyautogui via %s", python_exe)
+
     return controller.execute([python_exe, "-c", python_cmd])
 
 
