@@ -27,6 +27,22 @@ import logging
 import re
 import shutil
 
+log_file_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "server.log")
+
+# Setup standard logging to write to file
+logging.basicConfig(
+    filename=log_file_path,
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    force=True
+)
+
+# Redirect stdout and stderr to the file
+# This captures print() statements and unhandled crashes (tracebacks)
+if sys.stdout is None or sys.stderr is None or not sys.stdout.isatty():
+    sys.stdout = open(log_file_path, 'a', buffering=1)
+    sys.stderr = sys.stdout
+
 platform_name: str = platform.system()
 
 if platform_name == "Windows":
@@ -41,12 +57,18 @@ CORS(app)
 
 try:
     app.logger.setLevel(logging.INFO)
-    if not any(isinstance(h, logging.StreamHandler) for h in app.logger.handlers):
-        _handler = logging.StreamHandler(sys.stdout)
-        _handler.setLevel(logging.INFO)
-        _handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
-        app.logger.addHandler(_handler)
-    logging.getLogger('werkzeug').setLevel(logging.INFO)
+    # Use FileHandler instead of StreamHandler to ensure logs go to disk
+    file_handler = logging.FileHandler(log_file_path)
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
+
+    app.logger.addHandler(file_handler)
+    app.logger.setLevel(logging.INFO)
+
+    # Also capture Werkzeug (Flask server) logs
+    werkzeug_logger = logging.getLogger('werkzeug')
+    werkzeug_logger.addHandler(file_handler)
+    werkzeug_logger.setLevel(logging.INFO)
 except Exception:
     pass
 
