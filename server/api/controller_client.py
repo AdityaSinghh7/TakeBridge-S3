@@ -145,15 +145,18 @@ class VMControllerClient:
         timeout: Optional[float] = None,
     ) -> requests.Response:
         url = f"{self.base_url}{path}"
-        logger.debug(
-            "VMControllerClient request %s %s params=%s json=%s expected=%s timeout=%s",
-            method,
-            url,
-            params,
-            json,
-            expected_status,
-            timeout,
-        )
+        try:
+            logger.info(
+                "VMControllerClient request %s %s params=%s json=%s expected=%s timeout=%s",
+                method,
+                url,
+                params,
+                json,
+                expected_status,
+                timeout,
+            )
+        except Exception:
+            logger.debug("VMControllerClient request %s %s (failed to log payload)", method, url)
         response = self._session.request(
             method,
             url,
@@ -198,6 +201,10 @@ class VMControllerClient:
         Execute a command on the VM (`/execute` or `/setup/execute`).
         """
         path = "/setup/execute" if setup else "/execute"
+        try:
+            logger.info("controller.execute path=%s shell=%s command=%s", path, shell, command)
+        except Exception:
+            logger.debug("controller.execute path=%s shell=%s (command log failed)", path, shell)
         return self._request(
             "POST",
             path,
@@ -228,6 +235,16 @@ class VMControllerClient:
             payload["check_interval"] = check_interval
 
         path = "/setup/execute_with_verification" if setup else "/execute_with_verification"
+        try:
+            logger.info(
+                "controller.execute_with_verification path=%s shell=%s command=%s verification=%s",
+                path,
+                shell,
+                command,
+                list(verification.keys()) if isinstance(verification, dict) else None,
+            )
+        except Exception:
+            pass
         return self._request("POST", path, json=payload, timeout=timeout).json()
 
     def launch(self, command: Command, *, shell: bool = False, setup: bool = False, timeout: Optional[float] = None) -> str:
@@ -275,7 +292,12 @@ class VMControllerClient:
         """
         Retrieve the VM platform string (`/platform`).
         """
-        return self._request("GET", "/platform", timeout=timeout).text
+        platform_val = self._request("GET", "/platform", timeout=timeout).text
+        try:
+            logger.info("controller.get_platform -> %s", platform_val)
+        except Exception:
+            pass
+        return platform_val
 
     def cursor_position(self, timeout: Optional[float] = None) -> Any:
         """
@@ -306,14 +328,26 @@ class VMControllerClient:
         Retrieve the list of available applications (`/apps`).
         """
         params = {"exclude_system": "true"} if exclude_system else None
-        return self._request("GET", "/apps", params=params, timeout=timeout).json()
+        res = self._request("GET", "/apps", params=params, timeout=timeout).json()
+        try:
+            apps = res.get("apps", []) if isinstance(res, dict) else []
+            logger.info("controller.get_apps count=%s exclude_system=%s", len(apps), exclude_system)
+        except Exception:
+            pass
+        return res
 
     def get_active_windows(self, *, exclude_system: bool = True, timeout: Optional[float] = None) -> JsonDict:
         """
         Retrieve information about currently active windows (`/active_windows`).
         """
         params = {"exclude_system": "true"} if exclude_system else None
-        return self._request("GET", "/active_windows", params=params, timeout=timeout).json()
+        res = self._request("GET", "/active_windows", params=params, timeout=timeout).json()
+        try:
+            windows = res.get("windows", []) if isinstance(res, dict) else []
+            logger.info("controller.get_active_windows count=%s exclude_system=%s", len(windows), exclude_system)
+        except Exception:
+            pass
+        return res
 
     def accessibility_tree(self, timeout: Optional[float] = None) -> JsonDict:
         """

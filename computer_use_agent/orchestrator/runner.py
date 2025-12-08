@@ -57,6 +57,11 @@ def _execute_remote_pyautogui(controller: VMControllerClient, code: str) -> Dict
             python_exe = "python"
     except Exception:
         pass
+    try:
+        preview = script[:200].replace("\n", "\\n")
+        logger.info("Executing remote pyautogui via %s - code preview: %s", python_exe, preview)
+    except Exception:
+        logger.debug("Executing remote pyautogui via %s", python_exe)
     return controller.execute([python_exe, "-c", python_cmd])
 
 
