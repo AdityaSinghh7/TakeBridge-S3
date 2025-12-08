@@ -65,6 +65,7 @@ _open_windows: Dict[str, Dict[str, Any]] = {}
 _window_watcher_started = False
 _recent_launches: Dict[str, float] = {}
 _last_focused_app_id: Optional[str] = None
+_exec_lock = threading.Lock()
 
 # Legacy APPS dict is kept for compatibility with some Linux watcher code,
 # but /apps and /apps/open no longer depend on it.
@@ -1569,6 +1570,10 @@ def execute_command():
     if platform_name == "Windows" and not shell and isinstance(command, list) and command:
         if command[0] in ("python3", "python"):
             command[0] = sys.executable
+    started = time.time()
+    acquired = _exec_lock.acquire(timeout=5)
+    if not acquired:
+        return jsonify({'status': 'error', 'message': 'executor busy'}), 503
     try:
         flags = subprocess.CREATE_NO_WINDOW if platform_name == "Windows" else 0
         result = subprocess.run(
@@ -1580,6 +1585,12 @@ def execute_command():
             timeout=120,
             creationflags=flags,
         )
+        duration = time.time() - started
+        logger.info(
+            "execute_command finished returncode=%s duration=%.2fs",
+            result.returncode,
+            duration,
+        )
         return jsonify({
             'status': 'success',
             'output': result.stdout,
@@ -1587,7 +1598,10 @@ def execute_command():
             'returncode': result.returncode
         })
     except Exception as exc:
+        logger.error("execute_command failed: %s", exc)
         return jsonify({'status': 'error', 'message': str(exc)}), 500
+    finally:
+        _exec_lock.release()
 
 
 @app.post("/run_python")
@@ -1597,56 +1611,38 @@ def run_python():
     if not code:
         return jsonify({'status': 'error', 'message': 'Code not supplied!'}), 400
     temp_filename = f"/tmp/python_exec_{uuid.uuid4().hex}.py"
+    started = time.time()
+    acquired = _exec_lock.acquire(timeout=5)
+    if not acquired:
+        return jsonify({'status': 'error', 'message': 'executor busy'}), 503
     try:
         with open(temp_filename, 'w') as handle:
             handle.write(code)
-        result = subprocess.run(
-            ['/usr/bin/python3', temp_filename],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=30,
-        )
+        result = subprocess.run([sys.executable, temp_filename], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
         output = result.stdout
         error_output = result.stderr
         combined = output
         if error_output:
-            combined = (combined + '\n' + error_output) if combined else error_output
+            combined = (combined + '\\n' + error_output) if combined else error_output
         status = 'success' if result.returncode == 0 else 'error'
         if result.returncode != 0 and not error_output:
             error_output = f"Process exited with code {result.returncode}"
-            combined = (combined + '\n' + error_output) if combined else error_output
-        return jsonify({
-            'status': status,
-            'message': combined,
-            'need_more': False,
-            'output': output,
-            'error': error_output,
-            'return_code': result.returncode,
-        })
+            combined = (combined + '\\n' + error_output) if combined else error_output
+        duration = time.time() - started
+        logger.info("run_python finished returncode=%s duration=%.2fs", result.returncode, duration)
+        return jsonify({'status': status, 'message': combined, 'need_more': False, 'output': output, 'error': error_output, 'return_code': result.returncode})
     except subprocess.TimeoutExpired:
-        return jsonify({
-            'status': 'error',
-            'message': 'Execution timeout: Code took too long to execute',
-            'error': 'TimeoutExpired',
-            'need_more': False,
-            'output': None,
-        }), 500
+        return jsonify({'status': 'error', 'message': 'Execution timeout: Code took too long to execute', 'error': 'TimeoutExpired', 'need_more': False, 'output': None}), 500
     except Exception as exc:
-        return jsonify({
-            'status': 'error',
-            'message': f'Execution error: {exc}',
-            'error': traceback.format_exc(),
-            'need_more': False,
-            'output': None,
-        }), 500
+        logger.error("run_python failed: %s", exc)
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
     finally:
-        try:
-            os.remove(temp_filename)
-        except Exception:
-            pass
-
-
+        if os.path.exists(temp_filename):
+            try:
+                os.remove(temp_filename)
+            except Exception:
+                pass
+        _exec_lock.release()
 @app.post("/run_bash_script")
 def run_bash_script():
     data = request.get_json(force=True, silent=True) or {}
