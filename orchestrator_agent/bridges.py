@@ -12,7 +12,7 @@ resilient in environments where downstream agents are not fully wired.
 """
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from orchestrator_agent.data_types import AgentTarget, OrchestratorRequest, PlannedStep
 from shared.hierarchical_logger import set_step_id
@@ -169,6 +169,18 @@ def run_mcp_agent(
             extra_context=extra_context,
         )
         raw_dict = dict(raw_result)
+        
+        # Persist MCP state to agent_states for handback support
+        run_id = request.request_id
+        mcp_state_dict = raw_dict.get("state_dict")
+        if run_id and mcp_state_dict:
+            try:
+                from shared.db.workflow_runs import merge_agent_states
+                merge_agent_states(run_id, mcp_state_dict, path=["agents", "mcp"])
+                logger.info("Persisted MCP state for run_id=%s", run_id)
+            except Exception as e:
+                logger.warning("Failed to persist MCP state: %s", e)
+        
     except Exception as exc:  # pragma: no cover
         logger.info("MCP agent fallback due to error: %s", exc)
         raw_dict = {
@@ -193,11 +205,17 @@ def run_mcp_agent(
 def run_computer_use_agent(
     request: OrchestratorRequest,
     step: PlannedStep,
+    orchestrator_state: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Execute computer-use agent and return self-contained trajectory.
 
     IMPORTANT: Returns ONLY trajectory string, not raw_result.
     The trajectory contains all necessary data.
+    
+    Args:
+        request: The orchestrator request
+        step: The planned step to execute
+        orchestrator_state: Optional serialized orchestrator RunState for handback snapshots
     """
     # Bind step_id to context for hierarchical logging
     set_step_id(step.step_id)
@@ -218,7 +236,14 @@ def run_computer_use_agent(
                 "enable_code_execution": request.allow_code_execution,
             }
         )
-        raw_result_obj = runner(cu_request)
+        
+        # Pass orchestrator state and handback inference context via metadata
+        runner_metadata = {
+            "orchestrator_state": orchestrator_state,
+            "handback_inference_context": request.metadata.get("handback_inference_context"),
+        }
+        
+        raw_result_obj = runner(cu_request, orchestrator_context=runner_metadata)
         raw_dict = raw_result_obj.__dict__ if hasattr(raw_result_obj, "__dict__") else dict(raw_result_obj)
     except Exception as exc:  # pragma: no cover
         logger.info("Computer-use agent fallback due to error: %s", exc)
@@ -246,16 +271,23 @@ def run_agent_bridge(
     target: AgentTarget,
     request: OrchestratorRequest,
     step: PlannedStep,
+    orchestrator_state: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Execute agent bridge and return self-contained trajectory.
 
     IMPORTANT: Returns ONLY trajectory string, not raw_result.
     The trajectory contains all necessary data.
+    
+    Args:
+        target: Which agent to execute ("mcp" or "computer_use")
+        request: The orchestrator request
+        step: The planned step to execute
+        orchestrator_state: Optional serialized orchestrator RunState for handback snapshots
     """
     if target == "mcp":
         return run_mcp_agent(request, step)
     if target == "computer_use":
-        return run_computer_use_agent(request, step)
+        return run_computer_use_agent(request, step, orchestrator_state=orchestrator_state)
     raise ValueError(f"Unsupported agent target: {target}")
 
 

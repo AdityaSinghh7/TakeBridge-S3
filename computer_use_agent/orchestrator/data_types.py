@@ -239,6 +239,9 @@ class RunnerStep:
     behavior_fact_thoughts: Optional[str] = None
     behavior_fact_answer: Optional[str] = None
     action_kind: str = "gui"
+    # Handback to human fields
+    handback_request: Optional[str] = None
+    handback_screenshot_b64: Optional[str] = None
 
 
 @dataclass

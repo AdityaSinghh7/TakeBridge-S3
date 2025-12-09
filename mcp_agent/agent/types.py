@@ -44,3 +44,4 @@ class MCPTaskResult(TypedDict, total=False):
     logs: list[dict[str, Any]]
     steps: list[dict[str, Any]]
     trajectory_md: str  # Rich self-contained markdown trajectory for orchestrator
+    state_dict: Optional[dict[str, Any]]  # Serialized AgentState for persistence

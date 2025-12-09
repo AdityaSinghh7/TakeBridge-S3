@@ -665,6 +665,27 @@ class Worker(BaseModule):
             # Reset the code agent result after adding it to context
             self.grounding_agent.last_code_agent_result = None
 
+        # Add handback inference result if present (from human intervention)
+        if (
+            hasattr(self.grounding_agent, "handback_inference")
+            and self.grounding_agent.handback_inference is not None
+        ):
+            handback_inference = self.grounding_agent.handback_inference
+            generator_message += "\nHANDBACK TO HUMAN RESULT:\n"
+            generator_message += (
+                f"You previously requested human intervention and the run was paused.\n"
+            )
+            generator_message += f"{handback_inference}\n"
+            generator_message += (
+                "Use this information to understand what happened during the pause "
+                "and continue with the task accordingly.\n"
+            )
+            logger.info(
+                f"WORKER_HANDBACK_RESULT - Step {self.turn_count + 1}: Handback inference added to generator message"
+            )
+            # Reset the handback inference after adding it to context
+            self.grounding_agent.handback_inference = None
+
         # Update system prompt with current apps and windows information
         apps_windows_info = self._fetch_apps_and_windows_info()
         if apps_windows_info:

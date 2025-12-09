@@ -9,7 +9,7 @@ drift between the agents that will plug into this orchestrator.
 """
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
@@ -396,6 +396,18 @@ class RunState:
             request_id=self.request.request_id,
             cumulative_cost_usd=0.0,
         )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize RunState to a dict for persistence."""
+        return {
+            "status": "running",
+            "loop_iteration": len(self.results),
+            "cost_baseline": self.cost_baseline,
+            "plan": [asdict(step) for step in self.plan],
+            "results": [asdict(result) for result in self.results],
+            "intermediate": self.intermediate,
+            "pending_steps": [asdict(step) for step in self.pending_steps()],
+        }
 
 
 __all__ = [

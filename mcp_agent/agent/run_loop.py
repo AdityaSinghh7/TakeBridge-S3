@@ -421,6 +421,7 @@ class AgentOrchestrator:
             logs=self.agent_state.logs,
             steps=steps,
             trajectory_md=trajectory_md,
+            state_dict=self.agent_state.to_dict(),
         )
 
     def _failure(
@@ -475,6 +476,7 @@ class AgentOrchestrator:
             error_message=summary,
             steps=steps,
             trajectory_md=trajectory_md,
+            state_dict=self.agent_state.to_dict(),
         )
         if details is not None:
             result["error_details"] = details

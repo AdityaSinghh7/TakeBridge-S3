@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -21,6 +22,8 @@ from computer_use_agent.utils.behavior_narrator import BehaviorNarrator
 from shared.latency_logger import LATENCY_LOGGER
 from shared.streaming import emit_event
 from shared import agent_signal
+from shared.run_context import RUN_LOG_ID
+from shared.db.workflow_runs import merge_agent_states, mark_run_attention
 
 logger = logging.getLogger(__name__)
 
@@ -193,6 +196,13 @@ def _build_trajectory_markdown(steps: List[RunnerStep], status: str, completion_
                         output_str = output_str[:500] + "... (truncated)"
                     lines.append(f"**Output**: {output_str}")
 
+        # Handback to human output (if present)
+        if step.handback_request:
+            lines.append("")
+            lines.append("### Handback to Human")
+            lines.append(f"**Request**: {step.handback_request}")
+            lines.append("**Status**: Awaiting human intervention")
+
         lines.append("")  # Blank line between steps
 
     # Final status
@@ -205,7 +215,17 @@ def _build_trajectory_markdown(steps: List[RunnerStep], status: str, completion_
 
 def runner(
     request: OrchestrateRequest,
+    orchestrator_context: Optional[Dict[str, Any]] = None,
 ) -> RunnerResult:
+    """
+    Execute the computer-use agent runner loop.
+    
+    Args:
+        request: The orchestration request with task and configuration
+        orchestrator_context: Optional context containing:
+            - orchestrator_state: Serialized orchestrator RunState for handback snapshots
+            - handback_inference_context: Inference result from previous handback to inject
+    """
     agent_signal.clear_signal_state()
     controller = VMControllerClient(
         base_url=request.controller.base_url,
@@ -220,6 +240,13 @@ def runner(
         request.controller.port,
         request.controller.timeout,
     )
+    
+    # Extract orchestrator state and handback inference from context
+    _orchestrator_state = None
+    _handback_inference_context = None
+    if orchestrator_context:
+        _orchestrator_state = orchestrator_context.get("orchestrator_state")
+        _handback_inference_context = orchestrator_context.get("handback_inference_context")
 
     try:
         screen_info = controller.screen_size()
@@ -242,6 +269,9 @@ def runner(
     worker_post_action_delay = max(worker_cfg.post_action_worker_delay, 0.0)
 
     def _perform_run() -> RunnerResult:
+        # Store orchestrator state in closure for handback capture
+        nonlocal _orchestrator_state, _handback_inference_context
+        
         grounding_agent = OSWorldACI(
             env=env,
             platform=platform.lower() if platform else "unknown",
@@ -257,6 +287,11 @@ def runner(
             grounding_max_retries=grounding_cfg.grounding_max_retries,
             grounding_api_key=grounding_cfg.grounding_api_key,
         )
+        
+        # Inject handback inference context if this is a continuation after handback
+        if _handback_inference_context:
+            grounding_agent.handback_inference = _handback_inference_context
+            logger.info("Injected handback inference context for continuation")
 
         agent = AgentS3(
             worker_cfg.engine_params,
@@ -372,6 +407,149 @@ def runner(
                     after_screenshot_bytes = controller.capture_screenshot()
                 execution_details["status"] = status
                 execution_details["completion_reason"] = completion_reason
+            elif action.strip().startswith("HANDBACK_TO_HUMAN:"):
+                # Handback to human - extract request and capture state
+                execution_mode = "handback_to_human"
+                handback_request = action.strip()[len("HANDBACK_TO_HUMAN:"):].strip()
+                emit_event(
+                    "runner.step.execution.started",
+                    {
+                        "step": step_index,
+                        "mode": execution_mode,
+                        "handback_request": handback_request,
+                    },
+                )
+                
+                # Capture handback screenshot
+                with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "handback", "step": step_index}):
+                    handback_screenshot_bytes = controller.capture_screenshot()
+                handback_screenshot_b64 = base64.b64encode(handback_screenshot_bytes).decode("utf-8")
+                
+                # Build partial trajectory for snapshot
+                partial_trajectory_md = _build_trajectory_markdown(steps, "attention", "HANDOFF_TO_HUMAN")
+                
+                # Get run_id from context
+                run_id = RUN_LOG_ID.get()
+                handback_timestamp = datetime.now(timezone.utc).isoformat()
+                
+                if run_id:
+                    # Build FULL cross-agent snapshot
+                    from shared.db.workflow_runs import get_agent_states, update_agent_states
+                    from dataclasses import asdict
+                    
+                    # Read existing agent_states to preserve MCP state if present
+                    existing_states = {}
+                    try:
+                        existing_states = get_agent_states(run_id)
+                    except Exception as e:
+                        logger.warning("Could not read existing agent_states: %s", e)
+                    
+                    # Build the full snapshot
+                    full_snapshot = {
+                        "version": 1,
+                        "updated_at": handback_timestamp,
+                    }
+                    
+                    # 1. Include orchestrator state if available
+                    if _orchestrator_state:
+                        full_snapshot["orchestrator"] = _orchestrator_state
+                    elif existing_states.get("orchestrator"):
+                        # Preserve existing orchestrator state
+                        full_snapshot["orchestrator"] = existing_states["orchestrator"]
+                    
+                    # 2. Build computer_use state
+                    computer_use_snapshot = {
+                        "status": "attention",
+                        "completion_reason": "HANDOFF_TO_HUMAN",
+                        "step_index_next": step_index + 1,
+                        "steps": [asdict(s) for s in steps],
+                        "handback": {
+                            "request": handback_request,
+                            "screenshot_b64": handback_screenshot_b64,
+                            "timestamp": handback_timestamp,
+                            "step_index": step_index,
+                        },
+                        "runner": {
+                            "trajectory_md": partial_trajectory_md,
+                        },
+                    }
+                    
+                    # 3. Include MCP state if present in existing states
+                    agents_section = {"computer_use": computer_use_snapshot}
+                    if existing_states.get("agents", {}).get("mcp"):
+                        agents_section["mcp"] = existing_states["agents"]["mcp"]
+                    
+                    full_snapshot["agents"] = agents_section
+                    
+                    try:
+                        # Write the full snapshot (replaces existing)
+                        update_agent_states(run_id, full_snapshot)
+                        # Mark run as needing attention
+                        mark_run_attention(run_id, summary=f"Human attention required: {handback_request[:100]}")
+                        logger.info("Full handback snapshot persisted for run_id=%s", run_id)
+                    except Exception as e:
+                        logger.error("Failed to persist handback state: %s", e)
+                    
+                    # Emit human_attention.required event
+                    emit_event(
+                        "human_attention.required",
+                        {
+                            "request": handback_request,
+                            "step_index": step_index,
+                            "timestamp": handback_timestamp,
+                            "run_id": run_id,
+                        },
+                    )
+                else:
+                    logger.warning("No run_id in context; handback state not persisted")
+                
+                # Record the handback step
+                steps.append(
+                    RunnerStep(
+                        step_index=step_index,
+                        plan=info.get("plan", ""),
+                        action=action,
+                        exec_code=exec_code,
+                        execution_result={},
+                        reflection=info.get("reflection"),
+                        reflection_thoughts=info.get("reflection_thoughts"),
+                        info=info,
+                        behavior_fact_thoughts=None,
+                        behavior_fact_answer=None,
+                        action_kind="handback",
+                        handback_request=handback_request,
+                        handback_screenshot_b64=handback_screenshot_b64,
+                    )
+                )
+                
+                status = "attention"
+                completion_reason = "HANDOFF_TO_HUMAN"
+                after_screenshot_bytes = handback_screenshot_bytes
+                execution_details["status"] = status
+                execution_details["completion_reason"] = completion_reason
+                execution_details["handback_request"] = handback_request
+                
+                emit_event(
+                    "runner.step.execution.completed",
+                    {
+                        **execution_details,
+                        "mode": execution_mode,
+                        "did_click": False,
+                    },
+                )
+                
+                emit_event(
+                    "runner.step.completed",
+                    {
+                        "step": step_index,
+                        "status": status,
+                        "action": action,
+                        "completion_reason": completion_reason,
+                    },
+                )
+                
+                # Break out of the loop - run is paused for human attention
+                break
             elif normalized in {"WAIT", "WAIT;"} or action.strip().startswith("WAIT"):
                 execution_mode = "wait"
                 emit_event(

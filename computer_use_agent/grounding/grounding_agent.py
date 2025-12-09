@@ -280,6 +280,8 @@ class OSWorldACI(ACI):
         # Store task instruction for code agent
         self.current_task_instruction = None
         self.last_code_agent_result = None
+        # Store handback inference result for continuation after human intervention
+        self.handback_inference = None
         self.grounding_base_url = grounding_base_url
         self.grounding_system_prompt = grounding_system_prompt
         self.grounding_timeout = grounding_timeout
@@ -1063,6 +1065,27 @@ class OSWorldACI(ACI):
     def fail(self):
         """End the current task with a failure. Use this when you believe the entire task is impossible to complete."""
         return """FAIL"""
+
+    @agent_action
+    def handback_to_human(self, request: str):
+        """Request human intervention for tasks requiring credentials, confirmation, or information the agent cannot obtain.
+
+        Use this when you need the human to:
+        - Sign into a service with credentials you don't have access to
+        - Confirm a payment, deletion, or other irreversible action
+        - Provide information that isn't visible on screen
+        - Complete a CAPTCHA or other human verification
+        - Make a decision that requires human judgment
+
+        Args:
+            request: str, A clear, specific description of what you need the human to do.
+                     Be explicit about what action is needed and what the expected outcome should be.
+                     Examples: "Please sign into Gmail with your credentials",
+                              "Please confirm the payment amount of $50 is correct and click Confirm",
+                              "Please complete the CAPTCHA verification on this page"
+        """
+        # Return a special sentinel value that the runner can intercept
+        return f"HANDBACK_TO_HUMAN:{request}"
 
 
 _OSWORLD_ACTION_NAMES: Optional[Tuple[str, ...]] = None

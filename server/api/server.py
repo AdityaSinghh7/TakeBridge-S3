@@ -86,6 +86,9 @@ PERSISTED_EVENTS = {
     "mcp.observation_processor.completed",
     "mcp.summary.created",
     "mcp.high_signal",
+    # Human Attention (handback to human)
+    "human_attention.required",
+    "human_attention.resumed",
 }
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -835,6 +838,207 @@ async def config_defaults() -> Dict[str, Any]:
         "worker": DEFAULT_WORKER_CONFIG,
         "grounding": DEFAULT_GROUNDING_CONFIG,
     }
+
+
+@app.post("/runs/{run_id}/resume")
+async def resume_run(
+    run_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Resume a run that was paused for human attention.
+
+    This endpoint:
+    1. Validates that the run exists and belongs to the user
+    2. Validates that the run is in 'attention' status
+    3. Captures the current screenshot from the VM
+    4. Calls OpenAI to infer what the human did
+    5. Updates the agent_states with the inference result
+    6. Updates the run status to 'running' (or queues for async continuation)
+
+    Returns:
+        Dict with inference result and updated status
+    """
+    from server.api.controller_client import VMControllerClient
+    from server.api.handback_inference import infer_human_action, format_inference_for_context
+    from shared.db.workflow_runs import merge_agent_states
+    import base64
+
+    user_id = current_user.sub
+    db = SessionLocal()
+
+    try:
+        # 1. Fetch the run and validate ownership + status
+        row = db.execute(
+            text("""
+                SELECT id, user_id, status, agent_states, environment
+                FROM workflow_runs
+                WHERE id = :run_id
+            """),
+            {"run_id": run_id},
+        ).fetchone()
+
+        if row is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+
+        row_user_id = row[1]
+        row_status = row[2]
+        row_agent_states = row[3]
+        row_environment = row[4]
+
+        # Check ownership
+        if row_user_id != user_id:
+            raise HTTPException(status_code=403, detail="Not authorized to resume this run")
+
+        # Check status
+        if row_status != "attention":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Run is not in 'attention' status (current: {row_status})"
+            )
+
+        # 2. Parse agent_states to get handback info
+        agent_states = row_agent_states if isinstance(row_agent_states, dict) else {}
+        if isinstance(row_agent_states, str):
+            try:
+                agent_states = json.loads(row_agent_states)
+            except Exception:
+                agent_states = {}
+
+        computer_use_state = agent_states.get("agents", {}).get("computer_use", {})
+        handback = computer_use_state.get("handback", {})
+
+        if not handback:
+            raise HTTPException(
+                status_code=400,
+                detail="No handback state found for this run"
+            )
+
+        handback_request = handback.get("request", "")
+        before_screenshot_b64 = handback.get("screenshot_b64", "")
+
+        if not before_screenshot_b64:
+            raise HTTPException(
+                status_code=400,
+                detail="No handback screenshot found"
+            )
+
+        # 3. Get controller from environment and capture current screenshot
+        environment = row_environment if isinstance(row_environment, dict) else {}
+        if isinstance(row_environment, str):
+            try:
+                environment = json.loads(row_environment)
+            except Exception:
+                environment = {}
+
+        endpoint = environment.get("endpoint", {})
+        controller_base_url = endpoint.get("controller_base_url")
+
+        if not controller_base_url:
+            raise HTTPException(
+                status_code=400,
+                detail="No controller endpoint found for this run"
+            )
+
+        # Create controller client and capture current screenshot
+        try:
+            controller = VMControllerClient(base_url=controller_base_url)
+            current_screenshot_bytes = controller.capture_screenshot()
+            current_screenshot_b64 = base64.b64encode(current_screenshot_bytes).decode("utf-8")
+        except Exception as e:
+            logger.error("Failed to capture current screenshot: %s", e)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to capture current screenshot: {str(e)}"
+            )
+
+        # 4. Call OpenAI to infer what the human did
+        try:
+            inference_result = infer_human_action(
+                request=handback_request,
+                before_screenshot_b64=before_screenshot_b64,
+                after_screenshot_b64=current_screenshot_b64,
+            )
+        except Exception as e:
+            logger.error("Handback inference failed: %s", e)
+            inference_result = {
+                "changes_observed": "Inference failed",
+                "request_fulfilled": False,
+                "confidence": "low",
+                "details": str(e),
+            }
+
+        # 5. Format inference for agent context FIRST (needed for continuation marker)
+        inference_context = format_inference_for_context(inference_result, handback_request)
+        
+        # 6. Update agent_states with inference AND continuation marker
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        resume_from_step = handback.get("step_index", 0) + 1
+        
+        inference_update = {
+            "handback": {
+                **handback,
+                "inference": inference_result,
+                "resumed_at": now,
+            },
+            # Continuation marker for the orchestrator to detect and inject context
+            "continuation": {
+                "should_inject_inference": True,
+                "inference_context": inference_context,
+                "resume_from_step": resume_from_step,
+                "resumed_at": now,
+            }
+        }
+
+        try:
+            merge_agent_states(run_id, inference_update, path=["agents", "computer_use"])
+            logger.info("Updated agent_states with continuation marker for run_id=%s", run_id)
+        except Exception as e:
+            logger.error("Failed to update agent_states with inference: %s", e)
+
+        # 7. Update run status to 'queued' for continuation
+        db.execute(
+            text("""
+                UPDATE workflow_runs
+                SET status = 'queued',
+                    updated_at = :now
+                WHERE id = :run_id
+            """),
+            {"run_id": run_id, "now": now},
+        )
+        db.commit()
+
+        # 8. Emit resume event
+        _insert_run_event(
+            run_id=run_id,
+            kind="human_attention.resumed",
+            message=f"Human intervention completed. Request fulfilled: {inference_result.get('request_fulfilled', False)}",
+            payload={
+                "inference": inference_result,
+                "handback_request": handback_request,
+                "resume_from_step": resume_from_step,
+                "timestamp": now,
+            },
+        )
+
+        # 9. Return response
+        return {
+            "status": "resumed",
+            "run_id": run_id,
+            "inference": inference_result,
+            "inference_context": inference_context,
+            "handback_request": handback_request,
+            "message": "Run resumed. The agent will continue with the inferred context.",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Resume run failed: %s", e, exc_info=True)
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
 
 
 __all__ = ["app"]

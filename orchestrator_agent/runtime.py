@@ -52,6 +52,8 @@ class OrchestratorRuntime:
         self.cost_tracker = TOKEN_TRACKER
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self.hierarchical_logger: Optional[HierarchicalLogger] = None
+        # Pending handback inference context to inject into computer-use agent
+        self._pending_inference_context: Optional[str] = None
 
     async def run_task(self, request: OrchestratorRequest) -> RunState:
         """Process a single request with single-step planning."""
@@ -77,6 +79,12 @@ class OrchestratorRuntime:
         request_id = request.request_id or (
             request.tenant.request_id if request.tenant else "unknown"
         )
+        
+        # Check for continuation state from handback resume
+        self._pending_inference_context = None
+        if request.request_id:
+            self._load_continuation_context(request.request_id)
+        
         self.logger.info(
             f"Starting orchestration request_id={request_id} tenant={tenant_id}"
         )
@@ -287,7 +295,7 @@ class OrchestratorRuntime:
 
         cost_snapshot = self._snapshot_costs()
         try:
-            trajectory = await self._call_agent(step, state.request)
+            trajectory = await self._call_agent(step, state.request, state)
             logger.info(
                 "runtime.translate.start target=%s step=%s trajectory_len=%s",
                 step.target,
@@ -477,8 +485,37 @@ class OrchestratorRuntime:
             },
         }
 
+    def _load_continuation_context(self, run_id: str) -> None:
+        """
+        Check if this run has a continuation state from a handback resume.
+        If so, extract the inference context to inject into the next computer-use dispatch.
+        """
+        try:
+            from shared.db.workflow_runs import get_agent_states
+            
+            agent_states = get_agent_states(run_id)
+            if not agent_states:
+                return
+            
+            continuation = (
+                agent_states.get("agents", {})
+                .get("computer_use", {})
+                .get("continuation", {})
+            )
+            
+            if continuation.get("should_inject_inference"):
+                self._pending_inference_context = continuation.get("inference_context")
+                if self._pending_inference_context:
+                    logger.info(
+                        "Loaded continuation context for run_id=%s (resume_from_step=%s)",
+                        run_id,
+                        continuation.get("resume_from_step"),
+                    )
+        except Exception as e:
+            logger.warning("Failed to load continuation context for run_id=%s: %s", run_id, e)
+
     async def _call_agent(
-        self, step: PlannedStep, request: OrchestratorRequest
+        self, step: PlannedStep, request: OrchestratorRequest, state: "RunState"
     ) -> str:
         """Call agent bridge and return self-contained trajectory.
 
@@ -490,8 +527,32 @@ class OrchestratorRuntime:
         run_id = getattr(request, "request_id", None)
         if run_id:
             ctx.run(RUN_LOG_ID.set, run_id)
+        
+        # Serialize orchestrator state for handback capture
+        orchestrator_state = state.to_dict() if state else None
+        
+        # If we have pending inference context from handback, inject it into request metadata
+        if self._pending_inference_context and step.target == "computer_use":
+            # Make a shallow copy of metadata to inject the inference context
+            updated_metadata = dict(request.metadata) if request.metadata else {}
+            updated_metadata["handback_inference_context"] = self._pending_inference_context
+            # Clear pending context after use
+            self._pending_inference_context = None
+            logger.info("Injecting handback inference context into computer-use dispatch")
+            # Create a modified request with the updated metadata
+            # Note: We modify in place since this is a single dispatch
+            original_metadata = request.metadata
+            request.metadata = updated_metadata
+            try:
+                return await loop.run_in_executor(
+                    None, lambda: ctx.run(run_agent_bridge, step.target, request, step, orchestrator_state)
+                )
+            finally:
+                # Restore original metadata
+                request.metadata = original_metadata
+        
         return await loop.run_in_executor(
-            None, lambda: ctx.run(run_agent_bridge, step.target, request, step)
+            None, lambda: ctx.run(run_agent_bridge, step.target, request, step, orchestrator_state)
         )
 
 

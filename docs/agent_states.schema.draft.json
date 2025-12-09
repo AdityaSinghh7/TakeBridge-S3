@@ -1,0 +1,413 @@
+{
+  "version": 1,
+  "seq": 0,
+  "updated_at": "ISO-8601 timestamp",
+  "run": {
+    "workflow_id": "string",
+    "run_id": "string",
+    "user_id": "string",
+    "task": "Original task string",
+    "max_steps": 20,
+    "budget": {
+      "max_steps": 20,
+      "max_cost_usd": null,
+      "max_tokens": null
+    },
+    "tenant": {
+      "tenant_id": "string",
+      "request_id": "string",
+      "user_id": "string"
+    },
+    "metadata": {},
+    "preferred_agents": [
+      "mcp",
+      "computer_use"
+    ],
+    "platform": "darwin",
+    "allow_code_execution": true,
+    "tool_constraints": {},
+    "composed_plan": {},
+    "controller": {},
+    "environment": {}
+  },
+  "orchestrator": {
+    "status": "planning|dispatching|completed|failed|impossible",
+    "loop_iteration": 0,
+    "cost_baseline_usd": 0.0,
+    "token_totals": {
+      "input_cached": 0,
+      "input_new": 0,
+      "output": 0,
+      "cost_usd": 0.0
+    },
+    "intermediate": {},
+    "last_decision": {
+      "type": "next_step|task_complete|task_impossible",
+      "target": "mcp|computer_use|null",
+      "task": "Next subtask text",
+      "reasoning": "planner reasoning text"
+    },
+    "plan": [
+      {
+        "step_id": "step-0",
+        "target": "mcp",
+        "next_task": "Find invoices",
+        "verification": "Step completed",
+        "max_steps": 20,
+        "description": "Find invoices",
+        "depends_on": [],
+        "hints": {},
+        "metadata": {},
+        "requested_at": "2025-02-09T12:30:00Z"
+      }
+    ],
+    "results": [
+      {
+        "step_id": "step-0",
+        "target": "mcp",
+        "next_task": "Find invoices",
+        "verification": "Step completed",
+        "status": "completed",
+        "success": true,
+        "max_steps": 20,
+        "description": "Find invoices",
+        "depends_on": [],
+        "hints": {},
+        "metadata": {},
+        "output": {
+          "target": "mcp",
+          "translated": {},
+          "raw_ref": "step-0:raw",
+          "usage": {
+            "tokens": {
+              "input_cached": 0,
+              "input_new": 1800,
+              "output": 600
+            },
+            "cost_usd": {
+              "delta": 0.0012,
+              "run_total": 0.0045
+            }
+          },
+          "error": null
+        },
+        "error": null,
+        "started_at": "2025-02-09T12:30:05Z",
+        "finished_at": "2025-02-09T12:31:10Z",
+        "artifacts": {},
+        "trajectory_md": "### Step 1: … full trajectory markdown …"
+      }
+    ],
+    "pending_steps": [],
+    "last_heartbeat_at": "2025-02-09T12:34:50Z"
+  },
+  "agents": {
+    "computer_use": {
+      "status": "running|success|failed|timeout|attention",
+      "completion_reason": "DONE|FAIL|MAX_STEPS_REACHED|TIMEOUT|ABORTED|HANDOFF_TO_HUMAN|null",
+      "platform": "darwin|linux|windows|unknown",
+      "controller": {
+        "base_url": "string",
+        "host": "string",
+        "port": 5900,
+        "timeout": 30.0
+      },
+      "screen": {
+        "width": 1920,
+        "height": 1080
+      },
+      "max_steps": 50,
+      "step_index_next": 1,
+      "worker_config": {
+        "engine_params": {},
+        "max_steps": 50,
+        "max_trajectory_length": 1,
+        "enable_reflection": true,
+        "post_action_worker_delay": 1.5
+      },
+      "grounding_config": {
+        "engine_params_for_generation": {},
+        "engine_params_for_grounding": {},
+        "code_agent_engine_params": {},
+        "code_agent_budget": 20,
+        "grounding_base_url": null,
+        "grounding_system_prompt": null,
+        "grounding_timeout": 10.0,
+        "grounding_max_retries": 3,
+        "grounding_api_key": null
+      },
+      "enable_code_execution": true,
+      "behavior": {
+        "previous_behavior_result": {
+          "fact_answer": "string",
+          "fact_thoughts": "string"
+        }
+      },
+      "screenshots": {
+        "latest_b64": "base64",
+        "reflection_b64": "base64"
+      },
+      "last_action": {
+        "action": "pyautogui.click(100,200)",
+        "normalized_action": "CLICK",
+        "exec_code": "pyautogui.click(100,200)",
+        "execution_mode": "controller_execute|wait|final_screenshot|failure_screenshot|noop|handback_to_human",
+        "did_click": true,
+        "execution_result": {},
+        "after_screenshot_b64": "base64"
+      },
+      "steps": [
+        {
+          "step_index": 1,
+          "plan": "LLM plan text",
+          "action": "pyautogui.click(100,200)",
+          "normalized_action": "CLICK",
+          "exec_code": "pyautogui.click(100,200)",
+          "execution_mode": "controller_execute|wait|final_screenshot|failure_screenshot|noop|handback_to_human",
+          "execution_result": {},
+          "reflection": "string",
+          "reflection_thoughts": "string",
+          "behavior_fact_answer": "string",
+          "behavior_fact_thoughts": "string",
+          "action_kind": "gui|handback",
+          "handback_request": "string|null - if action_kind is handback, the request to human",
+          "handback_screenshot_b64": "base64|null - if action_kind is handback, screenshot at handback time",
+          "before_screenshot_b64": "base64",
+          "after_screenshot_b64": "base64",
+          "delayed_after_screenshot_b64": "base64",
+          "code_agent_output": {
+            "task_instruction": "string",
+            "steps_executed": 3,
+            "budget": 20,
+            "completion_reason": "DONE|FAIL|BUDGET_EXHAUSTED",
+            "summary": "string",
+            "execution_history": [
+              {
+                "step": 1,
+                "action": "```python\nprint('hi')\n```",
+                "thoughts": "string"
+              }
+            ]
+          },
+          "info": {}
+        }
+      ],
+      "runner": {
+        "trajectory_md": "string",
+        "grounding_prompts": {},
+        "timestamps": {
+          "last_heartbeat_at": "2025-02-09T12:34:50Z"
+        }
+      },
+      "worker_session": {
+        "turn_count": 1,
+        "worker_history": [
+          "full plan text per turn"
+        ],
+        "reflections": [
+          "reflection text per turn"
+        ],
+        "screenshot_inputs_b64": [
+          "base64"
+        ],
+        "latest_gui_screenshot_b64": "base64",
+        "cost_this_turn": 0.0,
+        "knowledge_buffer": [
+          "knowledge item"
+        ],
+        "generator_system_prompt": "full prompt with injected actions/apps/windows",
+        "reflection_system_prompt": "full reflection system prompt",
+        "generator_messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "..."
+              }
+            ]
+          }
+        ],
+        "reflection_messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "..."
+              },
+              {
+                "type": "image",
+                "image": "base64",
+                "fallback_image": true
+              }
+            ]
+          }
+        ]
+      },
+      "grounding_agent": {
+        "knowledge": [
+          "current text buffer contents"
+        ],
+        "last_code_agent_result": {
+          "task_instruction": "string",
+          "steps_executed": 3,
+          "budget": 20,
+          "completion_reason": "DONE|FAIL|BUDGET_EXHAUSTED",
+          "summary": "string",
+          "execution_history": [
+            {
+              "step": 1,
+              "action": "```python\nprint('hi')\n```",
+              "thoughts": "string"
+            }
+          ]
+        },
+        "handback_inference": "string|null - formatted inference result for agent context after resume"
+      },
+      "handback": {
+        "request": "string - what the agent asked the human to do",
+        "screenshot_b64": "base64 - screenshot captured at handback time",
+        "timestamp": "ISO-8601 - when the handback occurred",
+        "step_index": 5,
+        "inference": {
+          "changes_observed": "string - description of what changed between screenshots",
+          "request_fulfilled": true,
+          "confidence": "high|medium|low",
+          "details": "string - additional context about the changes"
+        },
+        "resumed_at": "ISO-8601|null - when the run was resumed"
+      }
+    },
+    "mcp": {
+      "status": "running|success|failed|budget_exceeded|planner_error",
+      "step_index_next": 1,
+      "task": "string",
+      "user_id": "string",
+      "request_id": "string",
+      "run_id": "string",
+      "tool_constraints": {},
+      "budget": {
+        "max_steps": 30,
+        "max_tool_calls": 50,
+        "max_code_runs": 10,
+        "max_llm_cost_usd": null
+      },
+      "budget_tracker": {
+        "steps_taken": 0,
+        "tool_calls": 0,
+        "code_runs": 0,
+        "estimated_llm_cost_usd": 0.0
+      },
+      "planner_prompt": "full planner system prompt",
+      "provider_tree": [],
+      "search_results_cache": [],
+      "tool_cache": {
+        "discovery_completed": false,
+        "resolved_tool_names": {}
+      },
+      "token_tracker": {
+        "input_cached": 0,
+        "input_new": 0,
+        "output": 0,
+        "cost_usd": 0.0
+      },
+      "logs": [],
+      "raw_outputs": {},
+      "history": [
+        {
+          "action_type": "search|tool|sandbox|finish|fail",
+          "success": true,
+          "action_reasoning": "string",
+          "action_input": {
+            "search_query": "string",
+            "provider": "string",
+            "max_limit": 5,
+            "tool_id": "provider.tool",
+            "tool": "tool",
+            "args": {},
+            "sandbox_code": "code",
+            "label": "string",
+            "reason": "string",
+            "summary": "string",
+            "reasoning": "string"
+          },
+          "action_outcome": {
+            "success": true,
+            "total_found": 2,
+            "found_tool_names": [
+              "gmail.search"
+            ],
+            "all_tools_successfully_returned": true,
+            "error": "string"
+          },
+          "observation": {},
+          "observation_metadata": {
+            "total_found": 2,
+            "merged_into_cache": true,
+            "cache_size_after": 3,
+            "retry_count": 0,
+            "is_smart_summary": false
+          },
+          "error": null,
+          "is_smart_summary": false
+        }
+      ],
+      "events": [
+        {
+          "event": "mcp.search.completed",
+          "payload": {}
+        }
+      ],
+      "last_command": {
+        "type": "search|tool|sandbox|finish|fail",
+        "provider": "string",
+        "tool": "string",
+        "tool_id": "provider.tool",
+        "query": "string",
+        "limit": 5,
+        "args": {},
+        "code": "string",
+        "label": "string",
+        "reason": "string",
+        "reasoning": "string",
+        "summary": "string"
+      },
+      "last_step_result": {
+        "preview": "string",
+        "observation": {},
+        "error": "string",
+        "error_code": "string",
+        "success": true,
+        "tool_id": "string",
+        "provider": "string",
+        "tool_name": "string",
+        "args": {},
+        "is_smart_summary": false
+      },
+      "planner_state_json": {
+        "task": "string",
+        "tool_constraints": {},
+        "provider_tree": [],
+        "history": [],
+        "search_results": [],
+        "budget_tracker": {
+          "steps_taken": 0,
+          "tool_calls": 0,
+          "code_runs": 0,
+          "estimated_llm_cost_usd": 0.0
+        },
+        "token_tracker": {
+          "input_cached": 0,
+          "input_new": 0,
+          "output": 0,
+          "cost_usd": 0.0
+        }
+      },
+      "trajectory_md": "string",
+      "summary_manager": {
+        "summaries": []
+      }
+    }
+  }
+}
