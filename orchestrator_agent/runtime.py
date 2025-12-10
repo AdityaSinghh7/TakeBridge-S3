@@ -55,6 +55,8 @@ class OrchestratorRuntime:
         self.hierarchical_logger: Optional[HierarchicalLogger] = None
         # Pending handback inference context to inject into computer-use agent
         self._pending_inference_context: Optional[str] = None
+        # Continuation context for orchestrator's own planning (includes full history)
+        self._orchestrator_continuation_context: Optional[str] = None
 
     async def run_task(self, request: OrchestratorRequest) -> RunState:
         """Process a single request with single-step planning."""
@@ -83,6 +85,7 @@ class OrchestratorRuntime:
         
         # Check for continuation state from handback resume
         self._pending_inference_context = None
+        self._orchestrator_continuation_context = None
         if request.request_id:
             self._load_continuation_context(request.request_id)
         
@@ -281,6 +284,7 @@ class OrchestratorRuntime:
             state=state,
             last_step_failed=last_failed,
             failed_step_info=failed_step_info,
+            continuation_context=self._orchestrator_continuation_context,
         )
 
         # Call LLM
@@ -354,6 +358,10 @@ class OrchestratorRuntime:
             status: StepStatus = "completed" if overall_success else "failed"
             success = overall_success
             error: Optional[str] = translated.get("error")
+        except HandbackRequested:
+            # Re-raise HandbackRequested to propagate to the main loop
+            # This must come before the generic Exception handler
+            raise
         except Exception as exc:
             payload = {
                 "target": step.target,
@@ -508,7 +516,9 @@ class OrchestratorRuntime:
     def _load_continuation_context(self, run_id: str) -> None:
         """
         Check if this run has a continuation state from a handback resume.
-        If so, extract the inference context to inject into the next computer-use dispatch.
+        If so, extract:
+        1. inference_context - for the computer-use agent (injected into its context)
+        2. The same context is used by the orchestrator for planning decisions
         """
         try:
             from shared.db.workflow_runs import get_agent_states
@@ -524,8 +534,12 @@ class OrchestratorRuntime:
             )
             
             if continuation.get("should_inject_inference"):
-                self._pending_inference_context = continuation.get("inference_context")
-                if self._pending_inference_context:
+                inference_context = continuation.get("inference_context")
+                if inference_context:
+                    # Store for computer-use agent injection
+                    self._pending_inference_context = inference_context
+                    # Also store for orchestrator's own planning (same context)
+                    self._orchestrator_continuation_context = inference_context
                     logger.info(
                         "Loaded continuation context for run_id=%s (resume_from_step=%s)",
                         run_id,

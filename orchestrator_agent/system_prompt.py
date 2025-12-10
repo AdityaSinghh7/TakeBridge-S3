@@ -231,6 +231,20 @@ FAILURE_REMINDER = """
 - If you've seen this same error multiple times, the task is likely impossible
 """
 
+CONTINUATION_REMINDER = """
+## 🔄 Run Continuation After Human Intervention
+
+This run was previously paused because the agent needed human assistance. The human has completed their part and the run is now resuming.
+
+{continuation_context}
+
+**Important:** 
+- The work described above was done BEFORE the handback
+- Consider what the human did and continue the task from the current state
+- Check the current screen state (desktop environment above) to understand where things are now
+- Don't repeat work that was already completed successfully
+"""
+
 
 def format_mcp_providers(providers: List[Dict[str, Any]]) -> str:
     """
@@ -395,6 +409,7 @@ def build_system_prompt(
     state: Optional["RunState"] = None,
     last_step_failed: bool = False,
     failed_step_info: Optional[Dict[str, Any]] = None,
+    continuation_context: Optional[str] = None,
 ) -> str:
     """
     Build dynamic system prompt with capabilities and context.
@@ -405,6 +420,8 @@ def build_system_prompt(
         state: Current run state (for multi-turn context)
         last_step_failed: Whether the last step failed
         failed_step_info: Info about the failed step if last_step_failed=True
+        continuation_context: Optional context from handback resume (includes previous
+                              trajectory and human intervention analysis)
 
     Returns:
         Complete system prompt string
@@ -430,9 +447,19 @@ def build_system_prompt(
     )
     prompt_parts.append(capability_section)
 
+    # Add continuation reminder if resuming from handback
+    if continuation_context:
+        continuation_section = CONTINUATION_REMINDER.format(
+            continuation_context=continuation_context,
+        )
+        prompt_parts.append(continuation_section)
+
     # Add execution context
     if state and state.results:
         previous_results_str = format_previous_results(state.results)
+    elif continuation_context:
+        # If resuming, note that previous work is shown in continuation section
+        previous_results_str = "See continuation context above for work done before handback."
     else:
         previous_results_str = "None - this is the first step."
 
