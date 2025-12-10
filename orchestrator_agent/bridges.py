@@ -245,7 +245,20 @@ def run_computer_use_agent(
         
         raw_result_obj = runner(cu_request, orchestrator_context=runner_metadata)
         raw_dict = raw_result_obj.__dict__ if hasattr(raw_result_obj, "__dict__") else dict(raw_result_obj)
+        
+        # Check if this was a handback - if so, raise exception to stop the orchestrator loop
+        if raw_dict.get("status") == "attention" and raw_dict.get("completion_reason") == "HANDOFF_TO_HUMAN":
+            from orchestrator_agent.exceptions import HandbackRequested
+            raise HandbackRequested(
+                request=raw_dict.get("handback_request") or "Human intervention required",
+                run_id=request.request_id or "",
+            )
     except Exception as exc:  # pragma: no cover
+        # Re-raise HandbackRequested so it propagates to the orchestrator
+        from orchestrator_agent.exceptions import HandbackRequested
+        if isinstance(exc, HandbackRequested):
+            raise
+        
         logger.info("Computer-use agent fallback due to error: %s", exc)
         raw_dict = {
             "task": step.next_task,

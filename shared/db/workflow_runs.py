@@ -35,19 +35,23 @@ def _ensure_path(root: Dict[str, Any], path: Optional[list[str]]) -> Dict[str, A
     return node
 
 
-def _json_safe(val: Any) -> Any:
+def _json_safe(val: Any) -> str:
     """
-    Ensure the payload is JSON-serializable. Falls back to string conversion for
-    unsupported types to avoid crashing the checkpoint write.
+    Convert payload to a JSON string for PostgreSQL JSONB columns.
+    
+    psycopg2 with raw SQL text() cannot adapt Python dicts directly to JSONB,
+    so we must serialize to a JSON string which PostgreSQL will parse.
+    
+    Falls back to string conversion for unsupported types.
     """
     try:
-        return json.loads(json.dumps(val))
+        return json.dumps(val)
     except Exception:
         try:
-            return json.loads(json.dumps(val, default=str))
+            return json.dumps(val, default=str)
         except Exception:
             logger.warning("agent_states payload not JSON-serializable; coercing to string")
-            return str(val)
+            return json.dumps(str(val))
 
 
 def update_agent_states(
