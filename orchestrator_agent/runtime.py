@@ -26,6 +26,7 @@ from orchestrator_agent.data_types import (
     generate_step_id,
 )
 from orchestrator_agent.bridges import run_agent_bridge
+from orchestrator_agent.exceptions import HandbackRequested
 from orchestrator_agent.translator import translate_step_output
 from orchestrator_agent.capabilities import build_capability_context
 from orchestrator_agent.system_prompt import build_system_prompt
@@ -167,15 +168,34 @@ class OrchestratorRuntime:
                     "task": step.next_task[:100],
                 })
 
-                result = await self._dispatch_step(step, state)
-                state.record_result(result)
+                try:
+                    result = await self._dispatch_step(step, state)
+                    state.record_result(result)
 
-                # Emit SSE event: step completed
-                emit_event("orchestrator.step.completed", {
-                    "step_id": step.step_id,
-                    "status": result.status,
-                    "success": result.success,
-                })
+                    # Emit SSE event: step completed
+                    emit_event("orchestrator.step.completed", {
+                        "step_id": step.step_id,
+                        "status": result.status,
+                        "success": result.success,
+                    })
+                except HandbackRequested as hb:
+                    # Handback to human requested - stop the orchestrator loop
+                    logger.info(
+                        "Orchestrator stopping due to handback request: %s (run_id=%s)",
+                        hb.request,
+                        hb.run_id,
+                    )
+                    state.record_intermediate("completion_status", "attention")
+                    state.record_intermediate("handback_request", hb.request)
+                    emit_event("orchestrator.handback.stopping", {
+                        "request": hb.request,
+                        "run_id": hb.run_id,
+                    })
+                    orch_logger.log_event("handback.stopping", {
+                        "request": hb.request,
+                        "run_id": hb.run_id,
+                    })
+                    break  # Exit the main loop
 
             else:
                 logger.error(f"Unknown decision type: {decision.get('type')}")

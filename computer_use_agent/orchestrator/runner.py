@@ -677,6 +677,14 @@ def runner(
         # Generate rich markdown trajectory for orchestrator
         trajectory_md = _build_trajectory_markdown(steps, status, completion_reason)
 
+        # Extract handback request if this was a handback
+        handback_request_str = None
+        if completion_reason == "HANDOFF_TO_HUMAN":
+            for step in reversed(steps):
+                if step.handback_request:
+                    handback_request_str = step.handback_request
+                    break
+
         result = RunnerResult(
             task=request.task,
             status=status,
@@ -684,6 +692,7 @@ def runner(
             steps=steps,
             grounding_prompts=grounding_prompts,
             trajectory_md=trajectory_md,
+            handback_request=handback_request_str,
         )
 
         emit_event(
@@ -692,6 +701,7 @@ def runner(
                 "status": status,
                 "completion_reason": completion_reason,
                 "steps": len(steps),
+                "handback_request": handback_request_str,
             },
         )
 
