@@ -151,13 +151,23 @@ def infer_human_action(
         }
 
 
-def format_inference_for_context(inference: Dict[str, Any], request: str) -> str:
+def format_inference_for_context(
+    inference: Dict[str, Any],
+    request: str,
+    previous_trajectory: str = "",
+) -> str:
     """
     Format the inference result as a string for inclusion in agent context.
+
+    This provides the computer-use agent with full context about:
+    1. What was done before the handback (previous_trajectory)
+    2. Why handback was requested
+    3. What the human did during the pause
 
     Args:
         inference: The inference result dict
         request: The original handback request
+        previous_trajectory: Optional markdown trajectory from before the handback
 
     Returns:
         Formatted string for agent context
@@ -167,16 +177,35 @@ def format_inference_for_context(inference: Dict[str, Any], request: str) -> str
     changes = inference.get("changes_observed", "No changes observed")
     details = inference.get("details", "")
 
-    result = f"""The agent previously requested human intervention: "{request}"
+    parts = []
 
-Human Action Analysis:
-- Request Fulfilled: {fulfilled_str} (confidence: {confidence})
-- Changes Observed: {changes}"""
+    # Include previous trajectory if available
+    if previous_trajectory:
+        parts.append("=== WORK COMPLETED BEFORE HANDBACK ===")
+        # Truncate if too long (keep last portion which is most relevant)
+        if len(previous_trajectory) > 4000:
+            parts.append("... (earlier steps omitted for brevity)")
+            parts.append(previous_trajectory[-4000:])
+        else:
+            parts.append(previous_trajectory)
+        parts.append("")
+
+    # Add the handback and inference info
+    parts.append("=== HANDBACK TO HUMAN ===")
+    parts.append(f'The agent requested human intervention: "{request}"')
+    parts.append("")
+    parts.append("=== HUMAN ACTION ANALYSIS ===")
+    parts.append(f"- Request Fulfilled: {fulfilled_str} (confidence: {confidence})")
+    parts.append(f"- Changes Observed: {changes}")
 
     if details:
-        result += f"\n- Additional Details: {details}"
+        parts.append(f"- Additional Details: {details}")
 
-    return result
+    parts.append("")
+    parts.append("=== CONTINUATION ===")
+    parts.append("Continue the task from where it left off, taking into account the human's actions above.")
+
+    return "\n".join(parts)
 
 
 __all__ = ["infer_human_action", "format_inference_for_context"]

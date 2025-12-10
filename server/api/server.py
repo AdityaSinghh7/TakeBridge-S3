@@ -968,12 +968,16 @@ async def resume_run(
                 "details": str(e),
             }
 
-        # 5. Format inference for agent context FIRST (needed for continuation marker)
-        inference_context = format_inference_for_context(inference_result, handback_request)
+        # 5. Extract previous trajectory for full context
+        runner_state = computer_use_state.get("runner", {})
+        previous_trajectory = runner_state.get("trajectory_md", "")
         
-        # 6. Update agent_states with inference AND continuation marker
-        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        resume_from_step = handback.get("step_index", 0) + 1
+        # 6. Format inference for agent context WITH previous trajectory
+        inference_context = format_inference_for_context(
+            inference_result,
+            handback_request,
+            previous_trajectory=previous_trajectory,
+        )
         
         inference_update = {
             "handback": {
@@ -996,7 +1000,7 @@ async def resume_run(
         except Exception as e:
             logger.error("Failed to update agent_states with inference: %s", e)
 
-        # 7. Update run status to 'queued' for continuation
+        # 8. Update run status to 'queued' for continuation
         db.execute(
             text("""
                 UPDATE workflow_runs
@@ -1008,7 +1012,7 @@ async def resume_run(
         )
         db.commit()
 
-        # 8. Emit resume event
+        # 9. Emit resume event
         _insert_run_event(
             run_id=run_id,
             kind="human_attention.resumed",
@@ -1021,7 +1025,7 @@ async def resume_run(
             },
         )
 
-        # 9. Return response
+        # 10. Return response
         return {
             "status": "resumed",
             "run_id": run_id,
