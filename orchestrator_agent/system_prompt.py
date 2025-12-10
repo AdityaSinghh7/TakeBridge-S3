@@ -73,6 +73,7 @@ Be specific to help the agent discover the right tools quickly:
 - **wait** - Pause execution for a specified duration
 - **call_code_agent** - Execute code-based subtasks (spreadsheet formulas, data processing)
 - **save_to_knowledge** - Store information for later use in the task
+- **handback_to_human** - Request human intervention to complete the task
 
 **What Computer-Use returns:**
 - Descriptions of UI actions taken (clicked "Submit button", typed "hello@example.com")
@@ -89,6 +90,11 @@ Be specific to help the agent discover the right tools quickly:
 - Specify exact text to type: "Type 'john@example.com' into the email field"
 - Describe visual locations clearly: "Scroll down in the main content area"
 - Mention application context: "In Excel, click the 'Insert Chart' button"
+
+**Handback-aware task formulation:**
+- The computer-use agent can hand a task back to a human by issuing a structured handback request string when human-only actions are required (for example, entering credentials, solving a CAPTCHA, or confirming a payment).
+- When you judge that such human assistance is needed, formulate the Computer-Use task so that it clearly instructs the agent to use its handback capability instead of attempting to automate actions that should be done only by the user.
+- In these cases, make the task string explicitly describe what the human is being asked to do, the current context (what has already been done or is visible), and the expected post-handback state so that the computer-use agent can resume and continue the task once the human has completed their part.
 
 ## Decision Framework
 
@@ -191,6 +197,8 @@ CAPABILITY_TEMPLATE = """
 **Available Applications:** {available_apps}
 **Active Windows:**
 {active_windows}
+**Available Actions:**
+{available_actions}
 """
 
 
@@ -428,6 +436,11 @@ def build_system_prompt(
     """
     # Start with static foundation
     prompt_parts = [STATIC_FOUNDATION]
+    from computer_use_agent.grounding.grounding_agent import (
+                list_osworld_agent_actions,
+            )
+
+    available_actions = list_osworld_agent_actions()
 
     # Add capability context
     mcp_caps = capabilities.get("mcp", {})
@@ -444,6 +457,7 @@ def build_system_prompt(
         platform=computer_caps.get("platform", "unknown"),
         available_apps=apps_str,
         active_windows=windows_str,
+        available_actions=available_actions,
     )
     prompt_parts.append(capability_section)
 
