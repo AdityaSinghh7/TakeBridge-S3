@@ -599,10 +599,22 @@ def _create_streaming_response(
             result = await _execute_orchestrator(orch_request, emitter)
 
             # Convert RunState to dict for response
+            # Check if the run stopped due to handback - respect that status
+            completion_status = result.intermediate.get("completion_status")
+            if completion_status == "attention":
+                run_status = "attention"
+                completion_reason = "handback_to_human"
+            elif completion_status == "impossible":
+                run_status = "error"
+                completion_reason = result.intermediate.get("impossible_reason", "task_impossible")
+            else:
+                run_status = "success" if all(r.success for r in result.results) else "partial"
+                completion_reason = "ok" if result.results else "no_steps"
+            
             result_dict = {
                 "task": orch_request.task,
-                "status": "success" if all(r.success for r in result.results) else "partial",
-                "completion_reason": "ok" if result.results else "no_steps",
+                "status": run_status,
+                "completion_reason": completion_reason,
                 "steps": [asdict(r) for r in result.results],
             }
 
@@ -637,14 +649,16 @@ def _create_streaming_response(
                 )
             )
             if run_id:
-                summary = "; ".join(
-                    [
-                        r.get("final_summary") or ""
-                        for r in result_dict.get("steps", [])
-                        if isinstance(r, dict)
-                    ]
-                )
-                _update_run_status(run_id, result_dict.get("status") or "success", summary=summary or None)
+                # Don't update status if it's "attention" - mark_run_attention already set it
+                if result_dict.get("status") != "attention":
+                    summary = "; ".join(
+                        [
+                            r.get("final_summary") or ""
+                            for r in result_dict.get("steps", [])
+                            if isinstance(r, dict)
+                        ]
+                    )
+                    _update_run_status(run_id, result_dict.get("status") or "success", summary=summary or None)
         finally:
             if heartbeat:
                 heartbeat.cancel()
@@ -711,10 +725,22 @@ async def orchestrate(
     except Exception as exc:  # pragma: no cover - runtime guard
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+    # Check if the run stopped due to handback - respect that status
+    completion_status = result.intermediate.get("completion_status")
+    if completion_status == "attention":
+        run_status = "attention"
+        completion_reason = "handback_to_human"
+    elif completion_status == "impossible":
+        run_status = "error"
+        completion_reason = result.intermediate.get("impossible_reason", "task_impossible")
+    else:
+        run_status = "success" if all(r.success for r in result.results) else "partial"
+        completion_reason = "ok" if result.results else "no_steps"
+
     return {
         "task": orch_request.task,
-        "status": "success" if all(r.success for r in result.results) else "partial",
-        "completion_reason": "ok" if result.results else "no_steps",
+        "status": run_status,
+        "completion_reason": completion_reason,
         "steps": [asdict(r) for r in result.results],
     }
 
@@ -978,6 +1004,10 @@ async def resume_run(
             handback_request,
             previous_trajectory=previous_trajectory,
         )
+        
+        # 7. Update agent_states with inference AND continuation marker
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        resume_from_step = handback.get("step_index", 0) + 1
         
         inference_update = {
             "handback": {
