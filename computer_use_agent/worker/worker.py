@@ -7,6 +7,8 @@ import re
 import textwrap
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import base64
+import copy
 
 from computer_use_agent.grounding.grounding_agent import ACI
 from computer_use_agent.core.module import BaseModule
@@ -305,6 +307,47 @@ class Worker(BaseModule):
             # Be conservative if anything goes wrong; don't block flushing
             pass
         self._ensure_image_context()
+
+    def rehydrate_from_prompts(self, prompts_state: Dict[str, Any]) -> None:
+        """
+        Restore generator/reflection messages and latest screenshot from persisted state.
+        """
+        if not prompts_state or not isinstance(prompts_state, dict):
+            return
+        try:
+            gen_state = prompts_state.get("generator", {}) or {}
+            ref_state = prompts_state.get("reflection", {}) or {}
+
+            gen_msgs = gen_state.get("messages")
+            ref_msgs = ref_state.get("messages")
+
+            # Deep copy to avoid mutating stored state
+            if isinstance(gen_msgs, list):
+                self.generator_agent.messages = copy.deepcopy(gen_msgs)
+            if isinstance(ref_msgs, list):
+                self.reflection_agent.messages = copy.deepcopy(ref_msgs)
+
+            # Restore latest screenshot if provided
+            latest_b64 = (
+                gen_state.get("latest_gui_screenshot_b64")
+                or ref_state.get("latest_gui_screenshot_b64")
+            )
+            if latest_b64:
+                try:
+                    self.latest_gui_screenshot = base64.b64decode(latest_b64)
+                except Exception:
+                    self.latest_gui_screenshot = None
+
+            # Restore knowledge and code agent result if present
+            if "knowledge" in prompts_state and isinstance(prompts_state.get("knowledge"), list):
+                self.grounding_agent.knowledge = prompts_state.get("knowledge") or []
+            if prompts_state.get("last_code_agent_result") is not None:
+                self.grounding_agent.last_code_agent_result = prompts_state.get("last_code_agent_result")
+
+            # Ensure images are not re-added by fallback
+            self.flush_messages()
+        except Exception as exc:
+            logger.warning("Failed to rehydrate prompts: %s", exc)
 
     def _generate_reflection(self, instruction: str, obs: Dict) -> Tuple[str, str]:
         """

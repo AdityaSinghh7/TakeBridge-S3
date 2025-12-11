@@ -95,6 +95,96 @@ def _build_grounding_prompts(
     }
 
 
+def _prune_images_in_messages(
+    messages: List[Dict[str, Any]],
+    *,
+    keep_image_turns: int = 2,
+    persist_images: bool = False,
+) -> List[Dict[str, Any]]:
+    """
+    Optionally remove older image parts to reduce payload size.
+    If persist_images is False: strip all image parts.
+    If persist_images is True: keep images in the last `keep_image_turns` messages; strip older ones.
+    """
+    if not messages:
+        return []
+
+    pruned: List[Dict[str, Any]] = []
+    total = len(messages)
+    for idx, msg in enumerate(messages):
+        content = msg.get("content", [])
+        if not isinstance(content, list):
+            pruned.append(msg)
+            continue
+
+        new_content = []
+        for part in content:
+            if not isinstance(part, dict):
+                new_content.append(part)
+                continue
+            part_type = part.get("type", "")
+            if not persist_images:
+                if part_type in {"image", "image_url"}:
+                    continue
+            else:
+                # keep images only for the last keep_image_turns messages
+                if part_type in {"image", "image_url"} and idx < total - keep_image_turns:
+                    continue
+            new_content.append(part)
+
+        new_msg = dict(msg)
+        new_msg["content"] = new_content
+        pruned.append(new_msg)
+    return pruned
+
+
+def _build_prompts_snapshot(
+    worker: "Worker",
+    *,
+    persist_images: bool = False,
+    keep_image_turns: int = 2,
+) -> Dict[str, Any]:
+    """
+    Capture generator/reflection messages, screenshots, knowledge, and code-agent results
+    for deep rehydration on resume.
+    """
+    prompts: Dict[str, Any] = {
+        "config": {
+            "persist_images": persist_images,
+            "keep_image_turns": keep_image_turns,
+        },
+    }
+    try:
+        gen_msgs = getattr(worker.generator_agent, "messages", []) or []
+        ref_msgs = getattr(worker.reflection_agent, "messages", []) or []
+
+        prompts["generator"] = {
+            "messages": _prune_images_in_messages(
+                gen_msgs, persist_images=persist_images, keep_image_turns=keep_image_turns
+            ),
+            "latest_gui_screenshot_b64": None,
+        }
+        prompts["reflection"] = {
+            "messages": _prune_images_in_messages(
+                ref_msgs, persist_images=persist_images, keep_image_turns=keep_image_turns
+            ),
+            "latest_gui_screenshot_b64": None,
+        }
+
+        latest_img = getattr(worker, "latest_gui_screenshot", None)
+        if latest_img:
+            encoded = base64.b64encode(latest_img).decode("utf-8")
+            prompts["generator"]["latest_gui_screenshot_b64"] = encoded
+            prompts["reflection"]["latest_gui_screenshot_b64"] = encoded
+
+        prompts["knowledge"] = getattr(worker.grounding_agent, "knowledge", []) or []
+        if getattr(worker.grounding_agent, "last_code_agent_result", None) is not None:
+            prompts["last_code_agent_result"] = worker.grounding_agent.last_code_agent_result
+    except Exception as exc:
+        logger.warning("Failed to build prompts snapshot: %s", exc)
+    return prompts
+
+
 def _build_trajectory_markdown(steps: List[RunnerStep], status: str, completion_reason: str) -> str:
     """Build COMPLETE self-contained markdown trajectory for orchestrator.
 
@@ -244,9 +334,11 @@ def runner(
     # Extract orchestrator state and handback inference from context
     _orchestrator_state = None
     _handback_inference_context = None
+    _resume_state = None
     if orchestrator_context:
         _orchestrator_state = orchestrator_context.get("orchestrator_state")
         _handback_inference_context = orchestrator_context.get("handback_inference_context")
+        _resume_state = orchestrator_context.get("resume_state")
 
     try:
         screen_info = controller.screen_size()
@@ -301,12 +393,46 @@ def runner(
             enable_reflection=worker_cfg.enable_reflection,
         )
 
+        # If prompts/knowledge are stored in resume_state, rehydrate Worker agents.
+        if _resume_state:
+            try:
+                prompts_state = _resume_state.get("prompts")
+                if prompts_state:
+                    agent.executor.rehydrate_from_prompts(prompts_state)
+                # Restore knowledge and last code agent result if present
+                if "knowledge" in _resume_state:
+                    grounding_agent.knowledge = _resume_state.get("knowledge", []) or grounding_agent.knowledge
+                if _resume_state.get("last_code_agent_result") is not None:
+                    grounding_agent.last_code_agent_result = _resume_state.get("last_code_agent_result")
+            except Exception as exc:
+                logger.warning("Failed to rehydrate prompts/knowledge from resume_state: %s", exc)
+
         behavior_narrator = BehaviorNarrator(engine_params=worker_cfg.engine_params)
 
         max_steps = worker_cfg.max_steps
         steps: List[RunnerStep] = []
         completion_reason = "MAX_STEPS_REACHED"
         status = "in_progress"
+        start_step_index = 1
+        previous_behavior_result: Optional[Dict[str, Any]] = None
+
+        # Minimal resume hydration: reuse prior steps and last screenshot if provided.
+        if _resume_state:
+            try:
+                raw_steps = _resume_state.get("steps") or []
+                for raw in raw_steps:
+                    try:
+                        steps.append(RunnerStep(**raw))
+                    except Exception:
+                        logger.warning("Could not hydrate RunnerStep from resume_state.")
+                if steps:
+                    start_step_index = len(steps) + 1
+                    previous_behavior_result = {
+                        "fact_thoughts": steps[-1].behavior_fact_thoughts,
+                        "fact_answer": steps[-1].behavior_fact_answer,
+                    }
+            except Exception as exc:
+                logger.warning("Failed to process resume_state steps: %s", exc)
 
         emit_event(
             "runner.started",
@@ -317,14 +443,33 @@ def runner(
             },
         )
 
-        with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "initial"}):
-            before_screenshot_bytes = controller.capture_screenshot()
-        previous_behavior_result: Optional[Dict[str, Any]] = None
+        before_screenshot_bytes: Optional[bytes] = None
+        reflection_screenshot_bytes: Optional[bytes] = None
+
+        # If we have a prior screenshot from handback, prefer it
+        if _resume_state:
+            try:
+                resume_handback = _resume_state.get("handback") or {}
+                latest_b64 = (
+                    resume_handback.get("screenshot_b64")
+                    or _resume_state.get("handback_screenshot_b64")
+                    or _resume_state.get("latest_screenshot_b64")
+                )
+                if latest_b64:
+                    before_screenshot_bytes = base64.b64decode(latest_b64)
+                    reflection_screenshot_bytes = before_screenshot_bytes
+            except Exception as exc:
+                logger.warning("Failed to decode resume screenshot: %s", exc)
+
+        if before_screenshot_bytes is None:
+            with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "initial"}):
+                before_screenshot_bytes = controller.capture_screenshot()
+            reflection_screenshot_bytes = before_screenshot_bytes
+
         agent_signal.raise_if_exit_requested()
         agent_signal.wait_for_resume()
-        reflection_screenshot_bytes = before_screenshot_bytes
 
-        for step_index in range(1, max_steps + 1):
+        for step_index in range(start_step_index, max_steps + start_step_index):
             agent_signal.raise_if_exit_requested()
             agent_signal.wait_for_resume()
 
@@ -472,6 +617,23 @@ def runner(
                         "runner": {
                             "trajectory_md": partial_trajectory_md,
                         },
+                        "prompts": _build_prompts_snapshot(
+                            cast("Worker", agent.executor),
+                            persist_images=False,
+                            keep_image_turns=2,
+                        ),
+                        "request": {
+                            "task": request.task,
+                            "worker": asdict(request.worker),
+                            "grounding": asdict(request.grounding),
+                            "controller": asdict(request.controller),
+                            "platform": request.platform,
+                            "enable_code_execution": request.enable_code_execution,
+                            "tool_constraints": asdict(request.tool_constraints)
+                            if request.tool_constraints
+                            else None,
+                        },
+                        "latest_screenshot_b64": handback_screenshot_b64,
                     }
                     
                     # 3. Include MCP state if present in existing states

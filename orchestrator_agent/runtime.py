@@ -40,7 +40,8 @@ from shared.hierarchical_logger import (
     get_hierarchical_logger,
 )
 from shared.run_context import RUN_LOG_ID
-from shared.run_context import RUN_LOG_ID
+from shared.db.workflow_runs import get_agent_states
+from shared.db.workflow_runs import get_agent_states
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,10 @@ class OrchestratorRuntime:
         self._pending_inference_context: Optional[str] = None
         # Continuation context for orchestrator's own planning (includes full history)
         self._orchestrator_continuation_context: Optional[str] = None
+        # Rehydrated RunState for continuation
+        self._rehydrated_state: Optional[RunState] = None
+        # Rehydrated state for continuation
+        self._rehydrated_state: Optional[RunState] = None
 
     async def run_task(self, request: OrchestratorRequest) -> RunState:
         """Process a single request with single-step planning."""
@@ -73,11 +78,6 @@ class OrchestratorRuntime:
         set_hierarchical_logger(self.hierarchical_logger)
         orch_logger = self.hierarchical_logger.get_agent_logger("orchestrator")
 
-        state = RunState(
-            request=request,
-            plan=[],  # No pre-planned steps - planning happens each iteration
-            cost_baseline=self.cost_tracker.total_cost_usd,
-        )
         tenant_id = request.tenant.tenant_id if request.tenant else "unknown"
         request_id = request.request_id or (
             request.tenant.request_id if request.tenant else "unknown"
@@ -88,6 +88,13 @@ class OrchestratorRuntime:
         self._orchestrator_continuation_context = None
         if request.request_id:
             self._load_continuation_context(request.request_id)
+
+        # Attempt to rehydrate RunState from agent_states (handback/resume)
+        state = self._rehydrate_state_if_available(request) or RunState(
+            request=request,
+            plan=[],  # No pre-planned steps - planning happens each iteration
+            cost_baseline=self.cost_tracker.total_cost_usd,
+        )
         
         self.logger.info(
             f"Starting orchestration request_id={request_id} tenant={tenant_id}"
@@ -242,6 +249,123 @@ class OrchestratorRuntime:
         async with self._semaphore:
             return await self.run_task(request)
 
+    def _rehydrate_state_if_available(self, request: OrchestratorRequest) -> Optional[RunState]:
+        """
+        Rebuild RunState from persisted agent_states for continuation (handback/resume).
+
+        - Restores orchestrator.plan/results/intermediate/cost_baseline when present.
+        - Appends last_resume_step (translated CU result) if present under agents.orchestrator.
+        - Sets continuation context for prompt building if stored by CU handback resume.
+        """
+        run_id = request.request_id or (request.tenant.request_id if request.tenant else None)
+        if not run_id:
+            return None
+
+        try:
+            agent_states = get_agent_states(run_id)
+        except Exception as exc:
+            logger.warning("Failed to read agent_states for run_id=%s: %s", run_id, exc)
+            return None
+
+        orch_state = agent_states.get("orchestrator") if isinstance(agent_states, dict) else None
+        if not isinstance(orch_state, dict):
+            return None
+
+        def _parse_dt(val: Any) -> Any:
+            if isinstance(val, str):
+                try:
+                    return datetime.fromisoformat(val)
+                except Exception:
+                    return val
+            return val
+
+        def _hydrate_planned(p: Dict[str, Any]) -> PlannedStep:
+            return PlannedStep(
+                step_id=p.get("step_id") or p.get("id") or generate_step_id("rehydrated"),
+                next_task=p.get("next_task", ""),
+                max_steps=p.get("max_steps", 1),
+                verification=p.get("verification", "Step completed"),
+                target=p.get("target") or "computer_use",
+                description=p.get("description"),
+                depends_on=p.get("depends_on") or [],
+                hints=p.get("hints") or {},
+                metadata=p.get("metadata") or {},
+                requested_at=_parse_dt(p.get("requested_at")) or datetime.utcnow(),
+            )
+
+        def _hydrate_result(r: Dict[str, Any]) -> StepResult:
+            return StepResult(
+                step_id=r.get("step_id") or r.get("id") or generate_step_id("rehydrated"),
+                target=r.get("target") or "computer_use",
+                next_task=r.get("next_task", ""),
+                verification=r.get("verification", "Step completed"),
+                status=r.get("status") or "completed",
+                success=r.get("success"),
+                max_steps=r.get("max_steps"),
+                description=r.get("description"),
+                depends_on=r.get("depends_on") or [],
+                hints=r.get("hints") or {},
+                metadata=r.get("metadata") or {},
+                output=r.get("output") or {},
+                error=r.get("error"),
+                started_at=_parse_dt(r.get("started_at")),
+                finished_at=_parse_dt(r.get("finished_at")),
+                artifacts=r.get("artifacts") or {},
+            )
+
+        plan_raw = orch_state.get("plan") or []
+        results_raw = orch_state.get("results") or []
+        plan: List[PlannedStep] = []
+        results: List[StepResult] = []
+
+        for p in plan_raw:
+            try:
+                plan.append(_hydrate_planned(p))
+            except Exception as exc:
+                logger.warning("Failed to hydrate PlannedStep: %s", exc)
+
+        for r in results_raw:
+            try:
+                results.append(_hydrate_result(r))
+            except Exception as exc:
+                logger.warning("Failed to hydrate StepResult: %s", exc)
+
+        # Append last_resume_step if stored under agents.orchestrator
+        last_resume = (
+            agent_states.get("agents", {})
+            .get("orchestrator", {})
+            .get("last_resume_step")
+        )
+        if isinstance(last_resume, dict):
+            try:
+                results.append(_hydrate_result(last_resume))
+                logger.info("Appended last_resume_step for run_id=%s", run_id)
+            except Exception as exc:
+                logger.warning("Failed to hydrate last_resume_step: %s", exc)
+
+        cost_baseline = orch_state.get("cost_baseline", self.cost_tracker.total_cost_usd)
+        intermediate = orch_state.get("intermediate") or {}
+
+        rehydrated = RunState(
+            request=request,
+            plan=plan,
+            results=results,
+            intermediate=intermediate,
+            cost_baseline=cost_baseline,
+        )
+
+        # Preserve continuation context for prompts if stored on CU agent
+        continuation_ctx = (
+            agent_states.get("agents", {})
+            .get("computer_use", {})
+            .get("continuation", {})
+            .get("inference_context")
+        )
+        if continuation_ctx:
+            self._orchestrator_continuation_context = continuation_ctx
+
+        self._rehydrated_state = rehydrated
+        return rehydrated
     def _get_next_step(
         self, request: OrchestratorRequest, state: RunState, last_failed: bool
     ) -> Dict[str, Any]:

@@ -6,6 +6,8 @@ import logging
 import os
 import time
 import uuid
+import httpx
+import httpcore
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
@@ -37,6 +39,29 @@ def _format_sse(event: str, data: Optional[Any] = None) -> bytes:
         parts.append(f"data: {payload}")
     parts.append("")
     return "\n".join(parts).encode("utf-8")
+
+
+def _execute_with_backoff(q, retries: int = 3, base_delay: float = 0.5, factor: float = 2.0, max_delay: float = 5.0):
+    """
+    Execute a Supabase/PostgREST query with exponential backoff on transient HTTP errors.
+    """
+    attempt = 0
+    while attempt < retries:
+        try:
+            return q.execute()
+        except (httpx.HTTPError, httpcore.RemoteProtocolError) as exc:
+            attempt += 1
+            if attempt >= retries:
+                raise
+            delay = min(max_delay, base_delay * (factor ** (attempt - 1)))
+            logger.warning(
+                "Supabase request failed (attempt %s/%s): %s; retrying in %.2fs",
+                attempt,
+                retries,
+                exc,
+                delay,
+            )
+            time.sleep(delay)
 
 
 @router.post("/workflows/{workflow_id}/run")
@@ -164,7 +189,11 @@ def list_workflows(
     ).order("updated_at", desc=True)
     if folder_id:
         q = q.eq("folder_id", folder_id)
-    res = q.execute()
+    try:
+        res = _execute_with_backoff(q)
+    except (httpx.HTTPError, httpcore.RemoteProtocolError) as exc:
+        logger.error("Failed to list workflows after retries: %s", exc)
+        raise HTTPException(status_code=503, detail="upstream_unavailable") from exc
     workflows = res.data or []
     for wf in workflows:
         if isinstance(wf, dict):
@@ -182,19 +211,22 @@ def get_workflow(
     """
     client = get_supabase_client(current_user.token)
     try:
-        res = (
+        q = (
             client.table("workflows")
             .select(
                 "id,name,prompt,description,status,folder_id,definition_json,metadata,updated_at,created_at"
             )
             .eq("id", workflow_id)
             .single()
-            .execute()
         )
+        res = _execute_with_backoff(q)
     except APIError as exc:
         if getattr(exc, "code", "") == "PGRST116":
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="workflow_not_found") from exc
         raise
+    except (httpx.HTTPError, httpcore.RemoteProtocolError) as exc:
+        logger.error("Failed to fetch workflow after retries: %s", exc)
+        raise HTTPException(status_code=503, detail="upstream_unavailable") from exc
 
     if not res.data:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="workflow_not_found")

@@ -15,6 +15,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from orchestrator_agent.data_types import AgentTarget, OrchestratorRequest, PlannedStep
+from computer_use_agent.orchestrator.data_types import OrchestrateRequest
 from shared.hierarchical_logger import set_step_id
 
 logger = logging.getLogger(__name__)
@@ -273,6 +274,58 @@ def run_computer_use_agent(
     trajectory = _extract_computer_use_trajectory(raw_dict)
     logger.info(
         "bridge.computer_use.done status=%s steps=%s trajectory_length=%s",
+        raw_dict.get("status"),
+        len(raw_dict.get("steps") or []),
+        len(trajectory),
+    )
+    return trajectory
+
+
+def run_computer_use_agent_resume(
+    *,
+    cu_request: OrchestrateRequest,
+    orchestrator_state: Optional[Dict[str, Any]] = None,
+    handback_inference_context: Optional[str] = None,
+    resume_state: Optional[Dict[str, Any]] = None,
+) -> str:
+    """
+    Execute computer-use agent for a resume flow (post handback) and return trajectory.
+
+    Args:
+        cu_request: Pre-built OrchestrateRequest to execute
+        orchestrator_state: Optional orchestrator state to persist alongside CU snapshot
+        handback_inference_context: Smart diff / inference context to inject on resume
+        resume_state: Prior computer_use snapshot (steps, handback metadata)
+    """
+    # Bind step_id to context for hierarchical logging
+    set_step_id("resume-cu")
+
+    try:
+        from computer_use_agent.orchestrator.runner import runner
+
+        runner_metadata = {
+            "orchestrator_state": orchestrator_state,
+            "handback_inference_context": handback_inference_context,
+            "resume_state": resume_state,
+        }
+
+        raw_result_obj = runner(cu_request, orchestrator_context=runner_metadata)
+        raw_dict = raw_result_obj.__dict__ if hasattr(raw_result_obj, "__dict__") else dict(raw_result_obj)
+    except Exception as exc:  # pragma: no cover
+        logger.info("Computer-use agent resume fallback due to error: %s", exc)
+        raw_dict = {
+            "task": cu_request.task if cu_request else "",
+            "status": "failed",
+            "completion_reason": "error",
+            "steps": [],
+            "grounding_prompts": {},
+            "error": str(exc),
+            "trajectory_md": "### Error\n**Message**: Computer-use agent resume failed to execute\n**Details**: " + str(exc),
+        }
+
+    trajectory = _extract_computer_use_trajectory(raw_dict)
+    logger.info(
+        "bridge.computer_use.resume.done status=%s steps=%s trajectory_length=%s",
         raw_dict.get("status"),
         len(raw_dict.get("steps") or []),
         len(trajectory),

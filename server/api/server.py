@@ -137,7 +137,14 @@ def _attach_run_log_handler(run_id: str) -> logging.Handler:
     handler.setFormatter(formatter)
 
     root_logger = logging.getLogger()
+    # Mirror to console as well for this run_id
+    console = logging.StreamHandler()
+    console.setLevel(logging.INFO)
+    console.addFilter(_RunLogFilter(run_id))
+    console.setFormatter(formatter)
+
     root_logger.addHandler(handler)
+    root_logger.addHandler(console)
     return handler
 
 
@@ -887,7 +894,10 @@ async def resume_run(
     """
     from server.api.controller_client import VMControllerClient
     from server.api.handback_inference import infer_human_action, format_inference_for_context
-    from shared.db.workflow_runs import merge_agent_states
+    from shared.db.workflow_runs import merge_agent_states, get_agent_states
+    from orchestrator_agent.bridges import run_computer_use_agent_resume
+    from orchestrator_agent.translator import translate_step_output
+    from computer_use_agent.orchestrator.data_types import OrchestrateRequest
     import base64
 
     user_id = current_user.sub
@@ -913,7 +923,7 @@ async def resume_run(
         row_environment = row[4]
 
         # Check ownership
-        if row_user_id != user_id:
+        if str(row_user_id) != str(user_id):
             raise HTTPException(status_code=403, detail="Not authorized to resume this run")
 
         # Check status
@@ -1030,7 +1040,91 @@ async def resume_run(
         except Exception as e:
             logger.error("Failed to update agent_states with inference: %s", e)
 
-        # 8. Update run status to 'queued' for continuation
+        # 8. Attempt to run the next CU step directly (resume flow)
+        cu_request_dict = computer_use_state.get("request") or {}
+        translated_resume: Dict[str, Any] = {}
+        resume_trajectory = ""
+        resume_step_result: Dict[str, Any] = {}
+        if cu_request_dict:
+            try:
+                cu_request = OrchestrateRequest.from_dict(cu_request_dict)
+                # Ensure controller base_url is set from environment if missing
+                if not cu_request.controller.base_url and controller_base_url:
+                    cu_request.controller.base_url = controller_base_url
+
+                # Pull latest agent_states snapshot for orchestrator context
+                persisted_states = get_agent_states(run_id)
+                orchestrator_state = persisted_states.get("orchestrator")
+                resume_trajectory = run_computer_use_agent_resume(
+                    cu_request=cu_request,
+                    orchestrator_state=orchestrator_state,
+                    handback_inference_context=inference_context,
+                    resume_state=computer_use_state,
+                )
+
+                translated_resume = translate_step_output(
+                    task=cu_request.task,
+                    target="computer_use",
+                    trajectory=resume_trajectory,
+                    debug_step_id="resume-cu",
+                )
+                if translated_resume:
+                    resume_step_result = {
+                        "step_id": f"resume-{run_id}",
+                        "target": "computer_use",
+                        "next_task": cu_request.task,
+                        "verification": "resume step completed",
+                        "status": "completed" if translated_resume.get("overall_success", True) else "failed",
+                        "success": bool(translated_resume.get("overall_success", True)),
+                        "output": translated_resume,
+                        "error": translated_resume.get("error"),
+                        "artifacts": translated_resume.get("artifacts") or {},
+                    }
+            except Exception as exc:
+                logger.error("Resume CU execution failed: %s", exc, exc_info=True)
+
+        # 9. Persist updated agent state (inference + resume artifacts)
+        resume_update = {
+            "handback": {
+                **handback,
+                "inference": inference_result,
+                "resumed_at": now,
+            },
+            "continuation": {
+                "should_inject_inference": True,
+                "inference_context": inference_context,
+                "resume_from_step": resume_from_step,
+                "resumed_at": now,
+            },
+        }
+
+        resume_artifacts = {
+            "resume": {
+                "trajectory_md": resume_trajectory,
+                "translated": translated_resume,
+            }
+        }
+
+        try:
+            merge_agent_states(
+                run_id,
+                {
+                    **resume_artifacts,
+                    **resume_update,
+                },
+                path=["agents", "computer_use"],
+            )
+            if translated_resume:
+                merge_agent_states(
+                    run_id,
+                    {"last_resume_step": resume_step_result},
+                    path=["agents", "orchestrator"],
+                )
+            logger.info("Updated agent_states with resume artifacts for run_id=%s", run_id)
+        except Exception as e:
+            logger.error("Failed to update agent_states with resume artifacts: %s", e)
+
+        # 10. Update run status to 'queued' for continuation
         db.execute(
             text("""
                 UPDATE workflow_runs
@@ -1042,7 +1136,7 @@ async def resume_run(
         )
         db.commit()
 
-        # 9. Emit resume event
+        # 11. Emit resume event
         _insert_run_event(
             run_id=run_id,
             kind="human_attention.resumed",
@@ -1052,16 +1146,19 @@ async def resume_run(
                 "handback_request": handback_request,
                 "resume_from_step": resume_from_step,
                 "timestamp": now,
+                "resume_translated": translated_resume,
             },
         )
 
-        # 10. Return response
+        # 12. Return response
         return {
             "status": "resumed",
             "run_id": run_id,
             "inference": inference_result,
             "inference_context": inference_context,
             "handback_request": handback_request,
+            "resume_translated": translated_resume,
+            "resume_trajectory": resume_trajectory,
             "message": "Run resumed. The agent will continue with the inferred context.",
         }
 
