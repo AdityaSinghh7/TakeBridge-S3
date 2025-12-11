@@ -913,7 +913,7 @@ async def resume_run(
         row_environment = row[4]
 
         # Check ownership
-        if row_user_id != user_id:
+        if str(row_user_id) != str(user_id):
             raise HTTPException(status_code=403, detail="Not authorized to resume this run")
 
         # Check status
