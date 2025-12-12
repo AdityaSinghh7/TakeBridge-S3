@@ -338,8 +338,17 @@ class OrchestratorRuntime:
         )
         if isinstance(last_resume, dict):
             try:
-                results.append(_hydrate_result(last_resume))
-                logger.info("Appended last_resume_step for run_id=%s", run_id)
+                existing_ids = {r.step_id for r in results if getattr(r, "step_id", None)}
+                hydrated_last_resume = _hydrate_result(last_resume)
+                if hydrated_last_resume.step_id not in existing_ids:
+                    results.append(hydrated_last_resume)
+                    logger.info("Appended last_resume_step for run_id=%s", run_id)
+                else:
+                    logger.info(
+                        "Skipped appending duplicate last_resume_step (step_id=%s) for run_id=%s",
+                        hydrated_last_resume.step_id,
+                        run_id,
+                    )
             except Exception as exc:
                 logger.warning("Failed to hydrate last_resume_step: %s", exc)
 

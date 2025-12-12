@@ -10,13 +10,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import copy
 import json
 import logging
 import os
 import time
 import uuid
+from datetime import datetime
 from dataclasses import asdict
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, List
 from urllib.parse import urlparse
 
 from fastapi import Body, FastAPI, HTTPException, Depends, Header
@@ -115,12 +117,16 @@ class _RunLogFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:  # pragma: no cover - thin helper
         current = RUN_LOG_ID.get()
-        record.run_id = current or ""  # type: ignore[attr-defined]
+        # Always populate run_id on the record for formatting
+        record.run_id = current or self.run_id or ""  # type: ignore[attr-defined]
+        # Allow logs even if context got lost (threadpool/async gaps); best-effort match
+        if current is None:
+            return True
         return current == self.run_id
 
 
-def _attach_run_log_handler(run_id: str) -> logging.Handler:
-    """Create and attach a file handler that captures logs for a specific run_id."""
+def _attach_run_log_handler(run_id: str) -> tuple[logging.Handler, logging.Handler]:
+    """Create and attach file + console handlers that capture logs for a specific run_id."""
     logs_dir = os.path.join("logs", "streams")
     os.makedirs(logs_dir, exist_ok=True)
     timestamp = time.strftime("%Y%m%d-%H%M%S")
@@ -137,7 +143,6 @@ def _attach_run_log_handler(run_id: str) -> logging.Handler:
     handler.setFormatter(formatter)
 
     root_logger = logging.getLogger()
-    # Mirror to console as well for this run_id
     console = logging.StreamHandler()
     console.setLevel(logging.INFO)
     console.addFilter(_RunLogFilter(run_id))
@@ -145,19 +150,21 @@ def _attach_run_log_handler(run_id: str) -> logging.Handler:
 
     root_logger.addHandler(handler)
     root_logger.addHandler(console)
-    return handler
+    return handler, console
 
 
-def _detach_run_log_handler(handler: logging.Handler) -> None:
-    """Detach and close a run-specific handler safely."""
+def _detach_run_log_handler(handlers: tuple[logging.Handler, logging.Handler]) -> None:
+    """Detach and close run-specific handlers safely."""
     root_logger = logging.getLogger()
-    try:
-        root_logger.removeHandler(handler)
-    except ValueError:
-        pass
-    with contextlib.suppress(Exception):
-        handler.flush()
-        handler.close()
+    file_handler, console_handler = handlers
+    for h in (file_handler, console_handler):
+        try:
+            root_logger.removeHandler(h)
+        except ValueError:
+            pass
+        with contextlib.suppress(Exception):
+            h.flush()
+            h.close()
 
 
 @contextlib.asynccontextmanager
@@ -492,8 +499,66 @@ def _resolve_controller_session(
     controller_override: Optional[Dict[str, Any]] = None,
     run_id: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Resolve the controller session to use for a run.
+
+    Priority:
+    1) Explicit override with base_url.
+    2) Persisted workflow_runs.environment (for resumed/rehydrated runs).
+    3) Provision a fresh controller session.
+    """
     if controller_override and controller_override.get("base_url"):
         return _normalize_controller_payload(controller_override)
+
+    # If we have a run_id, try to reuse the persisted environment so the
+    # orchestrator reconnects to the same controller after requeue/resume.
+    if run_id:
+        db = SessionLocal()
+        try:
+            row = db.execute(
+                text("SELECT environment FROM workflow_runs WHERE id = :run_id"),
+                {"run_id": run_id},
+            ).mappings().first()
+        finally:
+            db.close()
+
+        if row and row.get("environment"):
+            env_raw = row["environment"]
+            try:
+                env = json.loads(env_raw) if isinstance(env_raw, str) else dict(env_raw)
+            except Exception:
+                env = {}
+
+            endpoint = env.get("endpoint") if isinstance(env, dict) else None
+            if isinstance(endpoint, str):
+                try:
+                    endpoint = json.loads(endpoint)
+                except Exception:
+                    endpoint = None
+
+            if isinstance(endpoint, dict):
+                base_url = (
+                    endpoint.get("controller_base_url")
+                    or endpoint.get("base_url")
+                )
+                if base_url:
+                    host = endpoint.get("controller_host") or endpoint.get("host")
+                    port = endpoint.get("controller_port") or endpoint.get("port")
+                    controller_payload = {
+                        "base_url": base_url,
+                        "host": host,
+                        "port": port,
+                    }
+                    workspace_info = {
+                        "id": endpoint.get("instance_id") or endpoint.get("id") or str(uuid.uuid4()),
+                        "controller_base_url": base_url,
+                        "vnc_url": endpoint.get("vnc_url"),
+                        "controller_host": host,
+                        "controller_port": port,
+                    }
+                    return controller_payload, workspace_info
+
+    # Fallback to provisioning a new session
     return _provision_controller_session(user_id, run_id)
 
 def _create_streaming_response(
@@ -596,7 +661,17 @@ def _create_streaming_response(
                 run_id=run_id,
             )
             run_id_local = run_id or getattr(orch_request, "request_id", None) or "run"
+            logger.info("Stream start: resolved run_id=%s", run_id_local)
             handler = _attach_run_log_handler(run_id_local)
+            try:
+                file_handler, console_handler = handler
+                logger.info(
+                    "Run log handlers attached for run_id=%s file=%s",
+                    run_id_local,
+                    getattr(file_handler, "baseFilename", "?"),
+                )
+            except Exception:
+                logger.info("Run log handlers attached for run_id=%s", run_id_local)
             log_token = RUN_LOG_ID.set(run_id_local)
 
             # Start keepalive after run_id is bound so any logs it emits are tagged.
@@ -675,6 +750,15 @@ def _create_streaming_response(
                 RUN_LOG_ID.reset(log_token)
             if handler is not None:
                 _detach_run_log_handler(handler)
+                try:
+                    file_handler, _ = handler
+                    logger.info(
+                        "Run log handlers detached for run_id=%s file=%s",
+                        run_id_local,
+                        getattr(file_handler, "baseFilename", "?"),
+                    )
+                except Exception:
+                    logger.info("Run log handlers detached for run_id=%s", run_id_local)
             await queue.put(None)
 
     asyncio.create_task(_run_and_stream())
@@ -893,17 +977,24 @@ async def resume_run(
         Dict with inference result and updated status
     """
     from server.api.controller_client import VMControllerClient
-    from server.api.handback_inference import infer_human_action, format_inference_for_context
-    from shared.db.workflow_runs import merge_agent_states, get_agent_states
+    from server.api.handback_inference import infer_human_action
+    from shared.db.workflow_runs import merge_agent_states
     from orchestrator_agent.bridges import run_computer_use_agent_resume
-    from orchestrator_agent.translator import translate_step_output
     from computer_use_agent.orchestrator.data_types import OrchestrateRequest
+    from orchestrator_agent.translator import translate_step_output
+    from orchestrator_agent.data_types import StepResult, PlannedStep
     import base64
 
     user_id = current_user.sub
     db = SessionLocal()
+    log_token: Optional[Any] = None
+    run_handlers: Optional[Tuple[logging.Handler, logging.Handler]] = None
 
     try:
+        # Bind run-scoped logging so resume operations are captured in console and file
+        run_handlers = _attach_run_log_handler(run_id)
+        log_token = RUN_LOG_ID.set(run_id)
+
         # 1. Fetch the run and validate ownership + status
         row = db.execute(
             text("""
@@ -941,23 +1032,32 @@ async def resume_run(
             except Exception:
                 agent_states = {}
 
-        computer_use_state = agent_states.get("agents", {}).get("computer_use", {})
+        computer_use_state = agent_states.get("agents", {}).get("computer_use", {}) or {}
+        orchestrator_state = agent_states.get("orchestrator")
+        if isinstance(orchestrator_state, str):
+            try:
+                orchestrator_state = json.loads(orchestrator_state)
+            except Exception:
+                orchestrator_state = {}
+        computer_use_snapshot = {
+            "status": computer_use_state.get("status"),
+            "completion_reason": computer_use_state.get("completion_reason"),
+            "step_index_next": computer_use_state.get("step_index_next"),
+            "trajectory_till_now": computer_use_state.get("trajectory_till_now", {}),
+        }
+
+        request_dict = computer_use_state.get("request") or {}
+        cu_request: Optional[OrchestrateRequest] = None
+        if request_dict:
+            try:
+                cu_request = OrchestrateRequest.from_dict(request_dict)
+            except Exception as exc:
+                logger.warning("Failed to rebuild OrchestrateRequest from snapshot: %s", exc)
+
+        handback_request = computer_use_state.get("handback_request")
+        before_screenshot_b64 = computer_use_state.get("handback_screenshot_b64")
         handback = computer_use_state.get("handback", {})
 
-        if not handback:
-            raise HTTPException(
-                status_code=400,
-                detail="No handback state found for this run"
-            )
-
-        handback_request = handback.get("request", "")
-        before_screenshot_b64 = handback.get("screenshot_b64", "")
-
-        if not before_screenshot_b64:
-            raise HTTPException(
-                status_code=400,
-                detail="No handback screenshot found"
-            )
 
         # 3. Get controller from environment and capture current screenshot
         environment = row_environment if isinstance(row_environment, dict) else {}
@@ -975,6 +1075,8 @@ async def resume_run(
                 status_code=400,
                 detail="No controller endpoint found for this run"
             )
+        if cu_request and controller_base_url:
+            cu_request.controller.base_url = controller_base_url
 
         # Create controller client and capture current screenshot
         try:
@@ -1003,85 +1105,153 @@ async def resume_run(
                 "confidence": "low",
                 "details": str(e),
             }
-
-        # 5. Extract previous trajectory for full context
-        runner_state = computer_use_state.get("runner", {})
-        previous_trajectory = runner_state.get("trajectory_md", "")
-        
-        # 6. Format inference for agent context WITH previous trajectory
-        inference_context = format_inference_for_context(
-            inference_result,
-            handback_request,
-            previous_trajectory=previous_trajectory,
-        )
-        
-        # 7. Update agent_states with inference AND continuation marker
+        # 5. Update agent_states with inference result appended to trajectory
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        resume_from_step = handback.get("step_index", 0) + 1
-        
-        inference_update = {
-            "handback": {
-                **handback,
-                "inference": inference_result,
-                "resumed_at": now,
-            },
-            # Continuation marker for the orchestrator to detect and inject context
-            "continuation": {
-                "should_inject_inference": True,
-                "inference_context": inference_context,
-                "resume_from_step": resume_from_step,
-                "resumed_at": now,
+        resume_from_step = computer_use_snapshot.get("step_index_next", 0) + 1
+
+        trajectory_snapshot = computer_use_snapshot.get("trajectory_till_now") or {}
+        generator_messages = trajectory_snapshot.get("generator_messages") or []
+        updated_generator_messages = copy.deepcopy(generator_messages)
+        updated_generator_messages.append(
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"HANDBACK RESULT:\\n{json.dumps(inference_result, ensure_ascii=False)}",
+                    }
+                ],
             }
+        )
+        updated_trajectory = {
+            **trajectory_snapshot,
+            "generator_messages": updated_generator_messages,
+        }
+
+        inference_update = {
+            **computer_use_snapshot,
+            "trajectory_till_now": updated_trajectory,
+            "inference_result": inference_result,
+            "latest_screenshot_b64": current_screenshot_b64,
         }
 
         try:
             merge_agent_states(run_id, inference_update, path=["agents", "computer_use"])
-            logger.info("Updated agent_states with continuation marker for run_id=%s", run_id)
+            logger.info("Updated agent_states with inference snapshot for run_id=%s", run_id)
         except Exception as e:
             logger.error("Failed to update agent_states with inference: %s", e)
 
-        # 8. Attempt to run the next CU step directly (resume flow)
-        cu_request_dict = computer_use_state.get("request") or {}
+        # 6. Attempt to run the next CU step directly (resume flow)
         translated_resume: Dict[str, Any] = {}
         resume_trajectory = ""
         resume_step_result: Dict[str, Any] = {}
-        if cu_request_dict:
+        resume_raw: Dict[str, Any] = {}
+        try:
+            resume_trajectory, resume_raw = run_computer_use_agent_resume(
+                run_id=run_id,
+                inference_update=inference_update,
+                cu_request=cu_request,
+                orchestrator_state=orchestrator_state,
+            )
+        except Exception as exc:
+            logger.error("Resume CU execution failed: %s", exc, exc_info=True)
+
+        # Translate the resumed CU trajectory into orchestrator step shape
+        overall_success = False
+        error_msg: Optional[str] = None
+        combined_trajectory = resume_trajectory
+        try:
+            prior_runner = (computer_use_state.get("runner") or {}).get("trajectory_md") or ""
+            if prior_runner:
+                combined_trajectory = prior_runner + "\n\n" + resume_trajectory
+        except Exception:
+            combined_trajectory = resume_trajectory
+        try:
+            translated_resume = translate_step_output(
+                task=cu_request.task if cu_request else "",
+                target="computer_use",
+                trajectory=combined_trajectory,
+                debug_step_id="resume-cu",
+            )
+            overall_success = bool(
+                translated_resume.get("overall_success", translated_resume.get("success", True))
+            )
+            error_msg = translated_resume.get("error")
+        except Exception as exc:
+            logger.error("Failed to translate resume trajectory: %s", exc, exc_info=True)
+            translated_resume = {
+                "overall_success": False,
+                "error": f"translation_failed: {exc}",
+                "summary": "",
+                "artifacts": {},
+            }
+            overall_success = False
+            error_msg = translated_resume.get("error")
+
+        # Build a StepResult-like payload and update orchestrator_state
+        plan_entries: List[PlannedStep] = []
+        existing_results: List[StepResult] = []
+        intermediate = {}
+        cost_baseline = 0.0
+        if isinstance(orchestrator_state, dict):
+            intermediate = orchestrator_state.get("intermediate") or {}
+            cost_baseline = orchestrator_state.get("cost_baseline", 0.0)
             try:
-                cu_request = OrchestrateRequest.from_dict(cu_request_dict)
-                # Ensure controller base_url is set from environment if missing
-                if not cu_request.controller.base_url and controller_base_url:
-                    cu_request.controller.base_url = controller_base_url
-
-                # Pull latest agent_states snapshot for orchestrator context
-                persisted_states = get_agent_states(run_id)
-                orchestrator_state = persisted_states.get("orchestrator")
-                resume_trajectory = run_computer_use_agent_resume(
-                    cu_request=cu_request,
-                    orchestrator_state=orchestrator_state,
-                    handback_inference_context=inference_context,
-                    resume_state=computer_use_state,
-                )
-
-                translated_resume = translate_step_output(
-                    task=cu_request.task,
-                    target="computer_use",
-                    trajectory=resume_trajectory,
-                    debug_step_id="resume-cu",
-                )
-                if translated_resume:
-                    resume_step_result = {
-                        "step_id": f"resume-{run_id}",
-                        "target": "computer_use",
-                        "next_task": cu_request.task,
-                        "verification": "resume step completed",
-                        "status": "completed" if translated_resume.get("overall_success", True) else "failed",
-                        "success": bool(translated_resume.get("overall_success", True)),
-                        "output": translated_resume,
-                        "error": translated_resume.get("error"),
-                        "artifacts": translated_resume.get("artifacts") or {},
-                    }
+                plan_entries = [PlannedStep(**p) for p in (orchestrator_state.get("plan") or [])]
             except Exception as exc:
-                logger.error("Resume CU execution failed: %s", exc, exc_info=True)
+                logger.warning("Failed to hydrate plan from orchestrator_state: %s", exc)
+            try:
+                for res in orchestrator_state.get("results") or []:
+                    try:
+                        existing_results.append(StepResult(**res))
+                    except Exception:
+                        logger.warning("Failed to hydrate StepResult from orchestrator_state.")
+            except Exception as exc:
+                logger.warning("Failed to hydrate results from orchestrator_state: %s", exc)
+
+        completed_ids = {res.step_id for res in existing_results}
+        resume_planned = next((p for p in plan_entries if p.step_id not in completed_ids), None)
+        if resume_planned is None:
+            resume_planned = PlannedStep(
+                step_id=f"resume-{run_id}",
+                target="computer_use",
+                next_task=cu_request.task if cu_request else "resume",
+                verification="resume",
+                max_steps=getattr(cu_request.worker, "max_steps", None) if cu_request else None,
+                description="Resumed computer_use step",
+                depends_on=[],
+                hints={},
+                metadata={},
+            )
+
+        status_flag = "completed" if overall_success else "failed"
+        step_result_output = {
+            "translated": translated_resume,
+            "raw": resume_raw,
+            "trajectory": combined_trajectory,
+        }
+        step_result_obj = StepResult.from_planned(
+            resume_planned,
+            status=status_flag,
+            success=overall_success,
+            output=step_result_output,
+            error=error_msg,
+            finished_at=datetime.utcnow(),
+        )
+        resume_step_result = asdict(step_result_obj)
+        existing_results.append(step_result_obj)
+        pending_after = [p for p in plan_entries if p.step_id not in {r.step_id for r in existing_results}]
+
+        updated_orchestrator_state = {
+            "status": "running",
+            "loop_iteration": len(existing_results),
+            "cost_baseline": cost_baseline,
+            "plan": [asdict(p) for p in plan_entries],
+            "results": [asdict(r) for r in existing_results],
+            "intermediate": intermediate,
+            "pending_steps": [asdict(p) for p in pending_after],
+            "should_resume": True,
+        }
 
         # 9. Persist updated agent state (inference + resume artifacts)
         resume_update = {
@@ -1092,7 +1262,6 @@ async def resume_run(
             },
             "continuation": {
                 "should_inject_inference": True,
-                "inference_context": inference_context,
                 "resume_from_step": resume_from_step,
                 "resumed_at": now,
             },
@@ -1102,6 +1271,8 @@ async def resume_run(
             "resume": {
                 "trajectory_md": resume_trajectory,
                 "translated": translated_resume,
+                "raw": resume_raw,
+                "step_result": resume_step_result,
             }
         }
 
@@ -1113,6 +1284,10 @@ async def resume_run(
                     **resume_update,
                 },
                 path=["agents", "computer_use"],
+            )
+            merge_agent_states(
+                run_id,
+                {"orchestrator": updated_orchestrator_state},
             )
             if translated_resume:
                 merge_agent_states(
@@ -1147,6 +1322,7 @@ async def resume_run(
                 "resume_from_step": resume_from_step,
                 "timestamp": now,
                 "resume_translated": translated_resume,
+                "resume_step_result": resume_step_result,
             },
         )
 
@@ -1155,10 +1331,10 @@ async def resume_run(
             "status": "resumed",
             "run_id": run_id,
             "inference": inference_result,
-            "inference_context": inference_context,
             "handback_request": handback_request,
             "resume_translated": translated_resume,
             "resume_trajectory": resume_trajectory,
+            "resume_step_result": resume_step_result,
             "message": "Run resumed. The agent will continue with the inferred context.",
         }
 
@@ -1169,6 +1345,10 @@ async def resume_run(
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
     finally:
+        if log_token is not None:
+            RUN_LOG_ID.reset(log_token)
+        if run_handlers is not None:
+            _detach_run_log_handler(run_handlers)
         db.close()
 
 

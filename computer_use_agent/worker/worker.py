@@ -544,11 +544,12 @@ class Worker(BaseModule):
         self.grounding_agent.set_task_instruction(instruction)
         previous_behavior = obs.get("previous_behavior")
 
-        generator_message = (
-            ""
-            if self.turn_count > 0
-            else "The initial screen is provided. No action has been taken yet."
-        )
+        if self.turn_count > 0:
+            generator_message = ""
+        elif getattr(self, "resume_mode", False):
+            generator_message = "The current state screenshot is provided below."
+        else:
+            generator_message = "The initial screen is provided. No action has been taken yet."
 
         # Load the task into the system prompt
         if self.turn_count == 0:

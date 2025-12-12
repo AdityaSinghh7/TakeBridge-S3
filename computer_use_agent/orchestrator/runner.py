@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import base64
+import copy
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, cast
 
 from computer_use_agent.agent_s import AgentS3
+from computer_use_agent.worker.worker import Worker
 from server.api.controller_client import VMControllerClient
 from computer_use_agent.grounding.grounding_agent import OSWorldACI
 from computer_use_agent.orchestrator.data_types import (
@@ -138,54 +140,38 @@ def _prune_images_in_messages(
     return pruned
 
 
-def _build_prompts_snapshot(
-    worker: "Worker",
-    *,
-    persist_images: bool = False,
-    keep_image_turns: int = 2,
+
+def _build_trajectory_till_now(
+    steps: List[RunnerStep],
+    generator_messages: List[Dict[str, Any]],
+    reflection_messages: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """
-    Capture generator/reflection messages, screenshots, knowledge, and code-agent results
-    for deep rehydration on resume.
-    """
-    prompts: Dict[str, Any] = {
-        "config": {
-            "persist_images": persist_images,
-            "keep_image_turns": keep_image_turns,
-        },
+    """Build a snapshot of the trajectory so far for persistence/resume."""
+    filtered_generator = [
+        copy.deepcopy(msg)
+        for msg in generator_messages
+        if msg.get("role") not in {"developer", "system"}
+    ]
+    filtered_reflection = [
+        copy.deepcopy(msg)
+        for msg in reflection_messages
+        if msg.get("role") not in {"developer", "system"}
+    ]
+    return {
+        "generator_messages": filtered_generator,
+        "reflection_messages": filtered_reflection,
     }
-    try:
-        gen_msgs = getattr(worker.generator_agent, "messages", []) or []
-        ref_msgs = getattr(worker.reflection_agent, "messages", []) or []
-
-        prompts["generator"] = {
-            "messages": _prune_images_in_messages(
-                gen_msgs, persist_images=persist_images, keep_image_turns=keep_image_turns
-            ),
-            "latest_gui_screenshot_b64": None,
-        }
-        prompts["reflection"] = {
-            "messages": _prune_images_in_messages(
-                ref_msgs, persist_images=persist_images, keep_image_turns=keep_image_turns
-            ),
-            "latest_gui_screenshot_b64": None,
-        }
-
-        latest_img = getattr(worker, "latest_gui_screenshot", None)
-        if latest_img:
-            encoded = base64.b64encode(latest_img).decode("utf-8")
-            prompts["generator"]["latest_gui_screenshot_b64"] = encoded
-            prompts["reflection"]["latest_gui_screenshot_b64"] = encoded
-
-        prompts["knowledge"] = getattr(worker.grounding_agent, "knowledge", []) or []
-        if getattr(worker.grounding_agent, "last_code_agent_result", None) is not None:
-            prompts["last_code_agent_result"] = worker.grounding_agent.last_code_agent_result
-    except Exception as exc:
-        logger.warning("Failed to build prompts snapshot: %s", exc)
-    return prompts
 
 
-def _build_trajectory_markdown(steps: List[RunnerStep], status: str, completion_reason: str) -> str:
+def _build_trajectory_markdown(
+    steps: List[RunnerStep],
+    status: str,
+    completion_reason: str,
+    *,
+    is_resume_flow: bool = False,
+    handback_inference: Optional[Dict[str, Any]] = None,
+    include_final_status: bool = True,
+) -> str:
     """Build COMPLETE self-contained markdown trajectory for orchestrator.
 
     CRITICAL: This trajectory must contain ALL relevant data.
@@ -295,10 +281,27 @@ def _build_trajectory_markdown(steps: List[RunnerStep], status: str, completion_
 
         lines.append("")  # Blank line between steps
 
-    # Final status
-    lines.append("## Final Status")
-    lines.append(f"**Status**: {status}")
-    lines.append(f"**Completion Reason**: {completion_reason}")
+    # Final status / resume context footer
+    if is_resume_flow:
+        lines.append("## Resume Context")
+        lines.append(
+            "This is a resume flow. A handback_to_human occurred in this step."
+        )
+        if handback_inference:
+            import json as _json
+
+            try:
+                inference_json = _json.dumps(handback_inference, ensure_ascii=False, indent=2)
+            except Exception:
+                inference_json = str(handback_inference)
+            lines.append("")
+            lines.append("### Handback Inference")
+            lines.append("The most recent handback result:")
+            lines.append(f"```json\n{inference_json}\n```")
+    elif include_final_status:
+        lines.append("## Final Status")
+        lines.append(f"**Status**: {status}")
+        lines.append(f"**Completion Reason**: {completion_reason}")
 
     return "\n".join(lines)
 
@@ -331,15 +334,16 @@ def runner(
         request.controller.timeout,
     )
     
-    # Extract orchestrator state and handback inference from context
+    # Extract orchestrator state and resume metadata from context
     _orchestrator_state = None
-    _handback_inference_context = None
     _resume_state = None
+    _inference_update = None
+    _is_resume_flow = False
     if orchestrator_context:
         _orchestrator_state = orchestrator_context.get("orchestrator_state")
-        _handback_inference_context = orchestrator_context.get("handback_inference_context")
         _resume_state = orchestrator_context.get("resume_state")
-
+        _inference_update = orchestrator_context.get("inference_update")
+        _is_resume_flow = bool(orchestrator_context.get("is_resume_flow"))
     try:
         screen_info = controller.screen_size()
         screen_width = int(screen_info.get("width", 1920))
@@ -362,7 +366,7 @@ def runner(
 
     def _perform_run() -> RunnerResult:
         # Store orchestrator state in closure for handback capture
-        nonlocal _orchestrator_state, _handback_inference_context
+        nonlocal _inference_update, _is_resume_flow, _orchestrator_state, _resume_state
         
         grounding_agent = OSWorldACI(
             env=env,
@@ -380,11 +384,6 @@ def runner(
             grounding_api_key=grounding_cfg.grounding_api_key,
         )
         
-        # Inject handback inference context if this is a continuation after handback
-        if _handback_inference_context:
-            grounding_agent.handback_inference = _handback_inference_context
-            logger.info("Injected handback inference context for continuation")
-
         agent = AgentS3(
             worker_cfg.engine_params,
             grounding_agent,
@@ -393,19 +392,18 @@ def runner(
             enable_reflection=worker_cfg.enable_reflection,
         )
 
-        # If prompts/knowledge are stored in resume_state, rehydrate Worker agents.
-        if _resume_state:
+        # Rehydrate messages from inference_update when present; otherwise from resume_state prompts.
+        if _inference_update:
             try:
-                prompts_state = _resume_state.get("prompts")
-                if prompts_state:
-                    agent.executor.rehydrate_from_prompts(prompts_state)
-                # Restore knowledge and last code agent result if present
-                if "knowledge" in _resume_state:
-                    grounding_agent.knowledge = _resume_state.get("knowledge", []) or grounding_agent.knowledge
-                if _resume_state.get("last_code_agent_result") is not None:
-                    grounding_agent.last_code_agent_result = _resume_state.get("last_code_agent_result")
+                traj_state = _inference_update.get("trajectory_till_now") or {}
+                gen_msgs = traj_state.get("generator_messages") or []
+                ref_msgs = traj_state.get("reflection_messages") or []
+                agent.executor.generator_agent.messages = copy.deepcopy(gen_msgs)
+                agent.executor.reflection_agent.messages = copy.deepcopy(ref_msgs)
+                # Mark resume mode and bump turn_count to skip initial copy
+                agent.executor.resume_mode = True
             except Exception as exc:
-                logger.warning("Failed to rehydrate prompts/knowledge from resume_state: %s", exc)
+                logger.warning("Failed to rehydrate messages from inference_update: %s", exc)
 
         behavior_narrator = BehaviorNarrator(engine_params=worker_cfg.engine_params)
 
@@ -415,24 +413,7 @@ def runner(
         status = "in_progress"
         start_step_index = 1
         previous_behavior_result: Optional[Dict[str, Any]] = None
-
-        # Minimal resume hydration: reuse prior steps and last screenshot if provided.
-        if _resume_state:
-            try:
-                raw_steps = _resume_state.get("steps") or []
-                for raw in raw_steps:
-                    try:
-                        steps.append(RunnerStep(**raw))
-                    except Exception:
-                        logger.warning("Could not hydrate RunnerStep from resume_state.")
-                if steps:
-                    start_step_index = len(steps) + 1
-                    previous_behavior_result = {
-                        "fact_thoughts": steps[-1].behavior_fact_thoughts,
-                        "fact_answer": steps[-1].behavior_fact_answer,
-                    }
-            except Exception as exc:
-                logger.warning("Failed to process resume_state steps: %s", exc)
+        
 
         emit_event(
             "runner.started",
@@ -447,14 +428,9 @@ def runner(
         reflection_screenshot_bytes: Optional[bytes] = None
 
         # If we have a prior screenshot from handback, prefer it
-        if _resume_state:
+        if _is_resume_flow:
             try:
-                resume_handback = _resume_state.get("handback") or {}
-                latest_b64 = (
-                    resume_handback.get("screenshot_b64")
-                    or _resume_state.get("handback_screenshot_b64")
-                    or _resume_state.get("latest_screenshot_b64")
-                )
+                latest_b64 = _inference_update.get("latest_screenshot_b64")
                 if latest_b64:
                     before_screenshot_bytes = base64.b64decode(latest_b64)
                     reflection_screenshot_bytes = before_screenshot_bytes
@@ -570,8 +546,15 @@ def runner(
                     handback_screenshot_bytes = controller.capture_screenshot()
                 handback_screenshot_b64 = base64.b64encode(handback_screenshot_bytes).decode("utf-8")
                 
-                # Build partial trajectory for snapshot
-                partial_trajectory_md = _build_trajectory_markdown(steps, "attention", "HANDOFF_TO_HUMAN")
+                # Build partial trajectory markdown for persistence
+                partial_trajectory_md = _build_trajectory_markdown(
+                    steps,
+                    status="attention",
+                    completion_reason="HANDOFF_TO_HUMAN",
+                    is_resume_flow=_is_resume_flow,
+                    handback_inference=_inference_update.get("inference_result") if _inference_update else None,
+                    include_final_status=False,
+                )
                 
                 # Get run_id from context
                 run_id = RUN_LOG_ID.get()
@@ -603,25 +586,39 @@ def runner(
                         full_snapshot["orchestrator"] = existing_states["orchestrator"]
                     
                     # 2. Build computer_use state
+                    worker_executor = cast(Worker, agent.executor)
+                    generator_messages = getattr(worker_executor.generator_agent, "messages", []) or []
+                    reflection_messages = getattr(worker_executor.reflection_agent, "messages", []) or []
+                    reflection_messages_for_snapshot = copy.deepcopy(reflection_messages)
+                    # Mirror the last assistant message from the generator into the reflection history
+                    try:
+                        last_assistant = next(
+                            (
+                                msg
+                                for msg in reversed(generator_messages)
+                                if isinstance(msg, dict) and msg.get("role") == "assistant"
+                            ),
+                            None,
+                        )
+                        if last_assistant:
+                            reflection_messages_for_snapshot.append(copy.deepcopy(last_assistant))
+                    except Exception:
+                        pass
+
                     computer_use_snapshot = {
                         "status": "attention",
                         "completion_reason": "HANDOFF_TO_HUMAN",
                         "step_index_next": step_index + 1,
-                        "steps": [asdict(s) for s in steps],
-                        "handback": {
-                            "request": handback_request,
-                            "screenshot_b64": handback_screenshot_b64,
-                            "timestamp": handback_timestamp,
-                            "step_index": step_index,
-                        },
+                        "trajectory_till_now": _build_trajectory_till_now(
+                            steps,
+                            generator_messages,
+                            reflection_messages_for_snapshot,
+                        ),
                         "runner": {
                             "trajectory_md": partial_trajectory_md,
                         },
-                        "prompts": _build_prompts_snapshot(
-                            cast("Worker", agent.executor),
-                            persist_images=False,
-                            keep_image_turns=2,
-                        ),
+                        "handback_request": handback_request,
+                        "handback_screenshot_b64": handback_screenshot_b64,
                         "request": {
                             "task": request.task,
                             "worker": asdict(request.worker),
@@ -633,7 +630,6 @@ def runner(
                             if request.tool_constraints
                             else None,
                         },
-                        "latest_screenshot_b64": handback_screenshot_b64,
                     }
                     
                     # 3. Include MCP state if present in existing states
@@ -837,7 +833,13 @@ def runner(
         )
 
         # Generate rich markdown trajectory for orchestrator
-        trajectory_md = _build_trajectory_markdown(steps, status, completion_reason)
+        trajectory_md = _build_trajectory_markdown(
+            steps,
+            status,
+            completion_reason,
+            is_resume_flow=_is_resume_flow,
+            handback_inference=_inference_update.get("inference_result") if _inference_update else None,
+        )
 
         # Extract handback request if this was a handback
         handback_request_str = None

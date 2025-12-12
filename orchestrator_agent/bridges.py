@@ -238,10 +238,9 @@ def run_computer_use_agent(
             }
         )
         
-        # Pass orchestrator state and handback inference context via metadata
+        # Pass orchestrator state; handback inference is embedded in trajectory snapshots
         runner_metadata = {
             "orchestrator_state": orchestrator_state,
-            "handback_inference_context": request.metadata.get("handback_inference_context"),
         }
         
         raw_result_obj = runner(cu_request, orchestrator_context=runner_metadata)
@@ -283,30 +282,37 @@ def run_computer_use_agent(
 
 def run_computer_use_agent_resume(
     *,
-    cu_request: OrchestrateRequest,
+    run_id: Optional[str] = None,
+    inference_update: Optional[Dict[str, Any]] = None,
+    cu_request: Optional[OrchestrateRequest] = None,
     orchestrator_state: Optional[Dict[str, Any]] = None,
-    handback_inference_context: Optional[str] = None,
-    resume_state: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
-    Execute computer-use agent for a resume flow (post handback) and return trajectory.
+    Execute computer-use agent for a resume flow (post handback) and return trajectory plus raw result.
 
     Args:
         cu_request: Pre-built OrchestrateRequest to execute
         orchestrator_state: Optional orchestrator state to persist alongside CU snapshot
-        handback_inference_context: Smart diff / inference context to inject on resume
-        resume_state: Prior computer_use snapshot (steps, handback metadata)
+    resume_state: Prior computer_use snapshot (steps, handback metadata)
     """
     # Bind step_id to context for hierarchical logging
     set_step_id("resume-cu")
+
+    if cu_request is None:
+        logger.info(
+            "computer_use resume skipped: no cu_request provided (run_id=%s, inference_update_present=%s)",
+            run_id,
+            bool(inference_update),
+        )
+        return "Resume not executed; cu_request missing."
 
     try:
         from computer_use_agent.orchestrator.runner import runner
 
         runner_metadata = {
+            "inference_update": inference_update,
+            "is_resume_flow": True,
             "orchestrator_state": orchestrator_state,
-            "handback_inference_context": handback_inference_context,
-            "resume_state": resume_state,
         }
 
         raw_result_obj = runner(cu_request, orchestrator_context=runner_metadata)
@@ -330,7 +336,7 @@ def run_computer_use_agent_resume(
         len(raw_dict.get("steps") or []),
         len(trajectory),
     )
-    return trajectory
+    return trajectory, raw_dict
 
 
 def run_agent_bridge(
