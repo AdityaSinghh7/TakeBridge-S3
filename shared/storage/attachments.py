@@ -1,0 +1,104 @@
+"""
+S3-compatible storage helpers for workflow/run attachments.
+
+Designed to work with Cloudflare R2 but functions with any S3 API
+as long as the credentials and endpoint are provided via environment.
+"""
+
+from __future__ import annotations
+
+import os
+from functools import lru_cache
+from typing import Any, Dict, Optional
+
+import boto3
+from botocore.config import Config as BotoConfig
+from botocore.exceptions import ClientError
+from pydantic_settings import BaseSettings
+
+
+class AttachmentStorageError(RuntimeError):
+    """Raised when attachment storage is misconfigured or fails."""
+
+
+class AttachmentStorageConfig(BaseSettings):
+    """Environment-driven configuration for attachment storage."""
+
+    ATTACHMENTS_BUCKET: str = ""
+    ATTACHMENTS_ENDPOINT_URL: str = ""
+    ATTACHMENTS_REGION: str = "auto"
+    ATTACHMENTS_ACCESS_KEY_ID: str = ""
+    ATTACHMENTS_SECRET_ACCESS_KEY: str = ""
+    ATTACHMENTS_PRESIGN_TTL_SECONDS: int = 900
+
+    class Config:
+        env_file = ".env"
+        extra = "ignore"
+
+
+class _AttachmentStorage:
+    """Thin wrapper around boto3 client with defensive defaults."""
+
+    def __init__(self, config: AttachmentStorageConfig) -> None:
+        if not config.ATTACHMENTS_BUCKET:
+            raise AttachmentStorageError("attachment bucket is not configured")
+        if not (config.ATTACHMENTS_ACCESS_KEY_ID and config.ATTACHMENTS_SECRET_ACCESS_KEY):
+            raise AttachmentStorageError("attachment storage credentials are not configured")
+        if not config.ATTACHMENTS_ENDPOINT_URL:
+            raise AttachmentStorageError("attachment storage endpoint is not configured")
+
+        self._config = config
+        session = boto3.session.Session()
+        self._client = session.client(
+            "s3",
+            endpoint_url=config.ATTACHMENTS_ENDPOINT_URL,
+            region_name=config.ATTACHMENTS_REGION,
+            aws_access_key_id=config.ATTACHMENTS_ACCESS_KEY_ID,
+            aws_secret_access_key=config.ATTACHMENTS_SECRET_ACCESS_KEY,
+            config=BotoConfig(signature_version="s3v4"),
+        )
+
+    @property
+    def bucket(self) -> str:
+        return self._config.ATTACHMENTS_BUCKET
+
+    def generate_presigned_put(
+        self,
+        key: str,
+        *,
+        content_type: Optional[str] = None,
+        expires_in: Optional[int] = None,
+    ) -> str:
+        params: Dict[str, Any] = {"Bucket": self.bucket, "Key": key}
+        if content_type:
+            params["ContentType"] = content_type
+        return self._client.generate_presigned_url(
+            "put_object",
+            Params=params,
+            ExpiresIn=expires_in or self._config.ATTACHMENTS_PRESIGN_TTL_SECONDS,
+        )
+
+    def generate_presigned_get(self, key: str, *, expires_in: Optional[int] = None) -> str:
+        return self._client.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": self.bucket, "Key": key},
+            ExpiresIn=expires_in or self._config.ATTACHMENTS_PRESIGN_TTL_SECONDS,
+        )
+
+    def head_object(self, key: str) -> Dict[str, Any]:
+        return self._client.head_object(Bucket=self.bucket, Key=key)
+
+    def delete_object(self, key: str) -> None:
+        try:
+            self._client.delete_object(Bucket=self.bucket, Key=key)
+        except ClientError as exc:  # pragma: no cover - defensive logging
+            code = exc.response.get("Error", {}).get("Code")
+            if code not in {"NoSuchBucket", "NoSuchKey"}:
+                raise
+
+
+@lru_cache(maxsize=1)
+def get_attachment_storage() -> _AttachmentStorage:
+    """Return singleton attachment storage client."""
+    config = AttachmentStorageConfig()
+    return _AttachmentStorage(config)

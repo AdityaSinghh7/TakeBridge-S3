@@ -88,3 +88,46 @@ class Workspace(Base):
         server_default=func.now(),
         nullable=False,
     )
+
+
+class WorkflowFile(Base):
+    __tablename__ = "workflow_files"
+
+    id = Column(String, primary_key=True)
+    workflow_id = Column(String, index=True, nullable=False)
+    user_id = Column(String, index=True, nullable=False)
+    source_type = Column(String, nullable=False, default="upload")
+    storage_key = Column(Text, nullable=False)
+    filename = Column(Text, nullable=False)
+    content_type = Column(Text)
+    size_bytes = Column(BigInteger)
+    checksum = Column(String(128))
+    status = Column(String, nullable=False, default="pending")
+    metadata_json = Column(JSONType, nullable=False, server_default="{}")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    run_files = relationship("WorkflowRunFile", back_populates="workflow_file")
+
+
+class WorkflowRunFile(Base):
+    __tablename__ = "workflow_run_files"
+
+    id = Column(String, primary_key=True)
+    run_id = Column(String, index=True, nullable=False)
+    workflow_file_id = Column(String, ForeignKey("workflow_files.id", ondelete="SET NULL"))
+    user_id = Column(String, index=True, nullable=False)
+    source_type = Column(String, nullable=False, default="upload")
+    storage_key = Column(Text, nullable=False)
+    filename = Column(Text, nullable=False)
+    content_type = Column(Text)
+    size_bytes = Column(BigInteger)
+    checksum = Column(String(128))
+    status = Column(String, nullable=False, default="pending")
+    vm_path = Column(Text)
+    error = Column(Text)
+    metadata_json = Column(JSONType, nullable=False, server_default="{}")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+    workflow_file = relationship("WorkflowFile", back_populates="run_files")

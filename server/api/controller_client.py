@@ -11,10 +11,11 @@ This module provides a lightweight wrapper that:
 from __future__ import annotations
 
 import os
+import io
 from dataclasses import dataclass
 import logging
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Sequence, Union
+from typing import Any, Dict, Iterable, Optional, Sequence, Union, BinaryIO
 from urllib.parse import urlparse, urlunparse
 
 import requests
@@ -468,15 +469,30 @@ class VMControllerClient:
         )
         return response.content
 
-    def upload_file(self, path: Union[str, Path], data: bytes, *, timeout: Optional[float] = None) -> str:
+    def upload_file(
+        self,
+        path: Union[str, Path],
+        data: Union[bytes, bytearray, BinaryIO],
+        *,
+        timeout: Optional[float] = None,
+    ) -> str:
         """
         Upload a file to the VM (`/setup/upload`).
         """
+        if hasattr(data, "read"):
+            file_payload = ("payload", data)  # type: ignore[arg-type]
+            try:
+                data.seek(0)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        else:
+            file_payload = ("payload", io.BytesIO(data))
+
         response = self._request(
             "POST",
             "/setup/upload",
             data={"file_path": str(path)},
-            files={"file_data": ("payload", data)},
+            files={"file_data": file_payload},
             timeout=timeout,
         )
         return response.text

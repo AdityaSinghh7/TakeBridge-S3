@@ -45,6 +45,7 @@ from vm_manager.config import settings
 from orchestrator_agent.data_types import OrchestratorRequest
 from shared.run_context import RUN_LOG_ID
 from .auth import get_current_user, CurrentUser
+from .run_attachments import stage_files_for_run, AttachmentStageError
 from shared.supabase_client import get_service_supabase_client
 from shared.db.engine import SessionLocal
 from sqlalchemy import text
@@ -89,6 +90,9 @@ PERSISTED_EVENTS = {
     # Human Attention (handback to human)
     "human_attention.required",
     "human_attention.resumed",
+    
+    "workspace.attachments",
+
 }
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -440,6 +444,19 @@ def _provision_controller_session(user_id: str, run_id: Optional[str] = None) ->
         vm_id = workspace_info["id"]
         db = SessionLocal()
         try:
+            current_env_row = db.execute(
+                text("SELECT environment FROM workflow_runs WHERE id = :run_id"),
+                {"run_id": run_id},
+            ).scalar_one_or_none()
+            env_payload: Dict[str, Any] = {}
+            if current_env_row:
+                try:
+                    env_payload = json.loads(current_env_row) if isinstance(current_env_row, str) else dict(current_env_row)
+                except Exception:
+                    env_payload = {}
+            env_payload = dict(env_payload or {})
+            env_payload["endpoint"] = endpoint
+
             db.execute(
                 text(
                     """
@@ -468,7 +485,7 @@ def _provision_controller_session(user_id: str, run_id: Optional[str] = None) ->
                     WHERE id = :run_id
                     """
                 ),
-                {"vm_id": vm_id, "env": json.dumps({"endpoint": endpoint}), "run_id": run_id},
+                {"vm_id": vm_id, "env": json.dumps(env_payload), "run_id": run_id},
             )
             db.commit()
         except Exception:
@@ -488,6 +505,20 @@ def _resolve_controller_session(
     if controller_override and controller_override.get("base_url"):
         return _normalize_controller_payload(controller_override)
     return _provision_controller_session(user_id, run_id)
+
+
+def _attach_workspace_files(workspace: Dict[str, Any], run_id: Optional[str]) -> Dict[str, Any]:
+    if not run_id:
+        return workspace
+    try:
+        attachments = stage_files_for_run(run_id, workspace)
+    except AttachmentStageError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    if not attachments:
+        return workspace
+    updated = dict(workspace)
+    updated["attachments"] = attachments
+    return updated
 
 def _create_streaming_response(
     request: OrchestrateRequest,
@@ -799,6 +830,7 @@ async def orchestrate_stream_post(
         setattr(request, "composed_plan", composed_plan)
 
     workspace_info = payload.get("workspace") or workspace_info
+    workspace_info = _attach_workspace_files(workspace_info, run_id)
 
     return _create_streaming_response(request, user_id, tool_constraints, workspace_info, run_id=run_id)
 
@@ -842,6 +874,7 @@ async def internal_execute_run(
     if composed_plan is not None:
         setattr(request, "composed_plan", composed_plan)
     workspace_info = payload.get("workspace") or workspace_info
+    workspace_info = _attach_workspace_files(workspace_info, run_id)
 
     return _create_streaming_response(
         request,
