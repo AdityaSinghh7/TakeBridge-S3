@@ -37,8 +37,9 @@ def _download_to_temp(url: str) -> tempfile.SpooledTemporaryFile:
         for chunk in resp.iter_content(chunk_size=DOWNLOAD_CHUNK_BYTES):
             if chunk:
                 tmp.write(chunk)
+    size = tmp.tell()
     tmp.seek(0)
-    logger.info("[attachments] download complete (%s bytes)", tmp.tell())
+    logger.info("[attachments] download complete (%s bytes)", size)
     return tmp
 
 

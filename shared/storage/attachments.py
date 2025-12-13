@@ -96,6 +96,21 @@ class _AttachmentStorage:
             if code not in {"NoSuchBucket", "NoSuchKey"}:
                 raise
 
+    def upload_bytes(
+        self,
+        key: str,
+        data: bytes,
+        *,
+        content_type: Optional[str] = None,
+        metadata: Optional[Dict[str, str]] = None,
+    ) -> None:
+        extra: Dict[str, Any] = {}
+        if content_type:
+            extra["ContentType"] = content_type
+        if metadata:
+            extra["Metadata"] = metadata
+        self._client.put_object(Bucket=self.bucket, Key=key, Body=data, **extra)
+
 
 @lru_cache(maxsize=1)
 def get_attachment_storage() -> _AttachmentStorage:

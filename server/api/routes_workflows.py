@@ -23,7 +23,7 @@ from shared.db.engine import SessionLocal, DB_URL
 from shared.supabase_client import get_supabase_client
 from uuid import UUID
 from shared.storage import get_attachment_storage, AttachmentStorageError
-from shared.db.models import WorkflowFile, WorkflowRunFile
+from shared.db.models import WorkflowFile, WorkflowRunFile, WorkflowRunArtifact
 
 logger = logging.getLogger(__name__)
 
@@ -633,6 +633,60 @@ def get_run_vm(
         return {"vm": vm_info}
     finally:
         db.close()
+
+
+@router.get("/runs/{run_id}/artifacts")
+def list_run_artifacts(
+    run_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    db = SessionLocal()
+    try:
+        run_row = db.execute(
+            text(
+                """
+                SELECT id FROM workflow_runs
+                WHERE id = :run_id AND user_id = :user_id
+                """
+            ),
+            {"run_id": run_id, "user_id": current_user.sub},
+        ).fetchone()
+        if not run_row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run_not_found")
+
+        rows = (
+            db.execute(
+                select(WorkflowRunArtifact)
+                .where(WorkflowRunArtifact.run_id == run_id)
+                .order_by(WorkflowRunArtifact.created_at.asc())
+            )
+            .scalars()
+            .all()
+        )
+    finally:
+        db.close()
+
+    try:
+        storage = get_attachment_storage()
+    except AttachmentStorageError as exc:
+        logger.error("Attachment storage misconfigured: %s", exc)
+        raise HTTPException(status_code=500, detail="attachments_not_configured")
+
+    artifacts = []
+    for row in rows:
+        artifacts.append(
+            {
+                "id": row.id,
+                "filename": row.filename,
+                "size_bytes": row.size_bytes,
+                "content_type": row.content_type,
+                "storage_key": row.storage_key,
+                "source_path": row.source_path,
+                "download_url": storage.generate_presigned_get(row.storage_key),
+            }
+        )
+
+    return {"artifacts": artifacts}
 
 
 @router.patch("/workflows/{workflow_id}")

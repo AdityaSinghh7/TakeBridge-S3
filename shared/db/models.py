@@ -131,3 +131,19 @@ class WorkflowRunFile(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
     workflow_file = relationship("WorkflowFile", back_populates="run_files")
+
+
+class WorkflowRunArtifact(Base):
+    __tablename__ = "workflow_run_artifacts"
+
+    id = Column(String, primary_key=True)
+    run_id = Column(String, index=True, nullable=False)
+    filename = Column(Text, nullable=False)
+    storage_key = Column(Text, nullable=False)
+    size_bytes = Column(BigInteger)
+    content_type = Column(Text)
+    checksum = Column(String(128))
+    source_path = Column(Text)
+    metadata_json = Column(JSONType, nullable=False, server_default="{}")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
