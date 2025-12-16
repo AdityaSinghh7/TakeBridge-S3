@@ -196,6 +196,7 @@ def enqueue_workflow_run(
     """
     Enqueue a workflow run and debit credits in one transaction.
     """
+    request_start = time.monotonic()
     try:
         UUID(str(workflow_id))
     except Exception:
@@ -216,11 +217,31 @@ def enqueue_workflow_run(
             if fid is not None and str(fid).strip()
         ]
 
+    metadata_keys = sorted(metadata.keys()) if isinstance(metadata, dict) else [f"<{type(metadata).__name__}>"]
+    environment_keys = (
+        sorted(environment_payload.keys()) if isinstance(environment_payload, dict) else [f"<{type(environment_payload).__name__}>"]
+    )
+    file_ids_summary: Any
+    if requested_file_ids is None:
+        file_ids_summary = "default"
+    else:
+        file_ids_summary = {"count": len(requested_file_ids), "preview": requested_file_ids[:3]}
+    logger.info(
+        "Enqueue requested workflow_id=%s user_id=%s trigger_source=%s file_ids=%s metadata_keys=%s environment_keys=%s",
+        workflow_id,
+        user_id,
+        trigger_source,
+        file_ids_summary,
+        metadata_keys,
+        environment_keys,
+    )
+
     # Validate workflow ownership via Supabase (RLS-protected)
     client = get_supabase_client(current_user.token)
     wf_res = _get_supabase_workflow(client, workflow_id)
 
     run_id = str(uuid.uuid4())
+    logger.info("Enqueue allocated run_id=%s workflow_id=%s user_id=%s", run_id, workflow_id, user_id)
 
     db = SessionLocal()
     try:
@@ -249,6 +270,13 @@ def enqueue_workflow_run(
                 )
             )
 
+        logger.info(
+            "Enqueue attachments resolved run_id=%s workflow_id=%s files=%s",
+            run_id,
+            workflow_id,
+            len(run_file_records),
+        )
+
         if not isinstance(environment_payload, dict):
             environment_payload = {}
         if run_file_records:
@@ -265,6 +293,12 @@ def enqueue_workflow_run(
             ]
             environment_payload = dict(environment_payload)
             environment_payload["files"] = env_files
+        logger.info(
+            "Enqueue payload finalized run_id=%s metadata_keys=%s environment_keys=%s",
+            run_id,
+            metadata_keys,
+            sorted(environment_payload.keys()) if isinstance(environment_payload, dict) else [f"<{type(environment_payload).__name__}>"],
+        )
 
         # Debit credits atomically
         credit_row = db.execute(
@@ -281,7 +315,20 @@ def enqueue_workflow_run(
 
         if not credit_row:
             db.rollback()
+            logger.warning(
+                "Enqueue rejected insufficient credits workflow_id=%s user_id=%s cost=%s",
+                workflow_id,
+                user_id,
+                RUN_CREDIT_COST,
+            )
             raise HTTPException(status_code=402, detail="insufficient_credits")
+
+        logger.info(
+            "Enqueue debited credits run_id=%s user_id=%s credits_remaining=%s",
+            run_id,
+            user_id,
+            credit_row[0],
+        )
 
         # Insert run row
         db.execute(
@@ -307,6 +354,7 @@ def enqueue_workflow_run(
                 "environment": json.dumps(environment_payload),
             },
         )
+        logger.info("Enqueue inserted workflow_runs row run_id=%s workflow_id=%s user_id=%s", run_id, workflow_id, user_id)
 
         if run_file_records:
             for record in run_file_records:
@@ -314,6 +362,12 @@ def enqueue_workflow_run(
 
         # Notify listeners (Postgres only) that a run was enqueued.
         if DB_URL.startswith("postgres"):
+            logger.info(
+                "Enqueue notifying workers channel=%s run_id=%s user_id=%s",
+                "workflow_run_queued",
+                run_id,
+                user_id,
+            )
             db.execute(
                 text(
                     """
@@ -325,8 +379,23 @@ def enqueue_workflow_run(
                 ),
                 {"run_id": run_id, "user_id": user_id},
             )
+        else:
+            logger.info(
+                "Enqueue skipping worker notify (DB is not Postgres) run_id=%s db=%s",
+                run_id,
+                urlparse(DB_URL).scheme or "unknown",
+            )
 
         db.commit()
+        elapsed_ms = int((time.monotonic() - request_start) * 1000)
+        logger.info(
+            "Enqueue committed run_id=%s workflow_id=%s user_id=%s status=queued credits_remaining=%s duration_ms=%s",
+            run_id,
+            workflow_id,
+            user_id,
+            credit_row[0],
+            elapsed_ms,
+        )
 
     except HTTPException:
         raise
@@ -698,6 +767,9 @@ def list_run_artifacts(
         )
     finally:
         db.close()
+
+    if not rows:
+        return {"artifacts": []}
 
     try:
         storage = get_attachment_storage()
