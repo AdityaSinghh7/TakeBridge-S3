@@ -47,6 +47,8 @@ from vm_manager.config import settings
 from orchestrator_agent.data_types import OrchestratorRequest
 from shared.run_context import RUN_LOG_ID
 from .auth import get_current_user, CurrentUser
+from .run_attachments import stage_files_for_run, AttachmentStageError
+from .run_artifacts import capture_context_baseline, export_context_artifacts, merge_run_environment
 from shared.supabase_client import get_service_supabase_client
 from shared.db.engine import SessionLocal
 from sqlalchemy import text
@@ -56,6 +58,7 @@ PERSISTED_EVENTS = {
     # Orchestrator Agent
     "orchestrator.planning.completed",
     "orchestrator.step.completed",
+    "orchestrator.task.completed",
     # Computer-Use Agent
     "runner.started",
     "runner.step.agent_response",
@@ -91,6 +94,9 @@ PERSISTED_EVENTS = {
     # Human Attention (handback to human)
     "human_attention.required",
     "human_attention.resumed",
+    
+    "workspace.attachments",
+    "run.artifacts.created",
 }
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -477,12 +483,11 @@ def _provision_controller_session(user_id: str, run_id: Optional[str] = None) ->
                     """
                     UPDATE workflow_runs
                     SET vm_id = :vm_id,
-                        environment = :env,
                         updated_at = NOW()
                     WHERE id = :run_id
                     """
                 ),
-                {"vm_id": vm_id, "env": json.dumps({"endpoint": endpoint}), "run_id": run_id},
+                {"vm_id": vm_id, "run_id": run_id},
             )
             db.commit()
         except Exception:
@@ -490,6 +495,7 @@ def _provision_controller_session(user_id: str, run_id: Optional[str] = None) ->
             raise
         finally:
             db.close()
+        merge_run_environment(run_id, {"endpoint": endpoint})
 
     return controller_payload, workspace_info
 
@@ -560,6 +566,22 @@ def _resolve_controller_session(
 
     # Fallback to provisioning a new session
     return _provision_controller_session(user_id, run_id)
+
+
+def _attach_workspace_files(workspace: Dict[str, Any], run_id: Optional[str]) -> Dict[str, Any]:
+    if not run_id:
+        return workspace
+    try:
+        attachments = stage_files_for_run(run_id, workspace)
+    except AttachmentStageError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    if not attachments:
+        capture_context_baseline(run_id, workspace)
+        return workspace
+    updated = dict(workspace)
+    updated["attachments"] = attachments
+    capture_context_baseline(run_id, updated)
+    return updated
 
 def _create_streaming_response(
     request: OrchestrateRequest,
@@ -742,6 +764,12 @@ def _create_streaming_response(
                     )
                     _update_run_status(run_id, result_dict.get("status") or "success", summary=summary or None)
         finally:
+            exported_artifacts: List[Dict[str, Any]] = []
+            if run_id_local and workspace:
+                try:
+                    exported_artifacts = export_context_artifacts(run_id_local, workspace)
+                except Exception as exc:
+                    logger.warning("Failed to export artifacts for run %s: %s", run_id_local, exc)
             if heartbeat:
                 heartbeat.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -759,6 +787,11 @@ def _create_streaming_response(
                     )
                 except Exception:
                     logger.info("Run log handlers detached for run_id=%s", run_id_local)
+            if exported_artifacts:
+                _publish(
+                    "run.artifacts.created",
+                    {"run_id": run_id_local, "artifacts": exported_artifacts},
+                )
             await queue.put(None)
 
     asyncio.create_task(_run_and_stream())
@@ -890,6 +923,7 @@ async def orchestrate_stream_post(
         setattr(request, "composed_plan", composed_plan)
 
     workspace_info = payload.get("workspace") or workspace_info
+    workspace_info = _attach_workspace_files(workspace_info, run_id)
 
     return _create_streaming_response(request, user_id, tool_constraints, workspace_info, run_id=run_id)
 
@@ -933,6 +967,7 @@ async def internal_execute_run(
     if composed_plan is not None:
         setattr(request, "composed_plan", composed_plan)
     workspace_info = payload.get("workspace") or workspace_info
+    workspace_info = _attach_workspace_files(workspace_info, run_id)
 
     return _create_streaming_response(
         request,

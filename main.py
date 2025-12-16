@@ -34,7 +34,8 @@ logging.basicConfig(
     filename=log_file_path,
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    force=True
+    force=True,
+    encoding='utf-8'
 )
 
 # Redirect stdout and stderr to the file
@@ -1548,6 +1549,87 @@ def capture_screen_with_cursor():
     return send_file(file_path, mimetype='image/png')
 
 
+@app.post("/file")
+def fetch_file():
+    data = request.form or request.get_json(force=True, silent=True) or {}
+    file_path = os.path.expandvars(os.path.expanduser(data.get("file_path", "")))
+    if not file_path or not os.path.isfile(file_path):
+        return jsonify({"error": "file_not_found"}), 404
+    try:
+        return send_file(file_path, as_attachment=True)
+    except Exception as exc:
+        logger.error("Failed to send file %s: %s", file_path, exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.post("/list_directory")
+def list_directory_route():
+    data = request.get_json(force=True, silent=True) or {}
+    path = data.get("path") or "."
+    include_hidden = bool(data.get("include_hidden", False))
+    
+    # Safe conversion for max_entries
+    try:
+        max_entries = int(data.get("max_entries") or 1000)
+    except (ValueError, TypeError):
+        max_entries = 1000
+
+    resolved = os.path.expandvars(os.path.expanduser(path))
+    
+    if not os.path.isdir(resolved):
+        return jsonify({"error": "directory_not_found"}), 404
+
+    entries = []
+    count = 0
+    
+    try:
+        # os.scandir is faster and fetches attributes in one go
+        with os.scandir(resolved) as it:
+            # Sort manually because scandir yields in arbitrary order
+            sorted_entries = sorted(it, key=lambda e: e.name.lower())
+            
+            for entry in sorted_entries:
+                if count >= max_entries:
+                    break
+                
+                if not include_hidden and entry.name.startswith("."):
+                    continue
+
+                try:
+                    # Get stats. follow_symlinks=False ensures we don't crash on broken links
+                    stat = entry.stat(follow_symlinks=False)
+                    
+                    # Determine type
+                    is_dir = entry.is_dir(follow_symlinks=False)
+                    
+                    # Get metadata safely
+                    size = stat.st_size if not is_dir else 0
+                    modified = stat.st_mtime
+                    
+                    entries.append({
+                        "name": entry.name,
+                        "path": entry.path,
+                        "is_dir": is_dir,
+                        "size": size,
+                        "modified": modified,
+                    })
+                    count += 1
+                    
+                except OSError:
+                    # If we can't read a specific file (permission/locked), 
+                    # we skip it instead of crashing the whole request.
+                    continue
+                    
+    except PermissionError:
+        return jsonify({"error": "permission_denied_for_directory"}), 403
+    except Exception as exc:
+        logger.error("Failed to list directory %s: %s", resolved, exc)
+        return jsonify({"error": str(exc)}), 500
+
+    return jsonify({"path": resolved, "entries": entries})
+
+
+
 @app.post("/setup/upload")
 def upload_file():
     if 'file_path' not in request.form or 'file_data' not in request.files:
@@ -1582,34 +1664,48 @@ def execute_command():
     _log_request_details("execute_command")
     data = request.get_json(force=True, silent=True) or {}
     shell = data.get('shell', False)
+    
+    # --- Check 1: Empty Command ---
     command = data.get('command', '' if shell else [])
+    if not command:
+        return jsonify({'status': 'error', 'message': 'Command is empty'}), 400
+
     if isinstance(command, str) and not shell:
         command = shlex.split(command)
+    
+    # Expand User Paths (~/)
     for i, arg in enumerate(command):
         if isinstance(arg, str) and arg.startswith("~/"):
             command[i] = os.path.expanduser(arg)
 
+    # Ensure we use the correct python executable on Windows
     if platform_name == "Windows" and not shell and isinstance(command, list) and command:
         if command[0] in ("python3", "python"):
             command[0] = sys.executable
+
     def _try_run(cmd_to_run):
-        flags = subprocess.CREATE_NO_WINDOW if platform_name == "Windows" else 0
+        # NOTE: If you are doing GUI automation, you might want to remove CREATE_NO_WINDOW (flags=0)
+        # flags = subprocess.CREATE_NO_WINDOW if platform_name == "Windows" else 0
+        flags = 0 
         return subprocess.run(
             cmd_to_run,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.PIPE, # This captures the SyntaxError
             shell=shell,
             text=True,
             timeout=120,
             creationflags=flags,
         )
+
     started = time.time()
     acquired = _exec_lock.acquire(timeout=5)
     if not acquired:
         return jsonify({'status': 'error', 'message': 'executor busy'}), 503
+        
     try:
         result = _try_run(command)
-        # Retry once with a fixed payload if Windows python -c base64 string lost quotes
+
+        # --- Check 2: Retry Logic for Windows Base64 Escaping Issues ---
         if (
             platform_name == "Windows"
             and not shell
@@ -1631,20 +1727,34 @@ def execute_command():
                     patched_cmd[2] = fixed_code
                     logger.info("Retrying execute_command with patched base64 payload")
                     result = _try_run(patched_cmd)
+
         duration = time.time() - started
-        logger.info(
-            "execute_command finished returncode=%s duration=%.2fs",
-            result.returncode,
-            duration,
-        )
+        
+        # --- NEW LOGGING LOGIC ---
+        # If the command failed (returncode != 0), log the error explicitly
+        if result.returncode != 0:
+            logger.error(
+                "Command FAILED (rc=%s). STDERR:\n%s", 
+                result.returncode, 
+                result.stderr.strip()
+            )
+            api_status = "error" # Change status to error
+        else:
+            logger.info(
+                "Command SUCCESS (rc=0). Duration=%.2fs", 
+                duration
+            )
+            api_status = "success"
+
         return jsonify({
-            'status': 'success',
+            'status': api_status, # Now accurately reflects command success
             'output': result.stdout,
             'error': result.stderr,
             'returncode': result.returncode
         })
+        
     except Exception as exc:
-        logger.error("execute_command failed: %s", exc)
+        logger.error("execute_command CRITICAL failure: %s", exc)
         return jsonify({'status': 'error', 'message': str(exc)}), 500
     finally:
         _exec_lock.release()
