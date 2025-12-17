@@ -11,9 +11,11 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
+import hashlib
 import json
 import logging
 import os
+import secrets
 import time
 import uuid
 from datetime import datetime
@@ -21,7 +23,7 @@ from dataclasses import asdict
 from typing import Any, Dict, Optional, Tuple, List
 from urllib.parse import urlparse
 
-from fastapi import Body, FastAPI, HTTPException, Depends, Header
+from fastapi import Body, FastAPI, HTTPException, Depends, Header, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -50,7 +52,7 @@ from .auth import get_current_user, CurrentUser
 from .run_attachments import stage_files_for_run, AttachmentStageError
 from .run_artifacts import capture_context_baseline, export_context_artifacts, merge_run_environment
 from shared.supabase_client import get_service_supabase_client
-from shared.db.engine import SessionLocal
+from shared.db.engine import SessionLocal, DB_URL
 from sqlalchemy import text
 
 # Persisted event whitelist (see docs/latest_frontend_connection_guide.md)
@@ -113,6 +115,35 @@ logger = logging.getLogger(__name__)
 
 # Suppress uvicorn access logs to WARNING level (keep errors, remove routine logs)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
+
+def _summarize_db_url(db_url: str) -> str:
+    """Return a safe, password-free DB URL summary for logs."""
+    try:
+        parsed = urlparse(db_url)
+    except Exception:
+        return "<invalid>"
+    if parsed.scheme.startswith("sqlite"):
+        return parsed.scheme
+    host = parsed.hostname or ""
+    port = f":{parsed.port}" if parsed.port else ""
+    user = f"{parsed.username}@" if parsed.username else ""
+    path = parsed.path or ""
+    return f"{parsed.scheme}://{user}{host}{port}{path}"
+
+
+def _token_fingerprint(token: str) -> str:
+    if not token:
+        return "unset"
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:10]
+
+
+logger.info(
+    "Config INTERNAL_API_TOKEN_set=%s INTERNAL_API_TOKEN_fp=%s DB_URL=%s",
+    bool((os.getenv("INTERNAL_API_TOKEN") or "").strip()),
+    _token_fingerprint((os.getenv("INTERNAL_API_TOKEN") or "").strip()),
+    _summarize_db_url(DB_URL),
+)
 
 logger.info("Starting Orchestrator API")
 
@@ -930,23 +961,56 @@ async def orchestrate_stream_post(
     return _create_streaming_response(request, user_id, tool_constraints, workspace_info, run_id=run_id)
 
 
-def _require_internal_token(token: Optional[str]) -> None:
-    expected = os.getenv("INTERNAL_API_TOKEN")
-    if not expected or token != expected:
+def _require_internal_token(
+    token: Optional[str],
+    *,
+    run_id: Optional[str] = None,
+    user_agent: Optional[str] = None,
+    token_source: Optional[str] = None,
+) -> None:
+    expected = (os.getenv("INTERNAL_API_TOKEN") or "").strip()
+    provided = (token or "").strip()
+    if not expected or not secrets.compare_digest(provided, expected):
+        logger.warning(
+            "Internal execute forbidden run_id=%s token_source=%s expected_set=%s expected_len=%s expected_fp=%s provided_len=%s provided_fp=%s user_agent=%s",
+            run_id,
+            token_source or "unknown",
+            bool(expected),
+            len(expected),
+            _token_fingerprint(expected),
+            len(provided),
+            _token_fingerprint(provided),
+            (user_agent or "")[:120],
+        )
         raise HTTPException(status_code=403, detail="forbidden")
 
 
 @app.post("/internal/runs/{run_id}/execute")
 async def internal_execute_run(
     run_id: str,
+    request: Request,
     payload: Dict[str, Any] = Body(...),
-    x_internal_token: Optional[str] = Header(default=None),
+    x_internal_token: Optional[str] = Header(default=None, alias="X-Internal-Token"),
+    authorization: Optional[str] = Header(default=None),
 ) -> StreamingResponse:
     """
     Internal endpoint for worker to trigger execution for a queued run.
     """
-    _require_internal_token(x_internal_token)
+    token_source = "x-internal-token" if x_internal_token else "missing"
+    token_value = x_internal_token
+    if not token_value and authorization:
+        token_source = "authorization"
+        auth = authorization.strip()
+        token_value = auth[7:].strip() if auth.lower().startswith("bearer ") else auth
 
+    _require_internal_token(
+        token_value,
+        run_id=run_id,
+        user_agent=request.headers.get("user-agent"),
+        token_source=token_source,
+    )
+
+    workflow_id = payload.get("workflow_id")
     user_id = payload.get("user_id")
     if not user_id:
         raise HTTPException(status_code=400, detail="user_id required")
@@ -954,6 +1018,15 @@ async def internal_execute_run(
     task = (payload.get("task") or "").strip()
     if not task:
         raise HTTPException(status_code=400, detail="task required")
+
+    logger.info(
+        "Internal execute requested run_id=%s workflow_id=%s user_id=%s task_len=%s tool_constraints=%s",
+        run_id,
+        workflow_id,
+        user_id,
+        len(task),
+        bool(payload.get("tool_constraints")),
+    )
 
     controller_override = payload.get("controller")
     try:
@@ -977,7 +1050,7 @@ async def internal_execute_run(
         tool_constraints=tool_constraints,
         workspace=workspace_info,
         run_id=run_id,
-        workflow_id=payload.get("workflow_id"),
+        workflow_id=workflow_id,
     )
 
 
