@@ -560,7 +560,7 @@ class OrchestratorRuntime:
                 response = client.create_response(
                     model="o4-mini",
                     messages=messages,
-                    max_output_tokens=3000,
+
                     reasoning_effort="high",
                 )
 

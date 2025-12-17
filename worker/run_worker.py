@@ -12,15 +12,17 @@ import json
 import logging
 import os
 import platform
+import random
 import sys
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional, TypeVar
 from urllib.parse import urlparse
 
 import requests
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError, DisconnectionError, InvalidatePoolError, OperationalError
 
-from shared.db.engine import SessionLocal, DB_URL
+from shared.db.engine import SessionLocal, DB_URL, engine
 from shared.supabase_client import get_service_supabase_client
 
 logger = logging.getLogger(__name__)
@@ -34,6 +36,13 @@ IS_POSTGRES = DB_URL.startswith("postgres")
 POLL_INTERVAL_SECONDS = float(os.getenv("WORKER_POLL_INTERVAL_SECONDS", "2"))
 IDLE_LOG_EVERY_SECONDS = float(os.getenv("WORKER_IDLE_LOG_EVERY_SECONDS", "30"))
 WORKER_CLAIMED_BY = os.getenv("WORKER_CLAIMED_BY") or f"worker@{platform.node()}:{os.getpid()}"
+
+DB_RETRY_MAX_ATTEMPTS = int(os.getenv("WORKER_DB_RETRY_MAX_ATTEMPTS", "5"))
+DB_RETRY_BACKOFF_BASE_SECONDS = float(os.getenv("WORKER_DB_RETRY_BACKOFF_BASE_SECONDS", "0.5"))
+DB_RETRY_BACKOFF_MAX_SECONDS = float(os.getenv("WORKER_DB_RETRY_BACKOFF_MAX_SECONDS", "10"))
+DB_RETRY_BACKOFF_JITTER_SECONDS = float(os.getenv("WORKER_DB_RETRY_BACKOFF_JITTER_SECONDS", "0.25"))
+
+T = TypeVar("T")
 
 
 def _token_fingerprint(token: str) -> str:
@@ -83,51 +92,130 @@ def _get_db_identity() -> Dict[str, str]:
         db.close()
 
 
-def _get_queue_snapshot() -> Dict[str, Any]:
-    db = SessionLocal()
+def _is_retryable_db_error(exc: Exception) -> bool:
+    if isinstance(exc, (DisconnectionError, InvalidatePoolError)):
+        return True
+    if isinstance(exc, DBAPIError) and bool(getattr(exc, "connection_invalidated", False)):
+        return True
+    if isinstance(exc, OperationalError):
+        msg = str(exc).lower()
+        transient_markers = (
+            "ssl connection has been closed unexpectedly",
+            "server closed the connection unexpectedly",
+            "connection to server at",
+            "could not connect to server",
+            "connection refused",
+            "connection reset by peer",
+            "connection timed out",
+            "timeout expired",
+            "terminating connection due to administrator command",
+            "the database system is starting up",
+            "the database system is shutting down",
+            "broken pipe",
+        )
+        if any(marker in msg for marker in transient_markers):
+            return True
+    return False
+
+
+def _db_backoff_seconds(attempt: int) -> float:
+    base = max(0.0, DB_RETRY_BACKOFF_BASE_SECONDS)
+    cap = max(base, DB_RETRY_BACKOFF_MAX_SECONDS)
+    delay = min(cap, base * (2 ** max(0, attempt - 1)))
+    jitter = max(0.0, DB_RETRY_BACKOFF_JITTER_SECONDS)
+    if jitter:
+        delay += random.uniform(0.0, jitter)
+    return delay
+
+
+def _reset_db_pool(reason: str, exc: Optional[Exception] = None) -> None:
     try:
-        queued_count = int(
-            db.execute(text("SELECT COUNT(*) FROM workflow_runs WHERE status = 'queued'")).scalar() or 0
+        engine.dispose()
+        logger.debug("Disposed DB connection pool (%s)", reason)
+    except Exception as dispose_exc:
+        logger.debug(
+            "Failed to dispose DB connection pool reason=%s err=%s orig_err=%s",
+            reason,
+            dispose_exc,
+            exc,
         )
-        oldest = (
-            db.execute(
-                text(
-                    """
-                    SELECT id, workflow_id, user_id, created_at
-                    FROM workflow_runs
-                    WHERE status = 'queued'
-                    ORDER BY created_at ASC
-                    LIMIT 1
-                    """
-                )
+
+
+def _with_db_retry(op_name: str, fn: Callable[[], T]) -> T:
+    max_attempts = max(1, int(DB_RETRY_MAX_ATTEMPTS))
+    last_exc: Optional[Exception] = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= max_attempts or not _is_retryable_db_error(exc):
+                raise
+            backoff = _db_backoff_seconds(attempt)
+            logger.warning(
+                "Transient DB error during %s (attempt %s/%s): %s; retrying in %.2fs",
+                op_name,
+                attempt,
+                max_attempts,
+                exc,
+                backoff,
             )
-            .mappings()
-            .first()
-        )
-        newest = (
-            db.execute(
-                text(
-                    """
-                    SELECT id, status, claimed_by, created_at, summary
-                    FROM workflow_runs
-                    ORDER BY created_at DESC
-                    LIMIT 1
-                    """
-                )
+            _reset_db_pool(op_name, exc)
+            time.sleep(backoff)
+    # Should be unreachable, but keeps type checkers happy.
+    assert last_exc is not None
+    raise last_exc
+
+
+def _get_queue_snapshot() -> Dict[str, Any]:
+    def _op() -> Dict[str, Any]:
+        db = SessionLocal()
+        try:
+            queued_count = int(
+                db.execute(text("SELECT COUNT(*) FROM workflow_runs WHERE status = 'queued'")).scalar() or 0
             )
-            .mappings()
-            .first()
-        )
-        return {
-            "queued_count": queued_count,
-            "oldest_queued": dict(oldest) if oldest else None,
-            "newest": dict(newest) if newest else None,
-        }
+            oldest = (
+                db.execute(
+                    text(
+                        """
+                        SELECT id, workflow_id, user_id, created_at
+                        FROM workflow_runs
+                        WHERE status = 'queued'
+                        ORDER BY created_at ASC
+                        LIMIT 1
+                        """
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            newest = (
+                db.execute(
+                    text(
+                        """
+                        SELECT id, status, claimed_by, created_at, summary
+                        FROM workflow_runs
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                        """
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            return {
+                "queued_count": queued_count,
+                "oldest_queued": dict(oldest) if oldest else None,
+                "newest": dict(newest) if newest else None,
+            }
+        finally:
+            db.close()
+
+    try:
+        return _with_db_retry("_get_queue_snapshot", _op)
     except Exception as exc:
-        logger.warning("Failed to fetch queue snapshot: %s", exc)
+        logger.warning("Failed to fetch queue snapshot after retries: %s", exc)
         return {}
-    finally:
-        db.close()
 
 
 def _log_worker_startup() -> None:
@@ -190,78 +278,91 @@ def _json_safe(val: Any) -> Any:
 
 def claim_next_run(claimed_by: str) -> Optional[Dict[str, Any]]:
     """Atomically claim the oldest queued run."""
-    db = SessionLocal()
+    def _op() -> Optional[Dict[str, Any]]:
+        db = SessionLocal()
+        try:
+            row = db.execute(
+                text(
+                    """
+                    WITH next_run AS (
+                        SELECT id, workflow_id, user_id, created_at
+                        FROM workflow_runs
+                        WHERE status = 'queued'
+                        ORDER BY created_at ASC
+                        LIMIT 1
+                        FOR UPDATE SKIP LOCKED
+                    )
+                    UPDATE workflow_runs wr
+                    SET status = 'running',
+                        started_at = NOW(),
+                        last_heartbeat_at = NOW(),
+                        claimed_by = :claimed_by,
+                        updated_at = NOW()
+                    FROM next_run
+                    WHERE wr.id = next_run.id
+                    RETURNING wr.id, wr.workflow_id, wr.user_id, wr.created_at
+                    """
+                ),
+                {"claimed_by": claimed_by},
+            ).mappings().first()
+            db.commit()
+            return dict(row) if row else None
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
     try:
-        row = db.execute(
-            text(
-                """
-                WITH next_run AS (
-                    SELECT id, workflow_id, user_id, created_at
-                    FROM workflow_runs
-                    WHERE status = 'queued'
-                    ORDER BY created_at ASC
-                    LIMIT 1
-                    FOR UPDATE SKIP LOCKED
-                )
-                UPDATE workflow_runs wr
-                SET status = 'running',
-                    started_at = NOW(),
-                    last_heartbeat_at = NOW(),
-                    claimed_by = :claimed_by,
-                    updated_at = NOW()
-                FROM next_run
-                WHERE wr.id = next_run.id
-                RETURNING wr.id, wr.workflow_id, wr.user_id, wr.created_at
-                """
-            ),
-            {"claimed_by": claimed_by},
-        ).mappings().first()
-        db.commit()
-        return dict(row) if row else None
+        return _with_db_retry("claim_next_run", _op)
     except Exception as exc:
-        db.rollback()
-        logger.exception("Failed to claim run: %s", exc)
+        logger.exception("Failed to claim run after retries: %s", exc)
         return None
-    finally:
-        db.close()
 
 
 def update_run_status(run_id: str, status: str, summary: Optional[str] = None):
-    db = SessionLocal()
-    try:
-        db.execute(
-            text(
-                """
-                UPDATE workflow_runs
-                SET status = :status,
-                    summary = COALESCE(:summary, summary),
-                    ended_at = CASE WHEN :terminal THEN NOW() ELSE ended_at END,
-                    updated_at = NOW()
-                WHERE id = :run_id
-                """
-            ),
-            {
-                "status": status,
-                "summary": summary,
-                "run_id": run_id,
-                "terminal": status in {"success", "error", "attention", "cancelled"},
-            },
-        )
-        db.commit()
-        if summary:
-            logger.info(
-                "Updated run status run_id=%s status=%s summary_preview=%s",
-                run_id,
-                status,
-                summary[:200],
+    def _op() -> None:
+        db = SessionLocal()
+        try:
+            db.execute(
+                text(
+                    """
+                    UPDATE workflow_runs
+                    SET status = :status,
+                        summary = COALESCE(:summary, summary),
+                        ended_at = CASE WHEN :terminal THEN NOW() ELSE ended_at END,
+                        updated_at = NOW()
+                    WHERE id = :run_id
+                    """
+                ),
+                {
+                    "status": status,
+                    "summary": summary,
+                    "run_id": run_id,
+                    "terminal": status in {"success", "error", "attention", "cancelled"},
+                },
             )
-        else:
-            logger.info("Updated run status run_id=%s status=%s", run_id, status)
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+
+    try:
+        _with_db_retry("update_run_status", _op)
     except Exception as exc:
-        db.rollback()
-        logger.exception("Failed to update run status run_id=%s status=%s: %s", run_id, status, exc)
-    finally:
-        db.close()
+        logger.exception("Failed to update run status after retries run_id=%s status=%s: %s", run_id, status, exc)
+        return
+    if summary:
+        logger.info(
+            "Updated run status run_id=%s status=%s summary_preview=%s",
+            run_id,
+            status,
+            summary[:200],
+        )
+    else:
+        logger.info("Updated run status run_id=%s status=%s", run_id, status)
 
 
 def fetch_workflow(workflow_id: str) -> Dict[str, Any]:
@@ -377,9 +478,13 @@ async def run_once(claimed_by: str = "worker") -> bool:
 
     try:
         wf = fetch_workflow(workflow_id)
-        task_prompt = wf.get("prompt") or wf.get("name") or "task"
-        composed_plan = wf.get("definition_json") or {}
-        logger.info("Triggering execution for run %s workflow %s", run_id, workflow_id)
+        definition_json = wf.get("definition_json") or {}
+        task_prompt = (
+            definition_json.get("combined_prompt")
+        )
+        task_prompt = str(task_prompt)
+        composed_plan = definition_json
+        logger.info("Triggering execution for run %s workflow %s task_prompt=%s", run_id, workflow_id, task_prompt)
         trigger_execution(run_id, workflow_id, user_id, task_prompt, composed_plan)
     except Exception as exc:
         logger.exception("Run %s failed to trigger execution: %s", run_id, exc)
