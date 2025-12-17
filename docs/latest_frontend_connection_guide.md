@@ -65,7 +65,7 @@ Only the events below are required/most useful to drive frontend updates; other 
 - `grounding.generate_text_coords.completed`
   - Purpose: OCR-based text span grounding finished.
   - Payload: `phrase` (string), `alignment` (as above), `coords` ([x, y] ints).
-- `behavior_narrator.completed`
+- `behavior_narrator.summary`
   - Purpose: behavior narrator finished captioning a screenshot pair.
   - Payload: `step` (int), `action` (pyautogui action text), `thoughts` (LLM reasoning), `caption` (fact-style description). Often aligns with `runner.step.behavior`.
 

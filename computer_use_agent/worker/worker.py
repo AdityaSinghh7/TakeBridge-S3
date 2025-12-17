@@ -438,7 +438,7 @@ class Worker(BaseModule):
                 logger.info("REFLECTION: %s", reflection)
         if reflection or reflection_thoughts:
             emit_event(
-                "worker.reflection.completed",
+                "worker.reflection.summary",
                 {
                     "step": current_step,
                     "reflection": reflection,
