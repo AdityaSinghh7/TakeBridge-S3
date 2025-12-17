@@ -276,7 +276,7 @@ class BehaviorNarrator:
             "fact_answer": f"Fact Caption from Screenshot {screenshot_num}: {fact_answer}",
         }
         emit_event(
-            "behavior_narrator.completed",
+            "behavior_narrator.summary",
             {
                 "step": screenshot_num,
                 "action": pyautogui_action,
