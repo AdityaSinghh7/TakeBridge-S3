@@ -4,7 +4,12 @@ from typing import TYPE_CHECKING
 
 from mcp_agent.types import ToolInvocationResult
 
-from ._common import _clean_payload, _invoke_mcp_tool, ensure_authorized
+from ._common import (
+    _clean_payload,
+    _invoke_mcp_tool,
+    ensure_authorized,
+    normalize_fields_argument,
+)
 
 if TYPE_CHECKING:
     from mcp_agent.core.context import AgentContext
@@ -17,8 +22,6 @@ from ..shopify_output import (
     shopify_update_order_output_schema,
     shopify_graph_ql_query_output_schema,
 )
-
-
 def shopify_update_order(context: "AgentContext", id: int, phone: str | None = None) -> ToolInvocationResult:
     """
     Update the phone number for an existing Shopify order by ID.
@@ -48,18 +51,21 @@ def shopify_update_order(context: "AgentContext", id: int, phone: str | None = N
 shopify_update_order.__tb_output_schema__ = shopify_update_order_output_schema
 
 
-def shopify_get_ordersby_id(context: "AgentContext", order_id: str, fields: str | None = None) -> ToolInvocationResult:
+def shopify_get_ordersby_id(
+    context: "AgentContext", order_id: str, fields: str | list[str] | None = None
+) -> ToolInvocationResult:
     """
     Retrieve a Shopify order by ID.
 
     Args:
         order_id: The unique identifier of the order to retrieve.
-        fields: Optional comma-separated list of fields to include (e.g., "id,line_items").
+        fields: Optional comma-separated list of fields or list of field names to include.
     """
     provider = "shopify"
     tool_name = "SHOPIFY_GET_ORDERSBY_ID"
     ensure_authorized(context, provider)
-    payload = _clean_payload({"order_id": order_id, "fields": fields})
+    normalized_fields = normalize_fields_argument(fields, provider, tool_name)
+    payload = _clean_payload({"order_id": order_id, "fields": normalized_fields})
     return _invoke_mcp_tool(context, provider, tool_name, payload)
 
 
@@ -127,6 +133,8 @@ def shopify_get_order_list(
     tool_name = "SHOPIFY_GET_ORDER_LIST"
     ensure_authorized(context, provider)
 
+    normalized_fields = normalize_fields_argument(fields, provider, tool_name)
+
     if limit is not None and not (1 <= limit <= 250):
         raise ValueError("Shopify order list limit must be between 1 and 250.")
 
@@ -145,7 +153,7 @@ def shopify_get_order_list(
             "attribution_app_id": attribution_app_id,
             "created_at_max": created_at_max,
             "created_at_min": created_at_min,
-            "fields": fields,
+            "fields": normalized_fields,
             "financial_status": financial_status,
             "fulfillment_status": fulfillment_status,
             "ids": ids,
@@ -169,7 +177,7 @@ def shopify_get_order_list(
             "attribution_app_id": attribution_app_id,
             "created_at_max": created_at_max,
             "created_at_min": created_at_min,
-            "fields": _to_csv(fields),
+            "fields": normalized_fields,
             "financial_status": financial_status,
             "fulfillment_status": fulfillment_status,
             "ids": _to_csv(ids),
@@ -195,7 +203,7 @@ def shopify_get_orders_with_filters(
     attribution_app_id: str | None = None,
     created_at_max: str | None = None,
     created_at_min: str | None = None,
-    fields: str | None = None,
+    fields: str | list[str] | None = None,
     financial_status: str | None = None,
     fulfillment_status: str | None = None,
     ids: str | None = None,
@@ -218,7 +226,7 @@ def shopify_get_orders_with_filters(
         attribution_app_id: Filter to orders attributed to a given app ID; use "current" for the calling app.
         created_at_max: Return orders created at or before this ISO 8601 timestamp.
         created_at_min: Return orders created at or after this ISO 8601 timestamp.
-        fields: Comma-separated list of order fields to include.
+        fields: Comma-separated list of order fields or list of field names to include.
         financial_status: Filter by financial status (authorized, pending, paid, partially_paid, refunded, voided, partially_refunded, any, unpaid).
         fulfillment_status: Filter by fulfillment status (shipped/fulfilled, partial, unshipped/null, any, unfulfilled).
         ids: Comma-separated list of numeric order IDs to retrieve.
@@ -235,6 +243,8 @@ def shopify_get_orders_with_filters(
     provider = "shopify"
     tool_name = "SHOPIFY_GET_ORDERS_WITH_FILTERS"
     ensure_authorized(context, provider)
+
+    normalized_fields = normalize_fields_argument(fields, provider, tool_name)
 
     if limit is not None and not (1 <= limit <= 250):
         raise ValueError("Shopify orders limit must be between 1 and 250.")
@@ -270,7 +280,7 @@ def shopify_get_orders_with_filters(
             "attribution_app_id": attribution_app_id,
             "created_at_max": created_at_max,
             "created_at_min": created_at_min,
-            "fields": fields,
+            "fields": normalized_fields,
             "financial_status": financial_status,
             "fulfillment_status": fulfillment_status,
             "ids": ids,

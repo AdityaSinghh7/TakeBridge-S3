@@ -3,12 +3,12 @@ from __future__ import annotations
 import logging
 import os
 import json
-from typing import TYPE_CHECKING, Any, Dict
+from typing import TYPE_CHECKING, Any, Dict, Iterable
 import requests
 
 from mcp_agent.core.exceptions import UnauthorizedError
 from mcp_agent.registry import get_mcp_client, is_provider_available
-from mcp_agent.high_signal import emit_high_signal
+from mcp_agent.high_signal import emit_high_signal, HIGH_SIGNAL_KEYS
 from mcp_agent.types import ToolInvocationResult
 from mcp_agent.user_identity import normalize_user_id
 from shared.streaming import emit_event
@@ -30,6 +30,38 @@ def ensure_authorized(context: "AgentContext", provider: str) -> str:
 def _clean_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Remove None values to avoid sending unset optional params."""
     return {k: v for k, v in payload.items() if v is not None}
+
+
+def _get_high_signal_field_names(provider: str, tool: str) -> list[str]:
+    """Return unique top-level field names referenced by the configured high-signal paths."""
+    signal_paths = HIGH_SIGNAL_KEYS.get(provider, {}).get(tool, [])
+    seen: set[str] = set()
+    fields: list[str] = []
+    for path in signal_paths:
+        if not path:
+            continue
+        cut = len(path)
+        for sep in (".", "["):
+            sep_index = path.find(sep)
+            if sep_index != -1:
+                cut = min(cut, sep_index)
+        field = path[:cut]
+        if not field or field in seen:
+            continue
+        seen.add(field)
+        fields.append(field)
+    return fields
+
+
+def normalize_fields_argument(fields: str | Iterable[str] | None, provider: str, tool: str) -> str | None:
+    """Ensure the `fields` argument covers the configured high-signal paths by default."""
+    if fields is None:
+        default_fields = _get_high_signal_field_names(provider, tool)
+        return ",".join(default_fields) if default_fields else None
+    if isinstance(fields, str):
+        return fields
+    normalized = ",".join(str(value).strip() for value in fields if str(value).strip())
+    return normalized or None
 
 
 def _structured_result(
