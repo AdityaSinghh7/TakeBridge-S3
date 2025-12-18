@@ -1,15 +1,17 @@
 # vm_manager/workspace_service.py
 
+import json
 import uuid
 from datetime import datetime, timezone
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from shared.db.engine import SessionLocal
 from shared.db.models import Workspace, User
 from shared.db import crud
 from vm_manager.config import settings
-from .aws_vm_manager import create_agent_instance_for_user, terminate_instance
+from .aws_vm_manager import create_agent_instance_for_user, stop_instance, terminate_instance
 
 
 def ensure_workspace(user_id: str) -> Workspace:
@@ -109,3 +111,124 @@ def terminate_workspace_for_user(db: Session, user_id: str) -> Workspace | None:
     db.refresh(ws)
 
     return ws
+
+
+def stop_run_instance(run_id: str, *, wait: bool = True) -> str:
+    """
+    Stop (power off) the EC2 instance associated with a workflow run.
+
+    This looks up `workflow_runs.environment.endpoint.instance_id` for the run_id,
+    calls `aws_vm_manager.stop_instance(...)`, and records the stop time in
+    `vm_instances.stopped_at` (if a matching vm_instances row exists).
+
+    Returns:
+        The AWS EC2 instance_id that was stopped.
+    """
+    # Phase 1: fetch the run's instance_id without holding a long-lived transaction.
+    db: Session = SessionLocal()
+    vm_id: str | None = None
+    instance_id: str | None = None
+    try:
+        row = (
+            db.execute(
+                text("SELECT environment, vm_id FROM workflow_runs WHERE id = :run_id"),
+                {"run_id": run_id},
+            )
+            .mappings()
+            .first()
+        )
+        if not row:
+            raise RuntimeError("run_not_found")
+
+        vm_id = str(row.get("vm_id")) if row.get("vm_id") else None
+
+        env_raw = row.get("environment")
+        if isinstance(env_raw, dict):
+            environment = dict(env_raw)
+        elif isinstance(env_raw, str) and env_raw.strip():
+            try:
+                environment = json.loads(env_raw) or {}
+            except Exception:
+                environment = {}
+        else:
+            environment = {}
+
+        endpoint = environment.get("endpoint") or {}
+        if isinstance(endpoint, str) and endpoint.strip():
+            try:
+                endpoint = json.loads(endpoint) or {}
+            except Exception:
+                endpoint = {}
+
+        if isinstance(endpoint, dict) and endpoint.get("instance_id"):
+            instance_id = str(endpoint["instance_id"])
+
+        if not instance_id:
+            candidate_rows = []
+            if vm_id:
+                candidate_rows.append(
+                    db.execute(
+                        text("SELECT endpoint FROM vm_instances WHERE id = :vm_id"),
+                        {"vm_id": vm_id},
+                    ).scalar_one_or_none()
+                )
+            candidate_rows.append(
+                db.execute(
+                    text(
+                        """
+                        SELECT endpoint
+                        FROM vm_instances
+                        WHERE run_id = :run_id
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                        """
+                    ),
+                    {"run_id": run_id},
+                ).scalar_one_or_none()
+            )
+            for candidate in candidate_rows:
+                if not candidate:
+                    continue
+                if isinstance(candidate, dict):
+                    candidate_endpoint = candidate
+                elif isinstance(candidate, str) and candidate.strip():
+                    try:
+                        candidate_endpoint = json.loads(candidate) or {}
+                    except Exception:
+                        candidate_endpoint = {}
+                else:
+                    candidate_endpoint = {}
+                if isinstance(candidate_endpoint, dict) and candidate_endpoint.get("instance_id"):
+                    instance_id = str(candidate_endpoint["instance_id"])
+                    break
+    finally:
+        db.close()
+
+    if not instance_id:
+        raise RuntimeError("instance_id_not_found")
+
+    # Phase 2: stop the instance in AWS.
+    stop_instance(instance_id, wait=wait)
+
+    # Phase 3: record the stop event in our DB (best-effort).
+    db = SessionLocal()
+    try:
+        db.execute(
+            text(
+                """
+                UPDATE vm_instances
+                SET status = 'stopped',
+                    stopped_at = NOW()
+                WHERE run_id = :run_id
+                """
+            ),
+            {"run_id": run_id},
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f"[workspace_service] Failed to update vm_instances stopped_at for run_id={run_id}: {e}")
+    finally:
+        db.close()
+
+    return instance_id

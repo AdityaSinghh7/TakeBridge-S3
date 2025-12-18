@@ -18,22 +18,44 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        "workflow_run_artifacts",
-        sa.Column("id", sa.String(length=64), primary_key=True),
-        sa.Column("run_id", sa.String(length=64), nullable=False, index=True),
-        sa.Column("filename", sa.Text(), nullable=False),
-        sa.Column("storage_key", sa.Text(), nullable=False),
-        sa.Column("size_bytes", sa.BigInteger(), nullable=True),
-        sa.Column("content_type", sa.Text(), nullable=True),
-        sa.Column("checksum", sa.String(length=128), nullable=True),
-        sa.Column("source_path", sa.Text(), nullable=True),
-        sa.Column("metadata_json", sa.JSON(), nullable=False, server_default="{}"),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-    )
-    op.create_index("ix_workflow_run_artifacts_run_id", "workflow_run_artifacts", ["run_id"])
+    from sqlalchemy import inspect
+
+    bind = op.get_bind()
+    inspector = inspect(bind)
+    tables = set(inspector.get_table_names())
+
+    def _has_index(table: str, name: str) -> bool:
+        try:
+            return any(idx.get("name") == name for idx in inspector.get_indexes(table))
+        except Exception:
+            return False
+
+    if "workflow_run_artifacts" not in tables:
+        op.create_table(
+            "workflow_run_artifacts",
+            sa.Column("id", sa.String(length=64), primary_key=True),
+            sa.Column("run_id", sa.String(length=64), nullable=False, index=True),
+            sa.Column("filename", sa.Text(), nullable=False),
+            sa.Column("storage_key", sa.Text(), nullable=False),
+            sa.Column("size_bytes", sa.BigInteger(), nullable=True),
+            sa.Column("content_type", sa.Text(), nullable=True),
+            sa.Column("checksum", sa.String(length=128), nullable=True),
+            sa.Column("source_path", sa.Text(), nullable=True),
+            sa.Column("metadata_json", sa.JSON(), nullable=False, server_default="{}"),
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        )
+        tables.add("workflow_run_artifacts")
+
+    if "workflow_run_artifacts" in tables and not _has_index("workflow_run_artifacts", "ix_workflow_run_artifacts_run_id"):
+        op.create_index("ix_workflow_run_artifacts_run_id", "workflow_run_artifacts", ["run_id"])
 
 
 def downgrade() -> None:
-    op.drop_table("workflow_run_artifacts")
+    from sqlalchemy import inspect
+
+    bind = op.get_bind()
+    inspector = inspect(bind)
+    tables = set(inspector.get_table_names())
+    if "workflow_run_artifacts" in tables:
+        op.drop_table("workflow_run_artifacts")

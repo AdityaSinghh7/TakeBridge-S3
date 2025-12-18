@@ -32,6 +32,16 @@ MIN_SEMANTIC_SCORE_THRESHOLD = 0.25  # Minimum score to include in results when 
 MIN_FALLBACK_SCORE_THRESHOLD = 0.3  # Higher threshold for fallback heuristic mode
 ADAPTIVE_THRESHOLD_RATIO = 0.5  # Keep tools within 70% of top score when using adaptive threshold
 
+# Provider families used for soft matching/boosting
+PROVIDER_FAMILIES = {
+    "google": {"google", "googledocs", "googlesheets", "googleslides", "googledrive", "gmail"},
+    "gmail": {"gmail"},
+    "slack": {"slack"},
+    "github": {"github"},
+    "microsoft": {"microsoft"},
+    "composio": {"composio"},
+}
+
 # used for /api/mcp/auth/providers endpoint ONLY
 def list_providers(user_id: str) -> List[Dict[str, Any]]:
     """List all configured providers for a user."""
@@ -205,6 +215,23 @@ def _normalize_query(query: str | None, index: ToolboxIndex) -> _Query:
     return _Query(raw=text, embedding=embedding)
 
 
+def _provider_matches(query_lower: str, tool_provider: str) -> tuple[bool, bool]:
+    """Determine whether the query mentions a provider family and if the tool matches it.
+
+    Returns:
+        (matches_family, family_mentioned)
+    """
+    mentioned_families = [fam for fam in PROVIDER_FAMILIES if fam in query_lower]
+    if not mentioned_families:
+        return True, False
+
+    provider_norm = tool_provider.lower()
+    for fam in mentioned_families:
+        if provider_norm in PROVIDER_FAMILIES[fam]:
+            return True, True
+    return False, True
+
+
 def _has_exact_name_match(tool: ToolSpec, query: _Query) -> bool:
     """Check if any query term exactly matches tool name.
 
@@ -323,18 +350,14 @@ def _score_tool_semantic(
         semantic_score += desc_boost
 
     # Apply provider boost/filter
-    known_providers = ["gmail", "slack", "github", "google", "microsoft", "composio"]
     query_lower = query.raw.lower()
-    mentioned_providers = [p for p in known_providers if p in query_lower]
     tool_provider = tool.provider.lower()
-
-    if mentioned_providers:
-        if tool_provider in mentioned_providers:
-            # Provider match - boost score
-            semantic_score *= 1.5
+    provider_matches, provider_mentioned = _provider_matches(query_lower, tool_provider)
+    if provider_mentioned:
+        if provider_matches:
+            semantic_score *= 1.5  # strong boost when provider family is explicitly mentioned
         else:
-            # Provider mismatch - hard filter (return 0.0) when query explicitly mentions a provider
-            return 0.0
+            semantic_score *= 0.6  # soften mismatch instead of hard filtering
 
     # Small boost for available tools
     if tool.available:
@@ -360,18 +383,14 @@ def _score_tool_heuristic_fallback(tool: ToolSpec, query: _Query) -> float:
     if not query.terms:
         return 0.5 if tool.available else 0.3
 
-    # Provider alignment check
-    known_providers = ["gmail", "slack", "github", "google", "microsoft", "composio"]
+    # Provider alignment check (soft)
     query_lower = query.raw.lower()
-    mentioned_providers = [p for p in known_providers if p in query_lower]
+    tool_provider = tool.provider.lower()
+    provider_matches, provider_mentioned = _provider_matches(query_lower, tool_provider)
 
-    if mentioned_providers:
-        tool_provider = tool.provider.lower()
-        if tool_provider not in mentioned_providers:
-            # Provider mismatch - return zero to filter out
-            return 0.0
-        # Provider match - start with higher base score
-        score = 0.6
+    if provider_mentioned:
+        # Start higher when the provider family is explicitly mentioned
+        score = 0.6 if provider_matches else 0.1
     else:
         score = 0.0
 

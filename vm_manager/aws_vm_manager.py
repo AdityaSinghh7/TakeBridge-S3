@@ -167,3 +167,76 @@ def terminate_instance(instance_id: str):
     print(f"[aws_vm_manager] terminate_instance({instance_id})")
     ec2 = boto3.client("ec2", region_name=settings.AWS_REGION)
     ec2.terminate_instances(InstanceIds=[instance_id])
+
+
+def stop_instance(instance_id: str, *, wait: bool = True) -> None:
+    """
+    Stop (power off) an EC2 instance.
+
+    This is a reversible alternative to termination for EBS-backed instances.
+
+    Args:
+        instance_id: The EC2 instance ID to stop.
+        wait: When True, block until the instance reaches 'stopped' (or timeout).
+    """
+    print(f"[aws_vm_manager] stop_instance({instance_id}) wait={wait}")
+    ec2 = boto3.client("ec2", region_name=settings.AWS_REGION)
+    try:
+        ec2.stop_instances(InstanceIds=[instance_id])
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code")
+        msg = e.response.get("Error", {}).get("Message")
+        # If the instance is already stopped/stopping, treat as success.
+        if code == "IncorrectInstanceState":
+            print(f"[aws_vm_manager] stop_instances: {code} - {msg}; continuing")
+        else:
+            raise
+
+    if wait:
+        _wait_for_instance_state(ec2, instance_id, target_state="stopped")
+
+
+def _wait_for_instance_state(ec2, instance_id: str, *, target_state: str) -> None:
+    """
+    Poll EC2 until instance reaches a target state or timeout.
+    """
+    deadline = time.time() + HEALTHCHECK_TIMEOUT_SECONDS
+    while True:
+        if time.time() > deadline:
+            raise RuntimeError(
+                f"Timeout waiting for EC2 instance {instance_id} to reach state={target_state}"
+            )
+
+        try:
+            desc = ec2.describe_instances(InstanceIds=[instance_id])
+        except ClientError as e:
+            code = e.response["Error"]["Code"]
+            msg = e.response["Error"]["Message"]
+            print(
+                f"[aws_vm_manager] describe_instances error for {instance_id}: {code} - {msg}"
+            )
+            if code == "InvalidInstanceID.NotFound":
+                time.sleep(HEALTHCHECK_INTERVAL_SECONDS)
+                continue
+            raise
+
+        reservations = desc.get("Reservations", [])
+        if not reservations or not reservations[0].get("Instances"):
+            print(f"[aws_vm_manager] No instances found yet for {instance_id}, retrying...")
+            time.sleep(HEALTHCHECK_INTERVAL_SECONDS)
+            continue
+
+        inst = reservations[0]["Instances"][0]
+        state = inst["State"]["Name"]
+        print(f"[aws_vm_manager] Instance {instance_id} state={state}")
+
+        if state == target_state:
+            return
+
+        # If the instance transitions to a terminal state that cannot reach the target, fail fast.
+        if target_state in {"stopped", "running"} and state in {"shutting-down", "terminated"}:
+            raise RuntimeError(
+                f"Instance {instance_id} entered terminal state={state} while waiting for state={target_state}"
+            )
+
+        time.sleep(HEALTHCHECK_INTERVAL_SECONDS)

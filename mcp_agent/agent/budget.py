@@ -12,7 +12,7 @@ class Budget:
 
     max_steps: int = 10
     max_tool_calls: int = 30
-    max_code_runs: int = 5  # Increased from 3 to allow more iterations
+    max_code_runs: int = 10  # Increased to allow more sandbox iterations
     max_llm_cost_usd: float = 0.50
 
 
@@ -68,4 +68,3 @@ class BudgetTracker:
 
     def update_llm_cost(self, total_cost: float) -> None:
         self.estimated_llm_cost_usd = total_cost
-

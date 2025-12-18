@@ -64,6 +64,7 @@ AUTH_CONFIG_IDS = {
     "google_admin": os.getenv("COMPOSIO_GOOGLE_ADMIN_AUTH_CONFIG_ID", ""),
     "googlesheets": os.getenv("COMPOSIO_GOOGLESHEETS_AUTH_CONFIG_ID", ""),
     "googleslides": os.getenv("COMPOSIO_GOOGLESLIDES_AUTH_CONFIG_ID", ""),
+    "googledocs": os.getenv("COMPOSIO_GOOGLEDOCS_AUTH_CONFIG_ID", ""),
     "intercom": os.getenv("COMPOSIO_INTERCOM_AUTH_CONFIG_ID", ""),
     "jira": os.getenv("COMPOSIO_JIRA_AUTH_CONFIG_ID", ""),
     "klaviyo": os.getenv("COMPOSIO_KLAVIYO_AUTH_CONFIG_ID", ""),

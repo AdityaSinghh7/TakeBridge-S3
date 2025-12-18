@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import gzip
 import json
 import logging
 from datetime import datetime, timezone
@@ -54,6 +56,72 @@ def _json_safe(val: Any) -> str:
             return json.dumps(str(val))
 
 
+def _compress_agent_states(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Compress agent_states into a JSON-safe wrapper.
+
+    Uses zstd when available, otherwise gzip. Always returns a JSON-serializable
+    wrapper; callers must not store the raw payload to avoid oversized rows.
+    """
+    try:
+        raw = json.dumps(payload, default=str).encode("utf-8")
+    except Exception as exc:
+        raise ValueError(f"agent_states not serializable for compression: {exc}") from exc
+
+    codec = "gzip"
+    compressed = None
+    try:
+        import zstandard as zstd  # type: ignore
+
+        compressed = zstd.ZstdCompressor(level=4).compress(raw)
+        codec = "zstd"
+    except Exception:
+        compressed = gzip.compress(raw)
+
+    b64 = base64.b64encode(compressed).decode("ascii")
+    return {"_encoding": f"{codec}_b64", "data": b64}
+
+
+def _decompress_agent_states(value: Any) -> Dict[str, Any]:
+    """
+    Decompress agent_states wrapper into a dict.
+
+    - Legacy (raw dict) is returned as-is.
+    - Wrapper with _encoding is decoded/decompressed.
+    - Failures return {} to avoid crashes.
+    """
+    if isinstance(value, dict) and "_encoding" not in value:
+        return value
+
+    # Handle legacy JSON string or wrapper serialized as text
+    if not isinstance(value, dict):
+        try:
+            value = json.loads(value) if value else {}
+        except Exception:
+            return {}
+
+    encoding = value.get("_encoding")
+    data_b64 = value.get("data")
+    if not encoding or not data_b64:
+        return value if isinstance(value, dict) else {}
+
+    try:
+        compressed = base64.b64decode(data_b64)
+        if encoding.startswith("zstd"):
+            import zstandard as zstd  # type: ignore
+
+            raw = zstd.ZstdDecompressor().decompress(compressed)
+        elif encoding.startswith("gzip"):
+            raw = gzip.decompress(compressed)
+        else:
+            logger.warning("Unknown agent_states encoding %s; returning legacy value", encoding)
+            return value if isinstance(value, dict) else {}
+        return json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        logger.error("Failed to decompress agent_states: %s", exc)
+        return {}
+
+
 def update_agent_states(
     run_id: str,
     agent_states: Dict[str, Any],
@@ -74,6 +142,8 @@ def update_agent_states(
     if not run_id:
         raise ValueError("run_id is required")
 
+    compressed = _compress_agent_states(agent_states)
+
     owns_session = db is None
     session = db or SessionLocal()
     try:
@@ -90,7 +160,7 @@ def update_agent_states(
             ),
             {
                 "run_id": run_id,
-                "agent_states": _json_safe(agent_states),
+                "agent_states": _json_safe(compressed),
                 "updated_at": now,
             },
         )
@@ -141,7 +211,7 @@ def merge_agent_states(
             return 0
 
         try:
-            current = row if isinstance(row, dict) else json.loads(row)
+            current = _decompress_agent_states(row)
         except Exception:
             current = {}
 
@@ -161,7 +231,7 @@ def merge_agent_states(
             ),
             {
                 "run_id": run_id,
-                "agent_states": _json_safe(current),
+                "agent_states": _json_safe(_compress_agent_states(current)),
                 "updated_at": now,
             },
         )
@@ -178,6 +248,12 @@ def merge_agent_states(
 
 
 __all__ = ["update_agent_states", "merge_agent_states", "get_agent_states", "mark_run_attention"]
+__all__.append("decode_agent_states")
+
+
+def decode_agent_states(value: Any) -> Dict[str, Any]:
+    """Public helper to decode/decompress agent_states payloads."""
+    return _decompress_agent_states(value)
 
 
 def get_agent_states(
@@ -207,12 +283,7 @@ def get_agent_states(
         ).scalar_one_or_none()
         if row is None:
             return {}
-        if isinstance(row, dict):
-            return row
-        try:
-            return json.loads(row) if row else {}
-        except Exception:
-            return {}
+        return _decompress_agent_states(row)
     finally:
         if owns_session:
             session.close()

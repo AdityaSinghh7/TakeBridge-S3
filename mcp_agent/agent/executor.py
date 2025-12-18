@@ -136,9 +136,6 @@ class ActionExecutor:
             # Store compact results directly in state (no need for deep views)
             self.agent_state.merge_search_results(results)
 
-            # Budget tracking
-            self.agent_state.budget_tracker.steps_taken += 1
-
             return StepResult(
                 type="search",
                 success=True,
@@ -433,7 +430,6 @@ class ActionExecutor:
             },
         )
         self.agent_state.budget_tracker.tool_calls += 1
-        self.agent_state.budget_tracker.steps_taken += 1
 
         success_flag = True
         if isinstance(result, dict):
@@ -578,16 +574,20 @@ class ActionExecutor:
                     and (step.action_input.get("label") or "").strip() == label
                 ):
                     prior_errors += 1
+            lineno = getattr(exc, "lineno", None)
+            msg = getattr(exc, "msg", str(exc))
+            error_text = f"Sandbox syntax error at line {lineno or '?'}: {msg}. Ensure code has real newlines and escaped quotes"
             observation = {
-                "error": f"Sandbox code has invalid syntax: {exc}",
+                "error": error_text,
                 "label": label,
                 "prior_errors": prior_errors,
+                "code_preview": code_body[:400],
             }
             return StepResult(
                 type="sandbox",
                 success=False,
                 observation=observation,
-                preview=observation["error"],
+                preview=error_text,
                 error="sandbox_syntax_error",
                 error_code="sandbox_syntax_error",
                 raw_output_key=f"sandbox.{label}",
@@ -650,7 +650,6 @@ class ActionExecutor:
             )
 
         self.agent_state.budget_tracker.code_runs += 1
-        self.agent_state.budget_tracker.steps_taken += 1
         self.agent_state.record_event(
             "mcp.sandbox.run",
             {
@@ -686,7 +685,7 @@ class ActionExecutor:
             if summary:
                 entry["summary"] = summary
 
-        if sandbox_result.success:
+        if sandbox_result.success and not sandbox_result.timed_out:
             observation, is_smart_summary, original_tokens, compressed_tokens = self._process_sandbox_observation(sandbox_result.result)
             preview = command.get("reasoning") or f"Sandbox '{label}' success"
             # Add metadata about tool success to the observation
@@ -703,11 +702,18 @@ class ActionExecutor:
                 compressed_tokens=compressed_tokens,
             )
 
-        # Extract detailed error information including traceback
-        error_details = sandbox_result.error or "sandbox_execution_failed"
+        # Failure path: propagate stderr/logs to the observation and error fields
+        error_details = sandbox_result.error or ("sandbox timed out" if sandbox_result.timed_out else "sandbox_execution_failed")
+        # Truncate logs to a reasonable number of lines to avoid huge observations
+        logs = sandbox_result.logs or []
+        MAX_LOG_LINES = 50
+        if len(logs) > MAX_LOG_LINES:
+            logs = logs[:MAX_LOG_LINES] + ["... (truncated)"]
+
         error_payload = {
             "error": error_details,
-            "logs": sandbox_result.logs,
+            "logs": logs,
+            "timed_out": sandbox_result.timed_out,
         }
 
         # If the result contains traceback or additional error info, include it
@@ -717,18 +723,19 @@ class ActionExecutor:
             if "error_type" in normalized_result:
                 error_payload["error_type"] = normalized_result["error_type"]
             # Include the full error message from the result if available
-            if "error" in normalized_result and normalized_result["error"]:
+            if normalized_result.get("error"):
                 error_details = normalized_result["error"]
                 error_payload["error"] = error_details
 
         preview = command.get("reasoning") or f"Sandbox '{label}' failed: {error_details[:100]}"
+        error_code = "sandbox_timeout" if sandbox_result.timed_out else "sandbox_runtime_error"
         return StepResult(
             type="sandbox",
             success=False,
             observation=error_payload,
             preview=preview,
-            error="sandbox_runtime_error",
-            error_code="sandbox_runtime_error",
+            error=error_details,
+            error_code=error_code,
             raw_output_key=result_key,
         )
 

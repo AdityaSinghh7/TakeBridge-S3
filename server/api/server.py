@@ -705,6 +705,7 @@ def _create_streaming_response(
         log_token = None
         handler = None
         run_id_local = run_id or None
+        final_status: Optional[str] = None
         try:
             from server.api.orchestrator_adapter import orchestrate_to_orchestrator
 
@@ -754,6 +755,7 @@ def _create_streaming_response(
                 "completion_reason": completion_reason,
                 "steps": [asdict(r) for r in result.results],
             }
+            final_status = run_status
 
         except BaseException as exc:  # pragma: no cover - runtime guard
             if isinstance(exc, SystemExit) and exc.code == 0:
@@ -772,6 +774,7 @@ def _create_streaming_response(
                 error_payload = {"error": str(exc)}
                 await queue.put(_format_sse_event("response.failed", error_payload))
                 await queue.put(_format_sse_event("error", error_payload))
+                final_status = "error"
                 if run_id:
                     _update_run_status(run_id, "error", summary=str(exc))
         else:
@@ -803,6 +806,17 @@ def _create_streaming_response(
                     exported_artifacts = export_context_artifacts(run_id_local, workspace)
                 except Exception as exc:
                     logger.warning("Failed to export artifacts for run %s: %s", run_id_local, exc)
+            if run_id and run_id_local and final_status and final_status != "attention":
+                try:
+                    from vm_manager.vm_wrapper import stop_run_instance
+                    stop_run_instance(run_id_local, wait=False)
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to stop VM instance for run_id=%s status=%s: %s",
+                        run_id_local,
+                        final_status,
+                        exc,
+                    )
             if heartbeat:
                 heartbeat.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -1088,7 +1102,7 @@ async def resume_run(
     """
     from server.api.controller_client import VMControllerClient
     from server.api.handback_inference import infer_human_action
-    from shared.db.workflow_runs import merge_agent_states
+    from shared.db.workflow_runs import merge_agent_states, decode_agent_states
     from orchestrator_agent.bridges import run_computer_use_agent_resume
     from computer_use_agent.orchestrator.data_types import OrchestrateRequest
     from orchestrator_agent.translator import translate_step_output
@@ -1134,13 +1148,8 @@ async def resume_run(
                 detail=f"Run is not in 'attention' status (current: {row_status})"
             )
 
-        # 2. Parse agent_states to get handback info
-        agent_states = row_agent_states if isinstance(row_agent_states, dict) else {}
-        if isinstance(row_agent_states, str):
-            try:
-                agent_states = json.loads(row_agent_states)
-            except Exception:
-                agent_states = {}
+        # 2. Parse agent_states to get handback info (decompress-aware)
+        agent_states = decode_agent_states(row_agent_states)
 
         computer_use_state = agent_states.get("agents", {}).get("computer_use", {}) or {}
         orchestrator_state = agent_states.get("orchestrator")

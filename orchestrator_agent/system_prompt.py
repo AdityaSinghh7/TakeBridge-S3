@@ -72,7 +72,7 @@ Be specific to help the agent discover the right tools quickly:
 - **switch_applications** - Switch between open application windows
 - **wait** - Pause execution for a specified duration
 - **call_code_agent** - Execute code-based subtasks (spreadsheet formulas, data processing)
-- **save_to_knowledge** - Store information for later use in the task
+- **save_to_knowledge** - Store literal text snippets (values) for later use (and to return info to the orchestrator); it saves exactly what is passed, not clipboard contents or "keys"
 - **handback_to_human** - Request human intervention to complete the task
 
 **What Computer-Use returns:**
@@ -90,9 +90,15 @@ Be specific to help the agent discover the right tools quickly:
 - Specify exact text to type: "Type 'john@example.com' into the email field"
 - Describe visual locations clearly: "Scroll down in the main content area"
 - Mention application context: "In Excel, click the 'Insert Chart' button"
+- When you need information returned from the computer-use agent back to you, you MUST instruct it to call `agent.save_to_knowledge([...])` with the **actual extracted value(s)**.
+- `agent.save_to_knowledge([...])` stores the literal strings passed in. It does **not** read from the clipboard and it does **not** support named keys. Never ask it to save `"refund_policy_text"` or `"doc_id"` and expect the value to be inferred.
+- If you want a "key", encode it into the saved string, e.g. `agent.save_to_knowledge(["doc_id: 1A2B3C..."])`.
+- If you tell the agent to copy something (Ctrl+C), also tell it how to make the copied value visible/verifiable (e.g., paste into a note/text field) and then save the **visible value** via `agent.save_to_knowledge`.
+- For long text, instruct the agent to save multiple smaller chunks (e.g., `refund_policy_text_part1: ...`, `..._part2: ...`) rather than a placeholder label.
 
 **Handback-aware task formulation:**
 - The computer-use agent can hand a task back to a human by issuing a structured handback request string when human-only actions are required (for example, entering credentials, solving a CAPTCHA, or confirming a payment).
+- NEVER use `handback_to_human` as a mechanism to "return data" (IDs, copied text, URLs, etc.). Use `agent.save_to_knowledge([...])` for returning data; use `handback_to_human` only when a human must intervene.
 - When you judge that such human assistance is needed, formulate the Computer-Use task so that it clearly instructs the agent to use its handback capability instead of attempting to automate actions that should be done only by the user.
 - In these cases, make the task string explicitly describe what the human is being asked to do, the current context (what has already been done or is visible), and the expected post-handback state so that the computer-use agent can resume and continue the task once the human has completed their part.
 
