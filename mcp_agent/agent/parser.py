@@ -12,7 +12,7 @@ def parse_planner_command(text: str) -> Dict[str, Any]:
 
     Expected format (JSON):
         {
-            "type": "tool" | "sandbox" | "finish" | "search" | "fail",
+            "type": "tool" | "sandbox" | "inspect_tool_output" | "finish" | "search" | "fail",
             "reasoning": "...",
             ...
         }
@@ -29,7 +29,7 @@ def parse_planner_command(text: str) -> Dict[str, Any]:
         raise ValueError("Planner response must be a JSON object.")
 
     cmd_type = command.get("type")
-    if cmd_type not in {"tool", "sandbox", "finish", "search", "fail"}:
+    if cmd_type not in {"tool", "sandbox", "inspect_tool_output", "finish", "search", "fail"}:
         raise ValueError("Planner response missing 'type' or unsupported command.")
     reasoning = command.get("reasoning")
     if not isinstance(reasoning, str) or not reasoning.strip():
@@ -110,6 +110,38 @@ def _validate_search(command: Dict[str, Any]) -> None:
         )
 
 
+def _validate_inspect_tool_output(command: Dict[str, Any]) -> None:
+    tool_id = command.get("tool_id")
+    _require(
+        isinstance(tool_id, str) and tool_id.strip(),
+        "inspect_tool_output command requires non-empty 'tool_id'.",
+    )
+    command["tool_id"] = tool_id.strip()
+
+    field_path = command.get("field_path", "")
+    if field_path is None:
+        field_path = ""
+    _require(
+        isinstance(field_path, str),
+        "inspect_tool_output command 'field_path' must be a string.",
+    )
+    command["field_path"] = field_path.strip()
+
+    max_depth = command.get("max_depth", 4)
+    _require(
+        isinstance(max_depth, int),
+        "inspect_tool_output command 'max_depth' must be an integer.",
+    )
+    command["max_depth"] = min(8, max(1, max_depth))
+
+    max_fields = command.get("max_fields", 120)
+    _require(
+        isinstance(max_fields, int),
+        "inspect_tool_output command 'max_fields' must be an integer.",
+    )
+    command["max_fields"] = min(300, max(20, max_fields))
+
+
 def _validate_fail(command: Dict[str, Any]) -> None:
     reason = command.get("reason")
     _require(
@@ -121,8 +153,8 @@ def _validate_fail(command: Dict[str, Any]) -> None:
 _VALIDATORS = {
     "tool": _validate_tool,
     "sandbox": _validate_sandbox,
+    "inspect_tool_output": _validate_inspect_tool_output,
     "finish": _validate_finish,
     "search": _validate_search,
     "fail": _validate_fail,
 }
-

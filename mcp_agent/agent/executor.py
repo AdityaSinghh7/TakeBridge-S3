@@ -22,10 +22,11 @@ if TYPE_CHECKING:
 from .types import StepResult
 
 
-def analyze_sandbox(code: str) -> tuple[Set[str], Dict[str, Set[str]]]:
-    """Analyze sandbox code to extract imported servers and function calls."""
+def analyze_sandbox(code: str) -> tuple[Set[str], Dict[str, Set[str]], Dict[str, Dict[str, Dict[str, Any]]]]:
+    """Analyze sandbox code to extract imported servers, function calls, and arg usage."""
     used_servers: Set[str] = set()
     calls_by_server: Dict[str, Set[str]] = {}
+    call_details: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
     class SandboxVisitor(ast.NodeVisitor):
         def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
@@ -47,11 +48,21 @@ def analyze_sandbox(code: str) -> tuple[Set[str], Dict[str, Set[str]]]:
                 server = func.value.id
                 func_name = func.attr
                 calls_by_server.setdefault(server, set()).add(func_name)
+                detail = call_details.setdefault(server, {}).setdefault(
+                    func_name, {"keywords": set(), "has_positional": False, "has_var_kw": False}
+                )
+                if node.args:
+                    detail["has_positional"] = True
+                for kw in node.keywords:
+                    if kw.arg is None:
+                        detail["has_var_kw"] = True
+                    else:
+                        detail["keywords"].add(kw.arg)
             self.generic_visit(node)
 
     tree = ast.parse(code)
     SandboxVisitor().visit(tree)
-    return used_servers, calls_by_server
+    return used_servers, calls_by_server, call_details
 
 
 class ActionExecutor:
@@ -85,6 +96,8 @@ class ActionExecutor:
             return self._execute_tool(command)
         if action_type == "sandbox":
             return self._execute_sandbox(command)
+        if action_type == "inspect_tool_output":
+            return self._execute_inspect_tool_output(command)
         if action_type == "finish":
             return self._execute_finish(command)
         if action_type == "fail":
@@ -153,6 +166,127 @@ class ActionExecutor:
                 error=str(exc),
                 error_code="search_failed",
             )
+
+    def _execute_inspect_tool_output(self, command: Dict[str, Any]) -> StepResult:
+        """Inspect a discovered tool's output schema at a specific field path."""
+        agent_signal.raise_if_exit_requested()
+        agent_signal.wait_for_resume()
+
+        tool_id = (command.get("tool_id") or "").strip()
+        field_path = (command.get("field_path") or "").strip()
+        max_depth = command.get("max_depth", 4)
+        max_fields = command.get("max_fields", 120)
+
+        if not tool_id:
+            return StepResult(
+                type="inspect_tool_output",
+                success=False,
+                observation={"error": "inspect_tool_output missing tool_id."},
+                preview="inspect_tool_output missing tool_id.",
+                error="inspect_missing_tool_id",
+                error_code="inspect_missing_tool_id",
+            )
+        if not isinstance(max_depth, int) or not isinstance(max_fields, int):
+            return StepResult(
+                type="inspect_tool_output",
+                success=False,
+                observation={"error": "inspect_tool_output max_depth/max_fields must be integers."},
+                preview="inspect_tool_output max_depth/max_fields must be integers.",
+                error="inspect_invalid_limits",
+                error_code="inspect_invalid_limits",
+            )
+
+        # Enforce discovery: only inspect tools the planner has discovered via search.
+        discovered_tool_ids = {
+            entry.get("tool_id")
+            for entry in self.agent_state.search_results
+            if isinstance(entry, dict) and entry.get("tool_id")
+        }
+        if tool_id not in discovered_tool_ids:
+            message = f"Tool '{tool_id}' was never discovered via search."
+            return StepResult(
+                type="inspect_tool_output",
+                success=False,
+                observation={"error": message},
+                preview=message,
+                error="planner_used_undiscovered_tool",
+                error_code="planner_used_undiscovered_tool",
+            )
+
+        # Validate tool_id exists in index.
+        index = get_index(self.agent_state.user_id)
+        if index.get_tool(tool_id) is None:
+            message = f"Unknown tool_id '{tool_id}'."
+            return StepResult(
+                type="inspect_tool_output",
+                success=False,
+                observation={"error": message},
+                preview=message,
+                error="planner_used_unknown_tool",
+                error_code="planner_used_unknown_tool",
+            )
+
+        from mcp_agent.actions.wrappers.toolbox import inspect_tool_output
+
+        result_key = f"inspect_tool_output.{tool_id}.{field_path or 'root'}"
+        try:
+            result = inspect_tool_output(
+                self.agent_context,
+                tool_id=tool_id,
+                field_path=field_path,
+                max_depth=max_depth,
+                max_fields=max_fields,
+            )
+        except Exception as exc:
+            error_message = str(exc)
+            self.agent_state.append_raw_output(
+                result_key,
+                {
+                    "type": "inspect_tool_output",
+                    "tool_id": tool_id,
+                    "field_path": field_path,
+                    "error": error_message,
+                },
+            )
+            return StepResult(
+                type="inspect_tool_output",
+                success=False,
+                observation={"error": error_message},
+                preview=f"inspect_tool_output failed: {error_message}",
+                error=error_message,
+                error_code="inspect_execution_failed",
+                raw_output_key=result_key,
+            )
+
+        observation, is_smart_summary, original_tokens, compressed_tokens = self._process_tool_observation(result)
+        self.agent_state.append_raw_output(
+            result_key,
+            {
+                "type": "inspect_tool_output",
+                "tool_id": tool_id,
+                "field_path": field_path,
+                "max_depth": max_depth,
+                "max_fields": max_fields,
+                "response": result,
+            },
+        )
+        self.agent_state.budget_tracker.tool_calls += 1
+
+        success_flag = True
+        if isinstance(result, dict):
+            success_flag = bool(result.get("successful", True))
+
+        preview = command.get("reasoning") or f"inspect_tool_output({tool_id}, {field_path or 'root'})"
+        return StepResult(
+            type="inspect_tool_output",
+            success=success_flag,
+            observation=observation,
+            preview=preview,
+            raw_output_key=result_key,
+            is_smart_summary=is_smart_summary,
+            original_tokens=original_tokens,
+            compressed_tokens=compressed_tokens,
+        )
 
     # --- Observation processing with intelligent summarization ---
 
@@ -349,8 +483,8 @@ class ActionExecutor:
 
         discovered_tool_ids = {
             entry.get("tool_id")
-            for entry in self.agent_state.search_results
-            if entry.get("tool_id")
+            for entry in (self.agent_state.search_results or [])
+            if isinstance(entry, dict) and entry.get("tool_id")
         }
         has_search_steps = any(step.action_type == "search" for step in self.agent_state.history)
         if has_search_steps and tool_id not in discovered_tool_ids:
@@ -556,7 +690,7 @@ class ActionExecutor:
         label = (command.get("label") or "sandbox").strip() or "sandbox"
 
         try:
-            used_servers, calls_by_server = analyze_sandbox(code_body)
+            used_servers, calls_by_server, call_details = analyze_sandbox(code_body)
         except SyntaxError as exc:
             self.agent_state.record_event(
                 "mcp.sandbox.syntax_error",
@@ -593,17 +727,41 @@ class ActionExecutor:
                 raw_output_key=f"sandbox.{label}",
             )
 
+        def _extract_func_name(entry: Dict[str, Any]) -> str | None:
+            signature = entry.get("signature")
+            if isinstance(signature, str) and "(" in signature:
+                head = signature.split("(", 1)[0]
+                if "." in head:
+                    return head.rsplit(".", 1)[-1]
+                return head
+            return entry.get("py_name") or entry.get("tool")
+
         allowed_servers = {
             (entry.get("server") or entry.get("provider"))
             for entry in self.agent_state.search_results
             if entry.get("server") or entry.get("provider")
         }
-        allowed_py_names_by_server: Dict[str, Set[str]] = {}
+        allowed_funcs_by_server: Dict[str, Set[str]] = {}
+        param_schemas_by_server: Dict[str, Dict[str, Dict[str, Set[str]]]] = {}
         for entry in self.agent_state.search_results:
             server = (entry.get("server") or entry.get("provider"))
-            py_name = entry.get("py_name") or entry.get("tool")
-            if server and py_name:
-                allowed_py_names_by_server.setdefault(server, set()).add(py_name)
+            func_name = _extract_func_name(entry)
+            if not (server and func_name):
+                continue
+            allowed_funcs_by_server.setdefault(server, set()).add(func_name)
+            input_params = entry.get("input_params")
+            if not input_params:
+                continue  # No schema available; keep function discovery only
+            all_params = {name for name in input_params.keys()}
+            required_params = {
+                name
+                for name, desc in input_params.items()
+                if isinstance(desc, str) and "required" in desc.lower()
+            }
+            param_schemas_by_server.setdefault(server, {})[func_name] = {
+                "all_params": all_params,
+                "required_params": required_params,
+            }
 
         for server in used_servers:
             if server not in allowed_servers:
@@ -618,9 +776,20 @@ class ActionExecutor:
                 )
 
         for server, funcs in calls_by_server.items():
-            if server not in allowed_py_names_by_server:
+            if server not in allowed_servers:
+                # Ignore attribute access on non-provider variables (e.g., loop vars like "doc")
                 continue
-            allowed_funcs = allowed_py_names_by_server.get(server, set())
+            allowed_funcs = allowed_funcs_by_server.get(server, set())
+            if not allowed_funcs:
+                message = f"Sandbox used '{server}' functions but none were discovered via search."
+                return StepResult(
+                    type="sandbox",
+                    success=False,
+                    observation={"error": message},
+                    preview=message,
+                    error="planner_used_undiscovered_tool",
+                    error_code="planner_used_undiscovered_tool",
+                )
             for func in funcs:
                 if func not in allowed_funcs:
                     message = f"Sandbox used '{server}.{func}' which was not in search results."
@@ -631,6 +800,50 @@ class ActionExecutor:
                         preview=message,
                         error="planner_used_undiscovered_tool",
                         error_code="planner_used_undiscovered_tool",
+                    )
+
+        # Validate keyword args against discovered tool schemas
+        for server, funcs in call_details.items():
+            for func_name, detail in funcs.items():
+                schema = param_schemas_by_server.get(server, {}).get(func_name)
+                if not schema:
+                    continue  # No schema; do not block to avoid false positives
+                provided = detail.get("keywords", set()) or set()
+                unknown_params = provided - schema["all_params"]
+                missing_params = schema["required_params"] - provided
+
+                problems: List[str] = []
+                if unknown_params:
+                    problems.append(
+                        f"unexpected args: {', '.join(sorted(unknown_params))}"
+                    )
+                if missing_params:
+                    problems.append(
+                        f"missing required args: {', '.join(sorted(missing_params))}"
+                    )
+                if detail.get("has_positional"):
+                    problems.append("positional args detected; use keyword args as per signature")
+                if detail.get("has_var_kw"):
+                    problems.append("var-keyword (**kwargs) usage is not allowed in sandbox calls")
+
+                if problems:
+                    allowed_list = ", ".join(sorted(schema["all_params"])) or "none"
+                    problem_text = " ; ".join(problems)
+                    message = (
+                        f"Sandbox call '{server}.{func_name}' has invalid arguments: "
+                        f"{problem_text}. Allowed args: {allowed_list}."
+                    )
+                    return StepResult(
+                        type="sandbox",
+                        success=False,
+                        observation={
+                            "error": message,
+                            "server": server,
+                            "function": func_name,
+                        },
+                        preview=message,
+                        error="sandbox_invalid_args",
+                        error_code="sandbox_invalid_args",
                     )
 
         try:
@@ -684,6 +897,37 @@ class ActionExecutor:
             summary = self.agent_state.summarize_sandbox_output(label, normalized_result)
             if summary:
                 entry["summary"] = summary
+
+        runtime_error: str | None = None
+        if sandbox_result.success and not sandbox_result.timed_out and isinstance(normalized_result, dict):
+            if normalized_result.get("successful") is False:
+                runtime_error = normalized_result.get("error") or "sandbox returned successful=False"
+            elif normalized_result.get("error"):
+                runtime_error = normalized_result.get("error")
+            elif normalized_result.get("traceback"):
+                runtime_error = "sandbox raised an exception"
+
+        if sandbox_result.success and not sandbox_result.timed_out and runtime_error:
+            logs = sandbox_result.logs or []
+            MAX_LOG_LINES = 50
+            if len(logs) > MAX_LOG_LINES:
+                logs = logs[:MAX_LOG_LINES] + ["... (truncated)"]
+            preview = command.get("reasoning") or f"Sandbox '{label}' failed: {runtime_error[:100]}"
+            error_payload = {
+                "error": runtime_error,
+                "logs": logs,
+                "result": normalized_result,
+                "timed_out": False,
+            }
+            return StepResult(
+                type="sandbox",
+                success=False,
+                observation=error_payload,
+                preview=preview,
+                error=runtime_error,
+                error_code="sandbox_runtime_error",
+                raw_output_key=result_key,
+            )
 
         if sandbox_result.success and not sandbox_result.timed_out:
             observation, is_smart_summary, original_tokens, compressed_tokens = self._process_sandbox_observation(sandbox_result.result)

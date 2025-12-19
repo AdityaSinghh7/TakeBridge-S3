@@ -486,12 +486,22 @@ def translate_step_output(
     if client:
         try:
             messages = _build_messages(task, target, trajectory)
-            response = client.create_response(
-                messages=messages,
-                model=llm_model,
-                max_output_tokens=max_output_tokens,
-                reasoning_effort="medium",
-            )
+            try:
+                response = client.create_response(
+                    messages=messages,
+                    model=llm_model,
+                    max_output_tokens=max_output_tokens,
+                    reasoning_effort="medium",
+                    text={"format": {"type": "json_object"}},
+                )
+            except TypeError:
+                # Older SDKs may not support json mode yet; fall back to plain text.
+                response = client.create_response(
+                    messages=messages,
+                    model=llm_model,
+                    max_output_tokens=max_output_tokens,
+                    reasoning_effort="medium",
+                )
             text = None
             if extract_assistant_text is not None:
                 try:

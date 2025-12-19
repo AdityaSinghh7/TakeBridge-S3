@@ -313,8 +313,8 @@ class AgentState:
         trajectory = self._execution_history.build_trajectory()
 
         # available_tools is the SINGLE SOURCE OF TRUTH for tool specs
-        # Compact descriptors are already minimal, just pass through
-        available_tools = self.search_results
+        # Compact descriptors are already minimal, just pass through.
+        available_tools = list(self.search_results or [])
 
         # provider_tree is already slim from inventory view
         slim_tree = self.provider_tree
@@ -404,6 +404,29 @@ class AgentState:
                     # Note if smart summary was used
                     if step.is_smart_summary:
                         lines.append("*(Response summarized via LLM)*")
+                else:
+                    lines.append(f"**Error**: {step.error or 'Unknown error'}")
+
+            elif step_type == "inspect_tool_output":
+                action_input = step.action_input
+                tool_id = action_input.get("tool_id", "unknown")
+                field_path = action_input.get("field_path", "") or ""
+                max_depth = action_input.get("max_depth", "")
+                max_fields = action_input.get("max_fields", "")
+
+                lines.append(f"### Step {step_num}: Inspect Tool Output - {tool_id}")
+                lines.append(f"**Field Path**: {field_path or '(root)'}")
+                if max_depth or max_fields:
+                    lines.append(f"**Limits**: max_depth={max_depth}, max_fields={max_fields}")
+
+                observation = step.observation
+                if observation is not None:
+                    obs_json = json.dumps(observation, indent=2, ensure_ascii=False)
+                    lines.append(f"**Observation**:\n```json\n{obs_json}\n```")
+
+                if step.success:
+                    if step.is_smart_summary:
+                        lines.append("*(Observation summarized via LLM)*")
                 else:
                     lines.append(f"**Error**: {step.error or 'Unknown error'}")
 

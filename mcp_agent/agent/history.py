@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional
 
-StepType = Literal["tool", "sandbox", "search", "finish", "fail"]
+StepType = Literal["tool", "sandbox", "search", "inspect_tool_output", "finish", "fail"]
 
 
 @dataclass

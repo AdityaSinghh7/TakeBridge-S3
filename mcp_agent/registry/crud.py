@@ -498,7 +498,7 @@ def get_available_providers(context: AgentContext) -> list[dict]:
         status = OAuthManager.auth_status(context, provider)
         authorized = status.get("authorized", False)
         mcp_url = status.get("mcp_url")
-        configured = bool(mcp_url)  # Keep backwards compatibility
+        configured = bool(mcp_url) or bool(authorized)  # Keep backwards compatibility
 
         providers.append({
             "provider": provider,

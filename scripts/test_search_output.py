@@ -15,7 +15,7 @@ import sys
 
 from mcp_agent.knowledge.search import search_tools
 from mcp_agent.knowledge.introspection import get_manifest
-from mcp_agent.knowledge.utils import flatten_schema_fields
+from mcp_agent.knowledge.utils import summarize_schema_for_llm
 from mcp_agent.user_identity import normalize_user_id
 
 
@@ -53,22 +53,30 @@ def main() -> int:
         tool_id = tool.get("tool_id")
         provider, _, tool_name = tool_id.partition(".") if tool_id else ("", "", "")
         wrapper_fields: list[str] = []
+        wrapper_has_hidden = False
 
-        # Wrapper schema -> flatten
+        # Wrapper schema -> summarize (same logic used by compact descriptors)
         prov_spec = provider_map.get(provider)
         if prov_spec:
             match = next((t for t in prov_spec.actions if t.name == tool_name), None)
             if match and match.output_schema:
-                wrapper_fields = flatten_schema_fields(match.output_schema, max_depth=3, max_fields=30)
+                wrapper_fields, wrapper_has_hidden = summarize_schema_for_llm(
+                    match.output_schema,
+                    max_depth=3,
+                    max_fields=30,
+                )
 
         output_fields = tool.get("output_fields") or []
+        has_hidden_fields = bool(tool.get("has_hidden_fields", False))
         print(f"{idx}. {tool_id}")
+        print(f"   has_hidden_fields: {has_hidden_fields}")
         print(f"   output_fields ({len(output_fields)}):")
         if output_fields:
             for field in output_fields:
                 print(f"     - {field}")
         else:
             print("     (none)")
+        print(f"   wrapper_has_hidden_fields: {wrapper_has_hidden}")
         print(f"   wrapper_fields ({len(wrapper_fields)}):")
         for field in wrapper_fields[:30]:
             print(f"     - {field}")

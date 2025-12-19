@@ -133,7 +133,7 @@ class AgentOrchestrator:
         when the loop should continue.
         """
         cmd_type = command["type"]
-        if cmd_type in {"search", "tool", "sandbox"}:
+        if cmd_type in {"search", "tool", "sandbox", "inspect_tool_output"}:
             result = self._executor.execute_step(command)
             return self._handle_action_result(command, result)
 
@@ -246,6 +246,64 @@ class AgentOrchestrator:
                     "merged_into_cache": True,
                     "cache_size_after": len(self.agent_state.search_results),
                 },
+            )
+            return None
+
+        if cmd_type == "inspect_tool_output":
+            tool_id = (command.get("tool_id") or "").strip()
+            field_path = (command.get("field_path") or "").strip()
+            max_depth = command.get("max_depth", 4)
+            max_fields = command.get("max_fields", 120)
+            reasoning = command.get("reasoning") or result.preview
+
+            if not result.success:
+                # Inspect is non-terminal: return the error to the planner so it can retry.
+                self.agent_state.record_step(
+                    action_type="inspect_tool_output",
+                    success=False,
+                    action_reasoning=reasoning,
+                    action_input={
+                        "tool_id": tool_id,
+                        "field_path": field_path,
+                        "max_depth": max_depth,
+                        "max_fields": max_fields,
+                        "reasoning": reasoning,
+                    },
+                    action_outcome={"success": False, "error": error_message},
+                    observation=result.observation if result.observation else {"error": error_message},
+                    observation_metadata={
+                        "is_smart_summary": result.is_smart_summary,
+                    },
+                    error=result.error_code or result.error or "inspect_tool_output_failed",
+                )
+                return None
+
+            outcome: Dict[str, Any] = {"success": True}
+            obs = result.observation
+            if isinstance(obs, dict):
+                if "truncated" in obs:
+                    outcome["truncated"] = obs.get("truncated")
+                if "total_child_fields" in obs:
+                    outcome["total_child_fields"] = obs.get("total_child_fields")
+
+            self.agent_state.record_step(
+                action_type="inspect_tool_output",
+                success=True,
+                action_reasoning=reasoning,
+                action_input={
+                    "tool_id": tool_id,
+                    "field_path": field_path,
+                    "max_depth": max_depth,
+                    "max_fields": max_fields,
+                    "reasoning": reasoning,
+                },
+                action_outcome=outcome,
+                observation=obs,
+                observation_metadata={
+                    "is_smart_summary": result.is_smart_summary,
+                },
+                error=None,
+                is_smart_summary=result.is_smart_summary,
             )
             return None
 

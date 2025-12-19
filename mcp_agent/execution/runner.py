@@ -133,7 +133,7 @@ def run_python_plan(
             error = f"{base}: {detail[:200]}"
         else:
             error = base
-    
+
     return SandboxResult(
         success=success,
         result=parsed_result,

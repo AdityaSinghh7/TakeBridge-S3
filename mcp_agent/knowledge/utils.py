@@ -6,12 +6,23 @@ import inspect
 import json
 import os
 import re
+from collections import deque
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# ---------------------------------------------------------------------------
+# Tool schema summarization (LLM-facing)
+# ---------------------------------------------------------------------------
+
+# Standardized Tier-1 regex used by the schema summarizer.
+TIER_1_REGEX = r"(?:^|\.|\[\]\.)(id|.*_id|name|title|status|type|url|email|price|amount|created|updated|timestamp)$"
+
+# Default summary budget for CompactToolDescriptor.output_fields
+MAX_SUMMARY_FIELDS = 30
 
 
 def repo_root() -> Path:
@@ -381,3 +392,260 @@ def flatten_schema_fields(
             )
 
     return out
+
+
+def summarize_schema_for_llm(
+    schema: Dict[str, Any],
+    *,
+    max_depth: int = 3,
+    max_fields: int = MAX_SUMMARY_FIELDS,
+) -> tuple[List[str], bool]:
+    """
+    Produce a compact, planner-friendly summary of a tool's output schema.
+
+    Contract:
+    - Prefer "Tier 1" leaf fields (IDs, names, statuses, etc.).
+    - Always include top-level primitives.
+    - For large nested containers, emit fold markers that instruct the planner
+      to call `toolbox.inspect_tool_output(tool_id, field_path)` for drill-down.
+
+    Returns:
+        (output_fields, has_hidden_fields)
+    """
+    data_schema = _unwrap_data_envelope(schema)
+    if not isinstance(data_schema, dict) or not data_schema:
+        return [], False
+
+    # Candidate leaves within the normal summary max_depth (bounded)
+    candidate_leaves, candidate_truncated = _collect_leaf_fields(
+        data_schema,
+        max_depth=max_depth,
+        max_nodes=8_000,
+        max_results=max(500, max_fields * 30),
+        return_truncation=True,
+    )
+
+    # Fast-path: small schemas (keep previous behavior: no fold markers)
+    if not candidate_truncated and len(candidate_leaves) <= max_fields:
+        # Preserve ordering from traversal.
+        return candidate_leaves, False
+
+    tier2_lines = _root_structural_lines(data_schema)
+
+    # Tier-1: greedy scan (bounded for safety) only when we are summarizing.
+    tier1_pattern = re.compile(TIER_1_REGEX)
+    tier1_fields = _collect_leaf_fields(
+        data_schema,
+        match_path=lambda p: bool(tier1_pattern.search(p)),
+        max_depth=20,
+        max_nodes=8_000,
+        max_results=200,
+    )
+
+    # Otherwise, build the "smart summary" view.
+    selected: List[str] = []
+    selected_set: set[str] = set()
+
+    def _add(line: str) -> None:
+        if not line or line in selected_set:
+            return
+        if len(selected) >= max_fields:
+            return
+        selected.append(line)
+        selected_set.add(line)
+
+    # 1) Tier-2 root primitives + fold markers for root containers (always visible)
+    for line in tier2_lines:
+        _add(line)
+
+    # 2) Tier-1 leaf fields
+    for line in tier1_fields:
+        _add(line)
+
+    # 3) Fill remaining budget with BFS leaf fields
+    for line in candidate_leaves:
+        _add(line)
+
+    has_hidden_fields = True
+    return selected, has_hidden_fields
+
+
+def _unwrap_data_envelope(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """If schema is an envelope with top-level `data`, return that subtree."""
+    if not isinstance(schema, dict):
+        return {}
+    props = schema.get("properties")
+    if isinstance(props, dict):
+        data_schema = props.get("data")
+        if isinstance(data_schema, dict):
+            return data_schema
+    return schema
+
+
+def _schema_type(schema: Any) -> str:
+    if not isinstance(schema, dict):
+        return "unknown"
+    value = schema.get("type")
+    if isinstance(value, str) and value:
+        return value
+    # Infer from shape
+    if isinstance(schema.get("properties"), dict):
+        return "object"
+    if "items" in schema:
+        return "array"
+    if "oneOf" in schema or "anyOf" in schema:
+        return "union"
+    if "enum" in schema:
+        return "enum"
+    return "unknown"
+
+
+def _array_item_schema(schema: Dict[str, Any]) -> Dict[str, Any] | None:
+    items = schema.get("items")
+    return items if isinstance(items, dict) else None
+
+
+def _root_structural_lines(schema: Dict[str, Any]) -> List[str]:
+    """
+    Emit Tier-2 lines for immediate children of the root `data` object:
+    - primitives as `key: type`
+    - containers as fold markers with child counts and inspect hints
+    """
+    props = schema.get("properties")
+    if not isinstance(props, dict) or not props:
+        return []
+
+    lines: List[str] = []
+    for name, subschema in props.items():
+        if not isinstance(subschema, dict):
+            continue
+        child_type = _schema_type(subschema)
+
+        # Primitive leaf at root
+        if child_type in {"string", "number", "integer", "boolean", "null"} or child_type == "enum":
+            lines.append(f"{name}: {child_type}")
+            continue
+
+        # Array handling
+        if child_type == "array":
+            item_schema = _array_item_schema(subschema) or {}
+            item_type = _schema_type(item_schema)
+            if item_type in {"string", "number", "integer", "boolean", "null"} or item_type == "enum":
+                lines.append(f"{name}[]: {item_type}")
+                continue
+            child_count, unknown = _child_count(item_schema)
+            if unknown:
+                lines.append(
+                    f'{name}[]: object (unknown keys; inspect_tool_output(..., field_path="{name}[]"))'
+                )
+            else:
+                lines.append(
+                    f'{name}[]: object (contains {child_count} sub-fields; inspect_tool_output(..., field_path="{name}[]"))'
+                )
+            continue
+
+        # Object handling
+        if child_type == "object" or child_type == "union":
+            child_count, unknown = _child_count(subschema)
+            if unknown:
+                lines.append(
+                    f'{name}: object (unknown keys; inspect_tool_output(..., field_path="{name}"))'
+                )
+            else:
+                lines.append(
+                    f'{name}: object (contains {child_count} sub-fields; inspect_tool_output(..., field_path="{name}"))'
+                )
+            continue
+
+        # Fallback
+        lines.append(f"{name}: {child_type}")
+
+    return lines
+
+
+def _child_count(schema: Dict[str, Any]) -> tuple[int, bool]:
+    """Return (immediate_property_count, unknown)."""
+    props = schema.get("properties")
+    if isinstance(props, dict):
+        return len(props), False
+    # additionalProperties without explicit properties => unknown shape
+    if schema.get("additionalProperties") is True:
+        return 0, True
+    return 0, True
+
+
+def _collect_leaf_fields(
+    schema: Dict[str, Any],
+    *,
+    match_path: Optional[Callable[[str], bool]] = None,
+    max_depth: int = 3,
+    max_nodes: int = 5_000,
+    max_results: int = 2_000,
+    return_truncation: bool = False,
+) -> Any:
+    """
+    BFS over a JSON-schema-like dict, collecting leaf `path: type` strings.
+
+    - Respects `max_depth` (object/array edges).
+    - Stops after `max_nodes` visited nodes.
+    - Stops after `max_results` collected leaves.
+    - If `match_path` is provided, collects only leaves whose path matches.
+    """
+    leaves: List[str] = []
+    nodes_visited = 0
+
+    # Queue elements: (schema_node, path_prefix, depth)
+    queue: deque[tuple[Dict[str, Any], str, int]] = deque()
+    queue.append((schema, "", 0))
+
+    while queue:
+        node, prefix, depth = queue.popleft()
+        nodes_visited += 1
+        if nodes_visited > max_nodes:
+            break
+        if len(leaves) >= max_results:
+            break
+
+        node_type = _schema_type(node)
+
+        # Depth cap applies to descending; still allow emitting leaves at the boundary.
+        if depth > max_depth:
+            continue
+
+        props = node.get("properties") if isinstance(node, dict) else None
+        if node_type == "object" and isinstance(props, dict) and props:
+            if depth == max_depth:
+                continue
+            for name, child in props.items():
+                if not isinstance(child, dict):
+                    continue
+                child_prefix = f"{prefix}.{name}" if prefix else name
+                queue.append((child, child_prefix, depth + 1))
+            continue
+
+        if node_type == "array":
+            if depth == max_depth:
+                continue
+            item_schema = _array_item_schema(node)
+            child_prefix = f"{prefix}[]" if prefix else "[]"
+            if isinstance(item_schema, dict) and item_schema:
+                queue.append((item_schema, child_prefix, depth + 1))
+            else:
+                # Unknown items: emit array placeholder if we have a named prefix.
+                if prefix:
+                    path_only = prefix + "[]"
+                    if match_path is None or match_path(path_only):
+                        leaves.append(f"{path_only}: array")
+            continue
+
+        # Leaf / unknown
+        if prefix:
+            path_only = prefix
+            if match_path is None or match_path(path_only):
+                leaf_type = node_type
+                leaves.append(f"{path_only}: {leaf_type}")
+
+    truncated = bool(queue) or nodes_visited > max_nodes or len(leaves) >= max_results
+    if return_truncation:
+        return leaves, truncated
+    return leaves

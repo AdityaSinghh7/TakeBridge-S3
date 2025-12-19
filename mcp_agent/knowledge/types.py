@@ -63,6 +63,7 @@ class CompactToolDescriptor:
     signature: str                      # e.g., "gmail.gmail_search(query, max_results=20)"
     input_params: Dict[str, str]        # {"query": "str (required)", "max_results": "int (optional, default=20)"}
     output_fields: List[str]            # ["messages[].id", "messages[].subject", ...]
+    has_hidden_fields: bool = False     # True when output_fields is a summarized/folded view
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -73,6 +74,7 @@ class CompactToolDescriptor:
             "signature": self.signature,
             "input_params": self.input_params,
             "output_fields": self.output_fields,
+            "has_hidden_fields": self.has_hidden_fields,
         }
 
 
@@ -211,14 +213,17 @@ class ToolSpec:
                 label = f"{label} - {param.description.strip()}"
             input_params[param.name] = label
 
-        # Get output_fields from schema
-        from mcp_agent.knowledge.utils import flatten_schema_fields
+        # Get output_fields from schema (heuristically pruned + folded when large)
+        from mcp_agent.knowledge.utils import summarize_schema_for_llm
 
-        output_fields = flatten_schema_fields(
-            self.output_schema,
-            max_depth=3,
-            max_fields=30
-        ) if self.output_schema else []
+        output_fields: List[str] = []
+        has_hidden_fields = False
+        if self.output_schema:
+            output_fields, has_hidden_fields = summarize_schema_for_llm(
+                self.output_schema,
+                max_depth=3,
+                max_fields=30,
+            )
 
         return CompactToolDescriptor(
             tool_id=self.tool_id,
@@ -227,6 +232,7 @@ class ToolSpec:
             signature=signature,
             input_params=input_params,
             output_fields=output_fields,
+            has_hidden_fields=has_hidden_fields,
         )
 
     def to_llm_descriptor(self, *, score: float = 0.0) -> LLMToolDescriptor:
