@@ -108,3 +108,6 @@ Only the events below are required/most useful to drive frontend updates; other 
 - `mcp.high_signal`
   - Purpose: surfaced key fields from a tool result for UI.
   - Payload: on success `{provider, tool, success: true, signals: {…}}`; on failure `{provider, tool, success: false, error}`.
+- `mcp.step.recorded`
+  - Purpose: emitted after each canonical agent step so the planner’s reasoning is persisted alongside the step metadata.
+  - Payload: `action_step` (int), `action_type` (`tool` | `sandbox` | `search` | `finish` | `fail`), `success` (bool), `reasoning` (string), optional `error`, optional `action_input_keys`/`action_outcome_keys` (lists of dict field names), and optional `observation_metadata` (dict).
