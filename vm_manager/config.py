@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     # GCP + Agent VM config
     GCP_PROJECT_ID: str = ""
     GCP_ZONE: str = "us-central1-a"
-    GCP_MACHINE_TYPE: str = "e2-standard-4"
+    GCP_MACHINE_TYPE: str = "n2-standard-4"
     GCP_IMAGE: str = ""  # full image self-link or image name
     GCP_IMAGE_PROJECT: str = ""  # optional if GCP_IMAGE is a name
     GCP_MACHINE_IMAGE: str = ""  # full machine image self-link or name
@@ -56,6 +56,14 @@ class Settings(BaseSettings):
     def trim_jwt_secret(cls, v: str) -> str:
         """Trim whitespace from JWT secret (common issue when copying from Supabase dashboard)"""
         return v.strip() if v else v
+
+    @property
+    def startup_script_content(self) -> str:
+        try:
+            with open("scripts/startup.sh", "r", encoding="utf-8") as f:
+                return f.read()
+        except FileNotFoundError:
+            return self.GCP_STARTUP_SCRIPT
 
     class Config:
         env_file = ".env"

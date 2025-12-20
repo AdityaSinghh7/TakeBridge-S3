@@ -204,11 +204,12 @@ def create_agent_instance_for_user(user_id: str) -> Tuple[str, str, Optional[str
             )
         ]
 
-    if settings.GCP_STARTUP_SCRIPT:
+    startup_script = settings.startup_script_content
+    if startup_script:
         instance.metadata = compute_v1.Metadata(
             items=[
                 compute_v1.Metadata.ItemsValueListEntry(
-                    key="startup-script", value=settings.GCP_STARTUP_SCRIPT
+                    key="startup-script", value=startup_script
                 )
             ]
         )
