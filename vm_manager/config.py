@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     AGENT_VNC_SCHEME: str = "ws"  # ws or wss later
     AGENT_VNC_WS_PORT: int = 6080  # where websockify will listen
     AGENT_VNC_WS_PATH: str = ""
+    AGENT_GUACAMOLE_PORT: int = 8080
+    AGENT_GUACAMOLE_PATH: str = "/guacamole"
 
     # Supabase auth
     SUPABASE_JWT_SECRET: str = ""  # from Supabase project settings → API → JWT secret

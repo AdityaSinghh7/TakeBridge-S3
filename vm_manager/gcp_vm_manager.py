@@ -208,7 +208,7 @@ def create_agent_instance_for_user(user_id: str) -> Tuple[str, str, Optional[str
     if startup_script:
         instance.metadata = compute_v1.Metadata(
             items=[
-                compute_v1.Metadata.ItemsValueListEntry(
+                compute_v1.Items(
                     key="startup-script", value=startup_script
                 )
             ]
@@ -229,12 +229,10 @@ def create_agent_instance_for_user(user_id: str) -> Tuple[str, str, Optional[str
             controller_base_url, settings.AGENT_CONTROLLER_HEALTH_PATH
         )
 
-    ws_scheme = settings.AGENT_VNC_SCHEME
-    ws_port = settings.AGENT_VNC_WS_PORT
-    ws_path = settings.AGENT_VNC_WS_PATH or ""
-    if ws_path and not ws_path.startswith("/"):
-        ws_path = "/" + ws_path
-    vnc_url = f"{ws_scheme}://{public_ip}:{ws_port}{ws_path}"
+    guac_path = settings.AGENT_GUACAMOLE_PATH or ""
+    if guac_path and not guac_path.startswith("/"):
+        guac_path = "/" + guac_path
+    vnc_url = f"http://{public_ip}:{settings.AGENT_GUACAMOLE_PORT}{guac_path}"
 
     return instance_name, controller_base_url, vnc_url
 
