@@ -11,7 +11,12 @@ from shared.db.engine import SessionLocal
 from shared.db.models import Workspace, User
 from shared.db import crud
 from vm_manager.config import settings
-from .vm_provider import create_agent_instance_for_user, stop_instance, terminate_instance
+from .vm_provider import (
+    create_agent_instance_for_user,
+    provider_location,
+    stop_instance,
+    terminate_instance,
+)
 
 
 def ensure_workspace(user_id: str) -> Workspace:
@@ -59,7 +64,7 @@ def ensure_workspace(user_id: str) -> Workspace:
             controller_base_url=controller_base_url,
             vnc_url=vnc_url,
             vm_instance_id=instance_id,
-            cloud_region=settings.AWS_REGION,
+            cloud_region=provider_location(),
             last_used_at=now,
         )
         db.add(ws)

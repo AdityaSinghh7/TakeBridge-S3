@@ -9,6 +9,39 @@ def _provider() -> str:
     return (settings.VM_PROVIDER or "aws").strip().lower()
 
 
+def current_provider() -> str:
+    return _provider()
+
+
+def provider_location() -> str:
+    provider = _provider()
+    if provider == "gcp":
+        return settings.GCP_ZONE
+    return settings.AWS_REGION
+
+
+def provider_spec() -> dict:
+    provider = _provider()
+    if provider == "gcp":
+        spec: dict[str, str | int] = {"zone": settings.GCP_ZONE}
+        if settings.GCP_MACHINE_IMAGE:
+            spec["machine_image"] = settings.GCP_MACHINE_IMAGE
+            spec["machine_image_project"] = (
+                settings.GCP_MACHINE_IMAGE_PROJECT or settings.GCP_PROJECT_ID
+            )
+        else:
+            spec["image"] = settings.GCP_IMAGE
+            spec["image_project"] = settings.GCP_IMAGE_PROJECT or settings.GCP_PROJECT_ID
+            spec["machine_type"] = settings.GCP_MACHINE_TYPE
+            spec["disk_size_gb"] = settings.GCP_DISK_SIZE_GB
+        return spec
+    return {
+        "instance_type": settings.AGENT_INSTANCE_TYPE,
+        "region": settings.AWS_REGION,
+        "ami_id": settings.AGENT_AMI_ID,
+    }
+
+
 def create_agent_instance_for_user(user_id: str) -> Tuple[str, str, Optional[str]]:
     provider = _provider()
     if provider == "aws":

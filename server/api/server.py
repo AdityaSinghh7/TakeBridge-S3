@@ -44,7 +44,7 @@ from shared.streaming import (
     reset_current_emitter,
     set_current_emitter,
 )
-from vm_manager.vm_provider import create_agent_instance_for_user
+from vm_manager.vm_provider import create_agent_instance_for_user, current_provider, provider_spec
 from vm_manager.config import settings
 from orchestrator_agent.data_types import OrchestratorRequest
 from shared.run_context import RUN_LOG_ID
@@ -505,10 +505,8 @@ def _provision_controller_session(user_id: str, run_id: Optional[str] = None) ->
                     "id": vm_id,
                     "run_id": run_id,
                     "status": "ready",
-                    "provider": "aws",
-                    "spec": json.dumps(
-                        {"instance_type": settings.AGENT_INSTANCE_TYPE, "region": settings.AWS_REGION}
-                    ),
+                    "provider": current_provider(),
+                    "spec": json.dumps(provider_spec()),
                     "endpoint": json.dumps(endpoint),
                 },
             )
