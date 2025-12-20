@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     ORCHESTRATOR_TIMEOUT_SECONDS: int = 300
 
     # AWS + Agent VM config
+    VM_PROVIDER: str = "aws"  # aws | gcp
     AWS_REGION: str = "us-west-2"
     AGENT_AMI_ID: str = "ami-xxxxxxxx"
     AGENT_INSTANCE_TYPE: str = "t3.large"
@@ -17,9 +18,27 @@ class Settings(BaseSettings):
     AGENT_SUBNET_ID: str = ""  # required if you use a specific VPC subnet
     AGENT_SSH_KEY_NAME: str | None = None  # optional, if you want SSH in
 
+    # GCP + Agent VM config
+    GCP_PROJECT_ID: str = ""
+    GCP_ZONE: str = "us-central1-a"
+    GCP_MACHINE_TYPE: str = "e2-standard-4"
+    GCP_IMAGE: str = ""  # full image self-link or image name
+    GCP_IMAGE_PROJECT: str = ""  # optional if GCP_IMAGE is a name
+    GCP_MACHINE_IMAGE: str = ""  # full machine image self-link or name
+    GCP_MACHINE_IMAGE_PROJECT: str = ""  # optional if GCP_MACHINE_IMAGE is a name
+    GCP_NETWORK: str = "global/networks/default"
+    GCP_SUBNETWORK: str = ""  # optional subnetwork self-link
+    GCP_ASSIGN_PUBLIC_IP: bool = True
+    GCP_SERVICE_ACCOUNT: str = ""  # optional service account email
+    GCP_TAGS: str = ""  # comma-separated network tags
+    GCP_DISK_SIZE_GB: int = 50
+    GCP_INSTANCE_NAME_PREFIX: str = "tb-agent"
+    GCP_STARTUP_SCRIPT: str = ""  # optional metadata startup script
+
     # Where the Flask VM controller listens inside the VM
     AGENT_CONTROLLER_PORT: int = 5000
     AGENT_CONTROLLER_HEALTH_PATH: str = "/health"
+    VM_SKIP_CONTROLLER_HEALTHCHECK: bool = False
 
     # VNC WebSocket configuration
     AGENT_VNC_SCHEME: str = "ws"  # ws or wss later

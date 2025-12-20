@@ -77,7 +77,10 @@ def create_agent_instance_for_user(user_id: str) -> Tuple[str, str, Optional[str
     print(f"[aws_vm_manager] Using controller_base_url={controller_base_url}")
 
     # Healthcheck the controller
-    _wait_for_controller_health(controller_base_url, settings.AGENT_CONTROLLER_HEALTH_PATH)
+    if not settings.VM_SKIP_CONTROLLER_HEALTHCHECK:
+        _wait_for_controller_health(
+            controller_base_url, settings.AGENT_CONTROLLER_HEALTH_PATH
+        )
 
     # Build VNC URL
     ws_scheme = settings.AGENT_VNC_SCHEME

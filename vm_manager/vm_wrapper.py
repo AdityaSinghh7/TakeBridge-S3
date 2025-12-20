@@ -11,7 +11,7 @@ from shared.db.engine import SessionLocal
 from shared.db.models import Workspace, User
 from shared.db import crud
 from vm_manager.config import settings
-from .aws_vm_manager import create_agent_instance_for_user, stop_instance, terminate_instance
+from .vm_provider import create_agent_instance_for_user, stop_instance, terminate_instance
 
 
 def ensure_workspace(user_id: str) -> Workspace:
@@ -118,7 +118,7 @@ def stop_run_instance(run_id: str, *, wait: bool = True) -> str:
     Stop (power off) the EC2 instance associated with a workflow run.
 
     This looks up `workflow_runs.environment.endpoint.instance_id` for the run_id,
-    calls `aws_vm_manager.stop_instance(...)`, and records the stop time in
+    calls `vm_provider.stop_instance(...)`, and records the stop time in
     `vm_instances.stopped_at` (if a matching vm_instances row exists).
 
     Returns:

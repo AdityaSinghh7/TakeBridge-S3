@@ -44,7 +44,7 @@ from shared.streaming import (
     reset_current_emitter,
     set_current_emitter,
 )
-from vm_manager.aws_vm_manager import create_agent_instance_for_user
+from vm_manager.vm_provider import create_agent_instance_for_user
 from vm_manager.config import settings
 from orchestrator_agent.data_types import OrchestratorRequest
 from shared.run_context import RUN_LOG_ID
