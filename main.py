@@ -1,5 +1,6 @@
 import ctypes
 import sys
+import base64
 import json
 import os
 import platform
@@ -10,6 +11,7 @@ import threading
 import time
 import traceback
 import uuid
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -81,6 +83,10 @@ USE_GLOBAL_DESKTOP_VNC = True
 
 logger = app.logger
 
+_SERVER_START_TIME = time.time()
+_health_cache_lock = threading.Lock()
+_health_cache: Dict[str, Any] = {"ts": 0.0, "payload": None, "status_code": None}
+
 _sse_subscribers_lock = threading.Lock()
 _sse_subscribers: List["queue.Queue[str]"] = []
 _open_windows_lock = threading.Lock()
@@ -94,14 +100,30 @@ _exec_lock = threading.Lock()
 # but /apps and /apps/open no longer depend on it.
 APPS: Dict[str, Dict[str, Any]] = {}
 
-LOCK_DIR = Path("/home/user/server")
+def _default_lock_dir() -> Path:
+    explicit = (os.environ.get("TAKEBRIDGE_LOCK_DIR") or "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+
+    if platform_name == "Windows":
+        base = os.environ.get("ProgramData") or tempfile.gettempdir()
+        return Path(base) / "TakeBridge" / "server"
+
+    if platform_name == "Darwin":
+        return Path(tempfile.gettempdir()) / "takebridge-server"
+
+    # Linux default (matches existing VM images).
+    return Path("/home/user/server")
+
+
+LOCK_DIR = _default_lock_dir()
 try:
     LOCK_DIR.mkdir(parents=True, exist_ok=True)
 except Exception:
     pass
 
-STREAM_SH = "/home/user/server/stream_window.sh"
-CLOSE_SH = "/home/user/server/close_app.sh"
+STREAM_SH = os.environ.get("TAKEBRIDGE_STREAM_SH") or str(LOCK_DIR / "stream_window.sh")
+CLOSE_SH = os.environ.get("TAKEBRIDGE_CLOSE_SH") or str(LOCK_DIR / "close_app.sh")
 
 
 def _stream_lock_path(app_id: str) -> Path:
@@ -476,7 +498,26 @@ def _vnc_backend_host_port() -> Tuple[str, int]:
 
 
 def vm_ip() -> str:
-    return subprocess.check_output(["hostname", "-I"]).decode().split()[0].strip()
+    # Best-effort local IP discovery across platforms without relying on platform-specific commands.
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            # Doesn't send packets; used to select an outbound interface.
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            if ip:
+                return ip
+    except Exception:
+        pass
+
+    try:
+        _, _, addrs = socket.gethostbyname_ex(socket.gethostname())
+        for addr in addrs:
+            if addr and not addr.startswith("127."):
+                return addr
+    except Exception:
+        pass
+
+    return "127.0.0.1"
 
 
 def _launch_app_stream(app_id: str, meta: Dict[str, Any], timeout_s: Optional[int] = None):
@@ -1303,10 +1344,141 @@ except Exception:
 
 @app.get("/health")
 def health():
-    return jsonify({
-        "status": "ok",
+    # Cache for very short TTL to avoid repeated expensive checks during startup polling.
+    try:
+        ttl_s = float(os.environ.get("HEALTH_CACHE_TTL_S", "2.0"))
+    except Exception:
+        ttl_s = 2.0
+    now = time.time()
+
+    with _health_cache_lock:
+        cached_payload = _health_cache.get("payload")
+        cached_code = _health_cache.get("status_code")
+        cached_ts = float(_health_cache.get("ts") or 0.0)
+        if cached_payload is not None and cached_code is not None and (now - cached_ts) < ttl_s:
+            return jsonify(cached_payload), int(cached_code)
+
+    def _record_check(name: str, ok: bool, **extra: Any) -> Dict[str, Any]:
+        entry: Dict[str, Any] = {"ok": bool(ok)}
+        entry.update(extra)
+        checks[name] = entry
+        return entry
+
+    checks: Dict[str, Any] = {}
+    warnings: List[str] = []
+    ready = True
+
+    # Ensure the executor isn't deadlocked/busy and gate deeper checks on it.
+    acquired = _exec_lock.acquire(timeout=1)
+    if not acquired:
+        ready = False
+        _record_check("executor_lock", False, error="executor busy")
+    else:
+        _record_check("executor_lock", True)
+        try:
+            # Temp dir writeability (used by /run_python and script execution helpers).
+            try:
+                with tempfile.NamedTemporaryFile(mode="w", delete=True, encoding="utf-8") as fh:
+                    fh.write("ok")
+                _record_check("tempfile", True, temp_dir=tempfile.gettempdir())
+            except Exception as exc:
+                ready = False
+                _record_check("tempfile", False, error=str(exc), temp_dir=tempfile.gettempdir())
+
+            def _run_py(code: str, *, timeout_s: int = 10) -> Dict[str, Any]:
+                try:
+                    flags = subprocess.CREATE_NO_WINDOW if platform_name == "Windows" else 0
+                    proc = subprocess.run(
+                        [sys.executable, "-c", code],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=timeout_s,
+                        creationflags=flags,
+                    )
+                    return {
+                        "returncode": proc.returncode,
+                        "stdout": (proc.stdout or ""),
+                        "stderr": (proc.stderr or ""),
+                    }
+                except Exception as exc:
+                    return {"error": str(exc), "returncode": -1, "stdout": "", "stderr": ""}
+
+            # Basic python execution smoke test (mirrors /execute usage for python -c).
+            smoke = _run_py("print('ok')", timeout_s=5)
+            smoke_ok = smoke.get("returncode") == 0 and "ok" in (smoke.get("stdout") or "")
+            if not smoke_ok:
+                ready = False
+            _record_check("python_subprocess", smoke_ok, **smoke)
+
+            # Simulate orchestrator's base64 payload execution via /execute.
+            pyautogui_script = (
+                "import json, time; "
+                "import pyautogui; "
+                "pyautogui.FAILSAFE = False; pyautogui.PAUSE = 0; "
+                "size = pyautogui.size(); pos = pyautogui.position(); "
+                "print(json.dumps({'size':[size.width, size.height], 'pos':[pos.x, pos.y]}))"
+            )
+            payload = base64.b64encode(pyautogui_script.encode("utf-8")).decode("ascii")
+            base64_code = f"import base64; exec(base64.b64decode('{payload}').decode('utf-8'))"
+            base64_res = _run_py(base64_code, timeout_s=10)
+            base64_ok = base64_res.get("returncode") == 0
+            if not base64_ok:
+                ready = False
+            _record_check("execute_pyautogui", base64_ok, **base64_res)
+
+            # Screenshot readiness (runner depends on /screenshot before/after each step).
+            if platform_name == "Windows":
+                screenshot_code = (
+                    "import json; from PIL import ImageGrab; "
+                    "img=None\n"
+                    "try:\n"
+                    "  img = ImageGrab.grab(bbox=None, include_layered_windows=True)\n"
+                    "except Exception:\n"
+                    "  img = ImageGrab.grab()\n"
+                    "print(json.dumps({'size': list(img.size)}))"
+                )
+            else:
+                screenshot_code = (
+                    "import json; import pyautogui; "
+                    "img = pyautogui.screenshot(); "
+                    "print(json.dumps({'size': list(img.size)}))"
+                )
+            screenshot_res = _run_py(screenshot_code, timeout_s=15)
+            screenshot_ok = screenshot_res.get("returncode") == 0
+            if not screenshot_ok:
+                ready = False
+            _record_check("screenshot", screenshot_ok, **screenshot_res)
+
+            # Optional: record bash availability for troubleshooting, but don't gate readiness.
+            if platform_name == "Windows":
+                bash_exe = _find_windows_bash_executable()
+                if not bash_exe:
+                    warnings.append("bash not found (Git Bash/WSL); /run_bash_script will fall back to PowerShell")
+                _record_check("bash_available", bool(bash_exe), bash=bash_exe)
+            else:
+                bash_exe = _resolve_bash_executable()
+                _record_check("bash_available", bool(bash_exe), bash=bash_exe)
+        finally:
+            _exec_lock.release()
+
+    payload: Dict[str, Any] = {
+        "status": "ok" if ready else "not_ready",
+        "ready": bool(ready),
         "platform": platform_name,
-    }), 200
+        "pid": os.getpid(),
+        "uptime_s": round(time.time() - _SERVER_START_TIME, 3),
+        "checks": checks,
+        "warnings": warnings,
+    }
+    status_code = 200 if ready else 503
+
+    with _health_cache_lock:
+        _health_cache["ts"] = time.time()
+        _health_cache["payload"] = payload
+        _health_cache["status_code"] = status_code
+
+    return jsonify(payload), status_code
 
 
 @app.post("/apps/open")
@@ -1388,6 +1560,56 @@ def apps_close():
     key = data.get("app")
     if not key:
         return jsonify({"status": "error", "message": "missing 'app'"}), 400
+
+    if platform_name == "Windows":
+        app_id = str(key).strip().lower()
+        try:
+            windows = _list_active_windows_from_host()
+            targets = [
+                w
+                for w in windows
+                if str(w.get("appId", "")).strip().lower() == app_id
+                or str(w.get("id", "")).strip().lower() == app_id
+            ]
+
+            closed = 0
+            close_errors: List[str] = []
+            if targets:
+                try:
+                    import win32con  # type: ignore
+                    import win32gui  # type: ignore
+                except Exception as exc:
+                    return jsonify({"status": "error", "message": f"win32 api not available: {exc}"}), 501
+
+                for w in targets:
+                    hwnd = w.get("hwnd")
+                    if hwnd is None:
+                        continue
+                    try:
+                        win32gui.PostMessage(int(hwnd), win32con.WM_CLOSE, 0, 0)
+                        closed += 1
+                    except Exception as exc:
+                        close_errors.append(str(exc))
+
+            if close_errors:
+                logger.error("apps_close failed for %s: %s", app_id, close_errors[0])
+                return jsonify({"status": "error", "message": close_errors[0], "errors": close_errors}), 500
+
+            status = "ok"
+            message = f"close requested for {app_id}" if closed else f"{app_id} already closed"
+            try:
+                removed = _remove_window(app_id)
+                if removed:
+                    _broadcast(_window_close_event(app_id))
+            except Exception as exc:
+                logger.warning("Failed to broadcast window_close for %s: %s", app_id, exc)
+
+            return jsonify({"status": status, "message": message, "closed_windows": closed})
+
+        except Exception as exc:
+            logger.error("apps_close failed on Windows for %s: %s", app_id, exc)
+            return jsonify({"status": "error", "message": f"failed to close app: {exc}"}), 500
+
     # For close, we don't need default mapping; we just try CLOSE_SH if present.
     if not os.path.isfile(CLOSE_SH):
         return jsonify({"status": "error", "message": f"{CLOSE_SH} not found"}), 500
@@ -1494,12 +1716,11 @@ def get_screen_size():
 
 @app.get("/screenshot")
 def capture_screen_with_cursor():
-    file_path = os.path.join(os.path.dirname(__file__), "screenshots", "screenshot.png")
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
     user_platform = platform.system()
     if user_platform == "Windows":
         def get_cursor():
             hcursor = win32gui.GetCursorInfo()[1]
+            hotspot = win32gui.GetIconInfo(hcursor)[1:3]
             hdc = win32ui.CreateDCFromHandle(win32gui.GetDC(0))
             hbmp = win32ui.CreateBitmap()
             hbmp.CreateCompatibleBitmap(hdc, 36, 36)
@@ -1518,7 +1739,6 @@ def capture_screen_with_cursor():
                 for x in range(width):
                     if pixdata[x, y] == (0, 0, 0, 255):
                         pixdata[x, y] = (0, 0, 0, 0)
-            hotspot = win32gui.GetIconInfo(hcursor)[1:3]
             return cursor, hotspot
         ratio = ctypes.windll.shcore.GetScaleFactorForDevice(0) / 100
         try:
@@ -1532,7 +1752,10 @@ def capture_screen_with_cursor():
             img.paste(cursor, pos, cursor)
         except Exception as exc:
             logger.warning("Failed to capture cursor on Windows: %s", exc)
-        img.save(file_path)
+        buf = BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+        return send_file(buf, mimetype="image/png")
     elif user_platform == "Linux":
         cursor_obj = Xcursor()
         imgarray = cursor_obj.getCursorImageArrayFast()
@@ -1540,13 +1763,29 @@ def capture_screen_with_cursor():
         screenshot = pyautogui.screenshot()
         cursor_x, cursor_y = pyautogui.position()
         screenshot.paste(cursor_img, (cursor_x, cursor_y), cursor_img)
-        screenshot.save(file_path)
+        buf = BytesIO()
+        screenshot.save(buf, format="PNG")
+        buf.seek(0)
+        return send_file(buf, mimetype="image/png")
     elif user_platform == "Darwin":
-        subprocess.run(["screencapture", "-C", file_path])
+        tmp_path: Optional[str] = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+                tmp_path = tmp_file.name
+            subprocess.run(["screencapture", "-C", tmp_path], check=True)
+            data = Path(tmp_path).read_bytes()
+            return send_file(BytesIO(data), mimetype="image/png")
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
     else:
         logger.warning("Platform %s not supported for screenshot", user_platform)
         return jsonify({"error": f"Platform {user_platform} not supported"}), 400
-    return send_file(file_path, mimetype='image/png')
+
+
 
 
 @app.post("/file")
@@ -1664,6 +1903,20 @@ def execute_command():
     _log_request_details("execute_command")
     data = request.get_json(force=True, silent=True) or {}
     shell = data.get('shell', False)
+
+    timeout_val = data.get("timeout", 120)
+    try:
+        timeout_s = int(timeout_val) if timeout_val is not None else 120
+    except Exception:
+        timeout_s = 120
+    if timeout_s <= 0:
+        timeout_s = 120
+
+    cwd = data.get("cwd") or data.get("working_dir")
+    if cwd:
+        cwd = os.path.expandvars(os.path.expanduser(str(cwd)))
+        if not os.path.isdir(cwd):
+            return jsonify({"status": "error", "message": f"working directory does not exist: {cwd}"}), 400
     
     # --- Check 1: Empty Command ---
     command = data.get('command', '' if shell else [])
@@ -1671,11 +1924,14 @@ def execute_command():
         return jsonify({'status': 'error', 'message': 'Command is empty'}), 400
 
     if isinstance(command, str) and not shell:
-        command = shlex.split(command)
+        try:
+            command = shlex.split(command, posix=(platform_name != "Windows"))
+        except Exception:
+            command = shlex.split(command)
     
     # Expand User Paths (~/)
     for i, arg in enumerate(command):
-        if isinstance(arg, str) and arg.startswith("~/"):
+        if isinstance(arg, str) and (arg.startswith("~/") or arg.startswith("~\\")):
             command[i] = os.path.expanduser(arg)
 
     # Ensure we use the correct python executable on Windows
@@ -1683,17 +1939,52 @@ def execute_command():
         if command[0] in ("python3", "python"):
             command[0] = sys.executable
 
+    # If this is a python -c payload (common for orchestrator pyautogui),
+    # harden defaults inside the subprocess to avoid FAILSAFE/PAUSE surprises.
+    if (
+        not shell
+        and isinstance(command, list)
+        and len(command) >= 3
+        and command[0] in (sys.executable, "python", "python3")
+        and command[1] == "-c"
+        and isinstance(command[2], str)
+    ):
+        code_str = command[2]
+        needs_tuning = ("pyautogui" in code_str) or ("base64.b64decode" in code_str)
+        already_tuned = "pyautogui.FAILSAFE" in code_str or "FAILSAFE" in code_str
+        if needs_tuning and not already_tuned:
+            patched = (
+                "import pyautogui; "
+                "pyautogui.FAILSAFE=False; "
+                "pyautogui.PAUSE=0; "
+                "pyautogui.DARWIN_CATCH_UP_TIME=0; "
+                + code_str
+            )
+            command = list(command)
+            command[2] = patched
+
     def _try_run(cmd_to_run):
-        # NOTE: If you are doing GUI automation, you might want to remove CREATE_NO_WINDOW (flags=0)
-        # flags = subprocess.CREATE_NO_WINDOW if platform_name == "Windows" else 0
-        flags = 0 
+        flags = 0
+        if platform_name == "Windows" and not shell:
+            try:
+                if (
+                    isinstance(cmd_to_run, list)
+                    and len(cmd_to_run) >= 2
+                    and str(cmd_to_run[1]).strip().lower() == "-c"
+                    and str(cmd_to_run[0]).strip().lower() in {str(sys.executable).lower(), "python", "python3"}
+                ):
+                    # Avoid flashing a console window for short python -c automation payloads.
+                    flags = subprocess.CREATE_NO_WINDOW
+            except Exception:
+                pass
         return subprocess.run(
             cmd_to_run,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, # This captures the SyntaxError
             shell=shell,
             text=True,
-            timeout=120,
+            timeout=timeout_s,
+            cwd=cwd,
             creationflags=flags,
         )
 
@@ -1766,15 +2057,33 @@ def run_python():
     code = data.get('code')
     if not code:
         return jsonify({'status': 'error', 'message': 'Code not supplied!'}), 400
-    temp_filename = f"/tmp/python_exec_{uuid.uuid4().hex}.py"
+
+    timeout_val = data.get("timeout", data.get("timeout_seconds", 30))
+    try:
+        timeout_s = int(timeout_val) if timeout_val is not None else 30
+    except Exception:
+        timeout_s = 30
+    if timeout_s <= 0:
+        timeout_s = 30
+
+    temp_filename: Optional[str] = None
     started = time.time()
     acquired = _exec_lock.acquire(timeout=5)
     if not acquired:
         return jsonify({'status': 'error', 'message': 'executor busy'}), 503
     try:
-        with open(temp_filename, 'w') as handle:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False, encoding="utf-8") as handle:
             handle.write(code)
-        result = subprocess.run([sys.executable, temp_filename], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+            temp_filename = handle.name
+        flags = subprocess.CREATE_NO_WINDOW if platform_name == "Windows" else 0
+        result = subprocess.run(
+            [sys.executable, temp_filename],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout_s,
+            creationflags=flags,
+        )
         output = result.stdout
         error_output = result.stderr
         combined = output
@@ -1788,23 +2097,103 @@ def run_python():
         logger.info("run_python finished returncode=%s duration=%.2fs", result.returncode, duration)
         return jsonify({'status': status, 'message': combined, 'need_more': False, 'output': output, 'error': error_output, 'return_code': result.returncode})
     except subprocess.TimeoutExpired:
-        return jsonify({'status': 'error', 'message': 'Execution timeout: Code took too long to execute', 'error': 'TimeoutExpired', 'need_more': False, 'output': None}), 500
+        return jsonify({'status': 'error', 'message': f'Execution timeout: Code exceeded {timeout_s}s', 'error': 'TimeoutExpired', 'need_more': False, 'output': None}), 504
     except Exception as exc:
         logger.error("run_python failed: %s", exc)
         return jsonify({'status': 'error', 'message': str(exc)}), 500
     finally:
-        if os.path.exists(temp_filename):
+        if temp_filename and os.path.exists(temp_filename):
             try:
                 os.remove(temp_filename)
             except Exception:
                 pass
         _exec_lock.release()
+
+
+def _find_windows_bash_executable() -> Optional[str]:
+    # Allow explicit override (useful for Git Bash not on PATH).
+    for env_key in ("BASH_PATH", "GIT_BASH_PATH"):
+        candidate = (os.environ.get(env_key) or "").strip().strip('"')
+        if candidate and os.path.isfile(candidate):
+            return candidate
+
+    for exe in ("bash.exe", "bash"):
+        found = shutil.which(exe)
+        if found:
+            return found
+
+    # Common Git for Windows locations.
+    candidates: List[str] = []
+    for base in (
+        os.environ.get("ProgramW6432"),
+        os.environ.get("ProgramFiles"),
+        os.environ.get("ProgramFiles(x86)"),
+    ):
+        if not base:
+            continue
+        candidates.extend(
+            [
+                os.path.join(base, "Git", "bin", "bash.exe"),
+                os.path.join(base, "Git", "usr", "bin", "bash.exe"),
+                os.path.join(base, "Git", "mingw64", "bin", "bash.exe"),
+                os.path.join(base, "Git", "mingw32", "bin", "bash.exe"),
+            ]
+        )
+
+    # MSYS2/Cygwin (best-effort).
+    candidates.extend(
+        [
+            r"C:\msys64\usr\bin\bash.exe",
+            r"C:\msys32\usr\bin\bash.exe",
+            r"C:\cygwin64\bin\bash.exe",
+            r"C:\cygwin\bin\bash.exe",
+        ]
+    )
+
+    for cand in candidates:
+        try:
+            if cand and os.path.isfile(cand):
+                return cand
+        except Exception:
+            continue
+    return None
+
+
+def _resolve_bash_executable() -> Optional[str]:
+    if platform_name == "Windows":
+        return _find_windows_bash_executable()
+
+    for candidate in (shutil.which("bash"), "/bin/bash", "/usr/bin/bash"):
+        if not candidate:
+            continue
+        try:
+            if os.path.isfile(candidate):
+                return candidate
+        except Exception:
+            continue
+    return None
+
+
+def _resolve_powershell_executable() -> Optional[str]:
+    # Prefer Windows PowerShell for widest compatibility; fall back to pwsh if present.
+    for exe in ("powershell.exe", "powershell", "pwsh.exe", "pwsh"):
+        found = shutil.which(exe)
+        if found:
+            return found
+    return None
+
+
+def _is_windows() -> bool:
+    return platform_name == "Windows"
+
+
 @app.post("/run_bash_script")
 def run_bash_script():
     data = request.get_json(force=True, silent=True) or {}
     script = data.get('script')
     timeout = data.get('timeout', 100)
     working_dir = data.get('working_dir')
+    requested_shell = str(data.get("shell") or "").strip().lower()
     if not script:
         return jsonify({
             'status': 'error',
@@ -1812,8 +2201,17 @@ def run_bash_script():
             'error': '',
             'returncode': -1,
         }), 400
+
+    try:
+        timeout = int(timeout) if timeout is not None else 100
+    except Exception:
+        timeout = 100
+    if timeout <= 0:
+        timeout = 100
+
     if working_dir:
         working_dir = os.path.expanduser(working_dir)
+        working_dir = os.path.expandvars(working_dir)
         if not os.path.exists(working_dir):
             return jsonify({
                 'status': 'error',
@@ -1821,42 +2219,89 @@ def run_bash_script():
                 'error': '',
                 'returncode': -1,
             }), 400
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as tmp_file:
-        if "#!/bin/bash" not in script:
+
+    shell_used: str
+    if requested_shell in {"powershell", "pwsh", "ps"}:
+        shell_used = "powershell"
+        suffix = ".ps1"
+    elif requested_shell in {"cmd", "cmd.exe"}:
+        shell_used = "cmd"
+        suffix = ".cmd"
+    else:
+        shell_used = "bash"
+        suffix = ".sh"
+
+    tmp_file_path: Optional[str] = None
+    with tempfile.NamedTemporaryFile(mode="w", suffix=suffix, delete=False, encoding="utf-8") as tmp_file:
+        if shell_used == "bash" and "#!/bin/bash" not in script:
             script = "#!/bin/bash\n\n" + script
         tmp_file.write(script)
         tmp_file_path = tmp_file.name
     try:
-        os.chmod(tmp_file_path, 0o755)
-        if platform_name == "Windows":
-            flags = subprocess.CREATE_NO_WINDOW
-            result = subprocess.run(
-                ['bash', tmp_file_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                timeout=timeout,
-                cwd=working_dir,
-                creationflags=flags,
-                shell=False,
-            )
+        if tmp_file_path:
+            try:
+                os.chmod(tmp_file_path, 0o755)
+            except Exception:
+                pass
+
+        flags = subprocess.CREATE_NO_WINDOW if _is_windows() else 0
+
+        if shell_used == "bash":
+            bash_exe = _resolve_bash_executable()
+            if not bash_exe and _is_windows():
+                # Windows fallback: if bash isn't installed, fall back to PowerShell instead of 500.
+                shell_used = "powershell"
+            elif not bash_exe:
+                return jsonify({
+                    'status': 'error',
+                    'output': 'bash not found on this host',
+                    'error': '',
+                    'returncode': -1,
+                    'shell_used': shell_used,
+                }), 501
+
+        if shell_used == "powershell":
+            ps_exe = _resolve_powershell_executable()
+            if not ps_exe:
+                return jsonify({
+                    'status': 'error',
+                    'output': 'PowerShell not found on this host',
+                    'error': '',
+                    'returncode': -1,
+                    'shell_used': shell_used,
+                }), 501
+            cmd = [ps_exe, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", tmp_file_path]
+        elif shell_used == "cmd":
+            cmd_exe = os.environ.get("ComSpec") or shutil.which("cmd.exe") or shutil.which("cmd")
+            if not cmd_exe:
+                return jsonify({
+                    'status': 'error',
+                    'output': 'cmd.exe not found on this host',
+                    'error': '',
+                    'returncode': -1,
+                    'shell_used': shell_used,
+                }), 501
+            cmd = [cmd_exe, "/c", tmp_file_path]
         else:
-            flags = 0
-            result = subprocess.run(
-                ['/bin/bash', tmp_file_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                timeout=timeout,
-                cwd=working_dir,
-                creationflags=flags,
-                shell=False,
-            )
+            # bash
+            cmd = [bash_exe, tmp_file_path]  # type: ignore[list-item]
+
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout,
+            cwd=working_dir,
+            creationflags=flags,
+            shell=False,
+        )
         return jsonify({
             'status': 'success' if result.returncode == 0 else 'error',
             'output': result.stdout,
             'error': '',
             'returncode': result.returncode,
+            'shell_used': shell_used,
         })
     except subprocess.TimeoutExpired:
         return jsonify({
@@ -1864,41 +2309,20 @@ def run_bash_script():
             'output': f'Script execution timed out after {timeout} seconds',
             'error': '',
             'returncode': -1,
+            'shell_used': shell_used,
         }), 500
-    except FileNotFoundError:
-        try:
-            result = subprocess.run(
-                ['sh', tmp_file_path],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                timeout=timeout,
-                cwd=working_dir,
-                shell=False,
-            )
-            return jsonify({
-                'status': 'success' if result.returncode == 0 else 'error',
-                'output': result.stdout,
-                'error': '',
-                'returncode': result.returncode,
-            })
-        except Exception as exc:
-            return jsonify({
-                'status': 'error',
-                'output': f'Failed to execute script: {exc}',
-                'error': '',
-                'returncode': -1,
-            }), 500
     except Exception as exc:
         return jsonify({
             'status': 'error',
             'output': f'Failed to execute script: {exc}',
             'error': '',
             'returncode': -1,
+            'shell_used': shell_used,
         }), 500
     finally:
         try:
-            os.unlink(tmp_file_path)
+            if tmp_file_path:
+                os.unlink(tmp_file_path)
         except Exception:
             pass
 

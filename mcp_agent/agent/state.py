@@ -456,6 +456,22 @@ class AgentState:
                         lines.append("*(Output summarized via LLM)*")
                 else:
                     lines.append(f"**Error**: {step.error or 'Unknown error'}")
+                    # Include the sandbox failure observation payload so the translator/planner
+                    # can see the real underlying error, logs, and traceback (if present).
+                    observation = step.observation
+                    if observation is not None:
+                        obs_render = observation
+                        if isinstance(observation, dict):
+                            obs_render = dict(observation)
+                            tb = obs_render.get("traceback")
+                            if isinstance(tb, str) and len(tb) > 4000:
+                                obs_render["traceback"] = "... (truncated) ...\n" + tb[-4000:]
+                            logs = obs_render.get("logs")
+                            if isinstance(logs, list) and len(logs) > 50:
+                                obs_render["logs"] = logs[:50] + ["... (truncated)"]
+
+                        obs_json = json.dumps(obs_render, indent=2, ensure_ascii=False, default=str)
+                        lines.append(f"**Observation**:\n```json\n{obs_json}\n```")
 
             elif step_type in ("finish", "fail"):
                 # Extract completion info

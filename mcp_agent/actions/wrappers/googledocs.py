@@ -4,6 +4,11 @@ from typing import TYPE_CHECKING
 
 from mcp_agent.types import ToolInvocationResult
 
+from mcp_agent.actions.google_docs_output import (
+    google_docs_get_document_by_id_output_schema,
+    google_docs_search_documents_output_schema,
+)
+
 from ._common import _clean_payload, _invoke_mcp_tool, ensure_authorized
 
 if TYPE_CHECKING:
@@ -24,44 +29,7 @@ def googledocs_get_document_by_id(context: "AgentContext", doc_id: str) -> ToolI
     return _invoke_mcp_tool(context, provider, tool_name, payload)
 
 
-googledocs_get_document_by_id.__tb_output_schema__ = {
-  "properties": {
-    "data": {
-      "additionalProperties": False,
-      "description": "Data from the action execution",
-      "properties": {
-        "response_data": {
-          "additionalProperties": True,
-          "default": None,
-          "description": "A dictionary containing the full Google Document resource, including its content, properties, and metadata.",
-          "nullable": True,
-          "title": "Response Data",
-          "type": "object"
-        }
-      },
-      "title": "Data",
-      "type": "object"
-    },
-    "error": {
-      "default": None,
-      "description": "Error if any occurred during the execution of the action",
-      "nullable": True,
-      "title": "Error",
-      "type": "string"
-    },
-    "successful": {
-      "description": "Whether or not the action execution was successful or not",
-      "title": "Successful",
-      "type": "boolean"
-    }
-  },
-  "required": [
-    "data",
-    "successful"
-  ],
-  "title": "FindOrCreateDocumentResponseWrapper",
-  "type": "object"
-}
+googledocs_get_document_by_id.__tb_output_schema__ = google_docs_get_document_by_id_output_schema
 
 
 def googledocs_search_documents(
@@ -110,59 +78,4 @@ def googledocs_search_documents(
     return _invoke_mcp_tool(context, provider, tool_name, payload)
 
 
-googledocs_search_documents.__tb_output_schema__ = {
-  "properties": {
-    "data": {
-      "additionalProperties": False,
-      "description": "Data from the action execution",
-      "properties": {
-        "documents": {
-          "description": "List of Google Documents matching the search criteria. Each document contains id, name, modifiedTime, createdTime, webViewLink, and other metadata.",
-          "items": {
-            "additionalProperties": True,
-            "properties": {},
-            "type": "object"
-          },
-          "title": "Documents",
-          "type": "array"
-        },
-        "next_page_token": {
-          "default": None,
-          "description": "Token to retrieve the next page of results, if more results are available.",
-          "nullable": True,
-          "title": "Next Page Token",
-          "type": "string"
-        },
-        "total_found": {
-          "description": "Total number of documents found matching the search criteria.",
-          "title": "Total Found",
-          "type": "integer"
-        }
-      },
-      "required": [
-        "documents",
-        "total_found"
-      ],
-      "title": "Data",
-      "type": "object"
-    },
-    "error": {
-      "default": None,
-      "description": "Error if any occurred during the execution of the action",
-      "nullable": True,
-      "title": "Error",
-      "type": "string"
-    },
-    "successful": {
-      "description": "Whether or not the action execution was successful or not",
-      "title": "Successful",
-      "type": "boolean"
-    }
-  },
-  "required": [
-    "data",
-    "successful"
-  ],
-  "title": "SearchDocumentsResponseWrapper",
-  "type": "object"
-}
+googledocs_search_documents.__tb_output_schema__ = google_docs_search_documents_output_schema

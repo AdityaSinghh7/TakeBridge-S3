@@ -115,9 +115,10 @@ Every action MUST include a short `"reasoning"` string (1–3 sentences) explain
 
     # WRONG: resp.get("ok") or resp.get("ts") - these don't exist at top level!
     ```
-  - For error handling, use `safe_error_text(resp["error"])` to safely convert error values to strings.
-  - For sorting timestamps, use `safe_timestamp_sort_key(value)` which handles both integer timestamps and ISO date strings.
+   - For error handling, use `safe_error_text(resp["error"])` to safely convert error values to strings.
+   - For sorting timestamps, use `safe_timestamp_sort_key(value)` which handles both integer timestamps and ISO date strings.
    - Implement loops/branching/multi-step workflows here; keep the planner loop minimal.
+   - IMPORTANT (Sandbox result contract): returning a top-level `"error"` key marks the sandbox step as failed (`sandbox_runtime_error`). Only return `"error"` for genuinely fatal failures (e.g., tool call failed, unexpected exception). For expected control-flow outcomes like "not found", return a non-error shape such as `{"found": false, "reason": "...", "candidates": [...]}` (no top-level `"error"`).
    - Return a JSON-serializable dict summarizing the work at the end of `main()`.
    - Log aggregates and samples, never entire datasets.
    - The `code` field must be a JSON string literal (escape newlines with \\n); never emit raw code outside the JSON response.

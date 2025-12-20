@@ -539,16 +539,24 @@ class VMControllerClient:
         *,
         timeout_seconds: Optional[int] = None,
         working_dir: Optional[Union[str, Path]] = None,
+        shell: Optional[str] = None,
         timeout: Optional[float] = None,
     ) -> JsonDict:
         """
-        Execute a bash script (`/run_bash_script`).
+        Execute a shell script (`/run_bash_script`).
+
+        Notes:
+        - On Linux/macOS the controller runs the script via bash.
+        - On Windows the controller may run via bash (Git Bash/WSL) or fall back to PowerShell.
+        - Set `shell` to explicitly pick an interpreter (e.g. "bash", "powershell", "cmd").
         """
         payload: JsonDict = {"script": script}
         if timeout_seconds is not None:
             payload["timeout"] = timeout_seconds
         if working_dir is not None:
             payload["working_dir"] = str(working_dir)
+        if shell is not None:
+            payload["shell"] = shell
         return self._request("POST", "/run_bash_script", json=payload, timeout=timeout).json()
 
     # ------------------------------------------------------------------ #
