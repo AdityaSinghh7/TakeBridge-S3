@@ -153,7 +153,7 @@ class AgentState:
         observation_metadata: Optional[Dict[str, Any]] = None,
     ) -> AgentStep:
         """Add a canonical step to execution history (delegates to ExecutionHistory)."""
-        return self._execution_history.record_step(
+        step = self._execution_history.record_step(
             action_type=action_type,
             success=success,
             action_reasoning=action_reasoning,
@@ -164,6 +164,22 @@ class AgentState:
             observation=observation,
             observation_metadata=observation_metadata,
         )
+        payload: Dict[str, Any] = {
+            "action_step": step.action_step,
+            "action_type": action_type,
+            "success": success,
+            "reasoning": action_reasoning,
+        }
+        if error:
+            payload["error"] = error
+        if action_input:
+            payload["action_input_keys"] = sorted(action_input.keys())
+        if action_outcome:
+            payload["action_outcome_keys"] = sorted(action_outcome.keys())
+        if observation_metadata:
+            payload["observation_metadata"] = dict(observation_metadata)
+        self.record_event("mcp.step.recorded", payload)
+        return step
 
     def get_context_window(self, max_steps: Optional[int] = None) -> List[AgentStep]:
         """Get recent history within limits (delegates to ExecutionHistory).

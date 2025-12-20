@@ -95,6 +95,7 @@ PERSISTED_EVENTS = {
     "mcp.observation_processor.completed",
     "mcp.summary.created",
     "mcp.high_signal",
+    "mcp.step.recorded",
     # Human Attention (handback to human)
     "human_attention.required",
     "human_attention.resumed",
