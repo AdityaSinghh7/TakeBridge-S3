@@ -122,6 +122,23 @@ def _wait_for_controller_health(base_url: str, health_path: str) -> None:
         time.sleep(HEALTHCHECK_INTERVAL_SECONDS)
 
 
+def _build_local_ssd_disks(*, count: int, zone: str, interface: str) -> list[compute_v1.AttachedDisk]:
+    if count <= 0:
+        return []
+
+    disks: list[compute_v1.AttachedDisk] = []
+    disk_type = f"zones/{zone}/diskTypes/local-ssd"
+    for _ in range(count):
+        disk = compute_v1.AttachedDisk()
+        disk.type_ = "SCRATCH"
+        disk.interface = interface
+        disk.initialize_params = compute_v1.AttachedDiskInitializeParams(
+            disk_type=disk_type,
+        )
+        disks.append(disk)
+    return disks
+
+
 def create_agent_instance_for_user(user_id: str) -> Tuple[str, str, Optional[str]]:
     """
     Launch a new Agent VM instance for this user on GCP.
@@ -156,6 +173,14 @@ def create_agent_instance_for_user(user_id: str) -> Tuple[str, str, Optional[str
             disk_size_gb=settings.GCP_DISK_SIZE_GB,
         )
         instance.disks = [disk]
+
+    local_ssd_disks = _build_local_ssd_disks(
+        count=settings.GCP_LOCAL_SSD_COUNT,
+        zone=zone,
+        interface=settings.GCP_LOCAL_SSD_INTERFACE,
+    )
+    if local_ssd_disks:
+        instance.disks = list(instance.disks or []) + local_ssd_disks
 
     nic = compute_v1.NetworkInterface()
     nic.network = settings.GCP_NETWORK

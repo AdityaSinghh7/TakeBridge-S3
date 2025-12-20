@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     GCP_DISK_SIZE_GB: int = 50
     GCP_INSTANCE_NAME_PREFIX: str = "tb-agent"
     GCP_STARTUP_SCRIPT: str = ""  # optional metadata startup script
+    GCP_LOCAL_SSD_COUNT: int = 1  # 0 to disable local SSD; each is 375GB
+    GCP_LOCAL_SSD_INTERFACE: str = "NVME"  # NVME or SCSI
 
     # Where the Flask VM controller listens inside the VM
     AGENT_CONTROLLER_PORT: int = 5000
