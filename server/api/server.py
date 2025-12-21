@@ -292,6 +292,14 @@ try:
 except Exception as _e:  # pragma: no cover
     logger.warning("Failed to mount workflow routes: %s", _e)
 
+# Mount Guacamole auth routes
+try:
+    from server.api.routes_guac_auth import router as guac_auth_router  # type: ignore
+    app.include_router(guac_auth_router)
+    logger.info("Mounted Guacamole auth routes")
+except Exception as _e:  # pragma: no cover
+    logger.warning("Failed to mount Guacamole auth routes: %s", _e)
+
 
 def _parse_orchestrate_request(payload: Dict[str, Any]) -> OrchestrateRequest:
     try:

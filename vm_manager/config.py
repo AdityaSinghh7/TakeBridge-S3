@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     # Supabase auth
     SUPABASE_JWT_SECRET: str = ""  # from Supabase project settings → API → JWT secret
     SUPABASE_JWT_ALG: str = "HS256"
+    GUAC_ADMIN_USER: str = ""
+    GUAC_ADMIN_PASS: str = ""
 
     @field_validator("SUPABASE_JWT_SECRET")
     @classmethod
