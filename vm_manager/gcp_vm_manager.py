@@ -5,6 +5,7 @@ import time
 import uuid
 from typing import Optional, Tuple
 
+from google.api_core import exceptions as gcp_exceptions
 from google.cloud import compute_v1
 
 from vm_manager.config import settings
@@ -378,11 +379,18 @@ def stop_instance(instance_id: str, *, wait: bool = True) -> None:
     _init_cloud_logging_if_enabled()
     logger.info("stop_instance %s wait=%s", instance_id, wait)
     client = compute_v1.InstancesClient()
-    op = client.stop(
-        project=settings.GCP_PROJECT_ID,
-        zone=settings.GCP_ZONE,
-        instance=instance_id,
-    )
+    try:
+        op = client.stop(
+            project=settings.GCP_PROJECT_ID,
+            zone=settings.GCP_ZONE,
+            instance=instance_id,
+            discard_local_ssd=True,
+        )
+    except gcp_exceptions.GoogleAPICallError as exc:
+        if _is_gcp_stop_already_done(exc):
+            logger.info("Instance %s already stopped or terminated; continuing", instance_id)
+            return
+        raise
     if wait:
         _wait_for_zone_operation(settings.GCP_PROJECT_ID, settings.GCP_ZONE, op.name)
         _wait_for_instance_state(client, instance_id, target_state="TERMINATED")
@@ -412,3 +420,13 @@ def _wait_for_instance_state(
             return
 
         time.sleep(HEALTHCHECK_INTERVAL_SECONDS)
+
+
+def _is_gcp_stop_already_done(exc: gcp_exceptions.GoogleAPICallError) -> bool:
+    if isinstance(exc, gcp_exceptions.NotFound):
+        return True
+    if isinstance(exc, (gcp_exceptions.BadRequest, gcp_exceptions.Conflict)):
+        message = str(exc).lower()
+        if "already" in message and ("stopped" in message or "terminat" in message):
+            return True
+    return False

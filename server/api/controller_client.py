@@ -182,7 +182,7 @@ class VMControllerClient:
         timeout_s = (
             timeout_seconds
             if timeout_seconds is not None
-            else _env_float(_HEALTH_TIMEOUT_ENV_VAR, 300.0)
+            else _env_float(_HEALTH_TIMEOUT_ENV_VAR, 600.0)
         )
         interval_s = (
             interval_seconds
