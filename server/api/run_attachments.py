@@ -90,6 +90,7 @@ def stage_files_for_run(run_id: str, workspace: Dict[str, Any]) -> List[Dict[str
             raise AttachmentStageError(str(exc)) from exc
 
         controller = VMControllerClient(base_url=controller_url)
+        controller.wait_for_health()
         manifest: List[Dict[str, Any]] = []
 
         for row in rows:

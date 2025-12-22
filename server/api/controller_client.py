@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import io
+import time
 from dataclasses import dataclass
 import logging
 from pathlib import Path
@@ -33,6 +34,10 @@ _DEFAULT_ENV_FILENAME = ".env"
 _HOST_ENV_VAR = "VM_SERVER_HOST"
 _PORT_ENV_VAR = "VM_SERVER_PORT"
 _BASE_URL_ENV_VAR = "VM_SERVER_BASE_URL"
+_SKIP_HEALTHCHECK_ENV_VAR = "VM_SKIP_CONTROLLER_HEALTHCHECK"
+_HEALTH_PATH_ENV_VAR = "AGENT_CONTROLLER_HEALTH_PATH"
+_HEALTH_TIMEOUT_ENV_VAR = "VM_CONTROLLER_HEALTHCHECK_TIMEOUT_SECONDS"
+_HEALTH_INTERVAL_ENV_VAR = "VM_CONTROLLER_HEALTHCHECK_INTERVAL_SECONDS"
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +88,23 @@ def _normalize_base_url(host: Optional[str], port: Optional[Union[str, int]], *,
     return urlunparse((parsed.scheme or scheme, netloc, "", "", "", ""))
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except Exception:
+        return default
+
+
 @dataclass
 class VMControllerClient:
     """
@@ -127,6 +149,64 @@ class VMControllerClient:
                 self.base_url = _normalize_base_url(resolved_host, resolved_port)
 
         self._session = self.session or requests.Session()
+
+    def health(
+        self,
+        *,
+        timeout: Optional[float] = None,
+        path: Optional[str] = None,
+    ) -> requests.Response:
+        """
+        Perform a raw /health request and return the response.
+        """
+        health_path = path or os.getenv(_HEALTH_PATH_ENV_VAR, "/health")
+        if health_path and not health_path.startswith("/"):
+            health_path = f"/{health_path}"
+        url = f"{self.base_url.rstrip('/')}{health_path}"
+        return self._session.get(url, timeout=timeout or self.timeout)
+
+    def wait_for_health(
+        self,
+        *,
+        timeout_seconds: Optional[float] = None,
+        interval_seconds: Optional[float] = None,
+        path: Optional[str] = None,
+    ) -> None:
+        """
+        Poll /health until the controller responds 200 or timeout.
+        """
+        if _env_bool(_SKIP_HEALTHCHECK_ENV_VAR, False):
+            logger.info("controller healthcheck skipped (VM_SKIP_CONTROLLER_HEALTHCHECK=true)")
+            return
+
+        timeout_s = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else _env_float(_HEALTH_TIMEOUT_ENV_VAR, 300.0)
+        )
+        interval_s = (
+            interval_seconds
+            if interval_seconds is not None
+            else _env_float(_HEALTH_INTERVAL_ENV_VAR, 5.0)
+        )
+        health_path = path or os.getenv(_HEALTH_PATH_ENV_VAR, "/health")
+        if health_path and not health_path.startswith("/"):
+            health_path = f"/{health_path}"
+        url = f"{self.base_url.rstrip('/')}{health_path}"
+        deadline = time.time() + max(timeout_s, 0.0)
+        logger.info("Waiting for controller health at %s", url)
+
+        while True:
+            if time.time() > deadline:
+                raise VMControllerError(f"Timeout waiting for controller health at {url}")
+            try:
+                resp = self.health(timeout=5.0, path=health_path)
+                logger.info("controller healthcheck status=%s", resp.status_code)
+                if resp.status_code == 200:
+                    return
+            except Exception as exc:
+                logger.info("controller healthcheck error: %s", exc)
+            time.sleep(max(interval_s, 0.1))
 
     # ------------------------------------------------------------------ #
     # Internal helpers

@@ -333,6 +333,7 @@ def runner(
         request.controller.port,
         request.controller.timeout,
     )
+    controller.wait_for_health()
     
     # Extract orchestrator state and resume metadata from context
     _orchestrator_state = None

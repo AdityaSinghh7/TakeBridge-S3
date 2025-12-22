@@ -34,6 +34,11 @@ def provider_spec() -> dict:
             spec["image_project"] = settings.GCP_IMAGE_PROJECT or settings.GCP_PROJECT_ID
             spec["machine_type"] = settings.GCP_MACHINE_TYPE
             spec["disk_size_gb"] = settings.GCP_DISK_SIZE_GB
+        if (settings.GCP_BASE_DISK_NAME or "").strip():
+            spec["base_disk_name"] = settings.GCP_BASE_DISK_NAME
+            spec["base_disk_device_name"] = settings.GCP_BASE_DISK_DEVICE_NAME
+            spec["base_disk_mode"] = settings.GCP_BASE_DISK_MODE
+            spec["base_disk_attach_strategy"] = settings.GCP_BASE_DISK_ATTACH_STRATEGY
         return spec
     return {
         "instance_type": settings.AGENT_INSTANCE_TYPE,

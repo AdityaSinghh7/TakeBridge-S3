@@ -1207,6 +1207,7 @@ async def resume_run(
         # Create controller client and capture current screenshot
         try:
             controller = VMControllerClient(base_url=controller_base_url)
+            controller.wait_for_health()
             current_screenshot_bytes = controller.capture_screenshot()
             current_screenshot_b64 = base64.b64encode(current_screenshot_bytes).decode("utf-8")
         except Exception as e:

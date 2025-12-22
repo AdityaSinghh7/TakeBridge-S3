@@ -50,6 +50,7 @@ def capture_context_baseline(run_id: str, workspace: Dict[str, Any]) -> None:
         return
     controller = VMControllerClient(base_url=controller_url)
     try:
+        controller.wait_for_health()
         entries = _list_context_entries(controller)
     except Exception:
         return
@@ -70,6 +71,7 @@ def export_context_artifacts(run_id: str, workspace: Dict[str, Any]) -> List[Dic
 
     controller = VMControllerClient(base_url=controller_url)
     try:
+        controller.wait_for_health()
         entries = _list_context_entries(controller)
     except Exception:
         return []

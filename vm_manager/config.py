@@ -30,12 +30,18 @@ class Settings(BaseSettings):
     GCP_SUBNETWORK: str = ""  # optional subnetwork self-link
     GCP_ASSIGN_PUBLIC_IP: bool = True
     GCP_SERVICE_ACCOUNT: str = ""  # optional service account email
-    GCP_TAGS: str = ""  # comma-separated network tags
+    GCP_TAGS: str = "takebridge-worker"  # comma-separated network tags
     GCP_DISK_SIZE_GB: int = 50
     GCP_INSTANCE_NAME_PREFIX: str = "tb-agent"
-    GCP_STARTUP_SCRIPT: str = ""  # optional metadata startup script
     GCP_LOCAL_SSD_COUNT: int = 1  # 0 to disable local SSD; each is 375GB
     GCP_LOCAL_SSD_INTERFACE: str = "NVME"  # NVME or SCSI
+    GCP_BASE_DISK_NAME: str = ""  # existing persistent disk to attach (e.g. takebridge-win-base-v3)
+    GCP_BASE_DISK_DEVICE_NAME: str = "win-base"
+    GCP_BASE_DISK_MODE: str = "READ_ONLY"  # READ_ONLY or READ_WRITE
+    GCP_BASE_DISK_ATTACH_STRATEGY: str = "auto"  # auto | create | post | none
+    GCP_BASE_DISK_ATTACH_TIMEOUT_SECONDS: int = 180
+    GCP_BASE_DISK_ATTACH_INTERVAL_SECONDS: int = 5
+    GCP_ENABLE_CLOUD_LOGGING: bool = False
 
     # Where the Flask VM controller listens inside the VM
     AGENT_CONTROLLER_PORT: int = 5000
@@ -60,14 +66,6 @@ class Settings(BaseSettings):
     def trim_jwt_secret(cls, v: str) -> str:
         """Trim whitespace from JWT secret (common issue when copying from Supabase dashboard)"""
         return v.strip() if v else v
-
-    @property
-    def startup_script_content(self) -> str:
-        try:
-            with open("scripts/startup.sh", "r", encoding="utf-8") as f:
-                return f.read()
-        except FileNotFoundError:
-            return self.GCP_STARTUP_SCRIPT
 
     class Config:
         env_file = ".env"

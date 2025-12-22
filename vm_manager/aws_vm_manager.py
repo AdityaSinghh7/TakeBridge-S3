@@ -1,16 +1,15 @@
 # vm_manager/aws_vm_manager.py
 
 import time
-from typing import Tuple, Optional
+from typing import Optional, Tuple
 
 import boto3
-import httpx
 from botocore.exceptions import ClientError
 
 from vm_manager.config import settings
 
 # Simple constants
-HEALTHCHECK_TIMEOUT_SECONDS = 300  # total time we'll wait for instance + controller
+HEALTHCHECK_TIMEOUT_SECONDS = 300  # total time we'll wait for instance operations
 HEALTHCHECK_INTERVAL_SECONDS = 5  # poll interval (seconds)
 
 
@@ -76,12 +75,6 @@ def create_agent_instance_for_user(user_id: str) -> Tuple[str, str, Optional[str
     controller_base_url = f"http://{public_ip}:{settings.AGENT_CONTROLLER_PORT}"
     print(f"[aws_vm_manager] Using controller_base_url={controller_base_url}")
 
-    # Healthcheck the controller
-    if not settings.VM_SKIP_CONTROLLER_HEALTHCHECK:
-        _wait_for_controller_health(
-            controller_base_url, settings.AGENT_CONTROLLER_HEALTH_PATH
-        )
-
     # Build streaming URL (Guacamole)
     guac_path = settings.AGENT_GUACAMOLE_PATH or ""
     if guac_path and not guac_path.startswith("/"):
@@ -132,28 +125,6 @@ def _wait_for_instance_running_and_get_public_ip(ec2, instance_id: str) -> str:
 
         if state == "running" and public_ip:
             return public_ip
-
-        time.sleep(HEALTHCHECK_INTERVAL_SECONDS)
-
-
-def _wait_for_controller_health(base_url: str, health_path: str):
-    """Poll the controller's /health endpoint until it responds 200 or timeout."""
-    url = f"{base_url.rstrip('/')}{health_path}"
-    print(f"[aws_vm_manager] Waiting for controller health at {url}")
-
-    deadline = time.time() + HEALTHCHECK_TIMEOUT_SECONDS
-    while True:
-        if time.time() > deadline:
-            raise RuntimeError(f"Timeout waiting for controller health at {url}")
-
-        try:
-            # We assume HTTP (no TLS) inside VM
-            resp = httpx.get(url, timeout=5.0)
-            print(f"[aws_vm_manager] Healthcheck status={resp.status_code}")
-            if resp.status_code == 200:
-                return
-        except Exception as e:
-            print(f"[aws_vm_manager] Healthcheck error: {e}")
 
         time.sleep(HEALTHCHECK_INTERVAL_SECONDS)
 
