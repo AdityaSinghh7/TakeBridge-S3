@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     SUPABASE_JWT_ALG: str = "HS256"
     GUAC_ADMIN_USER: str = ""
     GUAC_ADMIN_PASS: str = ""
+    GUAC_CONNECTION_ID: str = ""
 
     @field_validator("SUPABASE_JWT_SECRET")
     @classmethod
