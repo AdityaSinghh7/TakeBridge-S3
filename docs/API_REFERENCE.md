@@ -543,7 +543,7 @@ Events are emitted in this general order:
 {
   "decision_type": "next_step",
   "target": "mcp",
-  "task_preview": "Send email to john@example.com"
+  "task_preview": "Send an email to john@example.com about the quarterly report"
 }
 ```
 **Possible `target` values**:
@@ -551,6 +551,7 @@ Events are emitted in this general order:
 - `computer_use` - Will execute using computer use agent (GUI automation)
 
 **Frontend Action**: Show "Dispatching to {target} agent..." with task preview
+**Note**: `task_preview` is the full task string for the next step (not truncated)
 
 ---
 
@@ -1209,7 +1210,7 @@ event: orchestrator.planning.started
 data: {"step_number":1,"last_failed":false}
 
 event: orchestrator.planning.completed
-data: {"decision_type":"next_step","target":"mcp","task_preview":"Send email"}
+data: {"decision_type":"next_step","target":"mcp","task_preview":"Send an email to john@example.com about the quarterly report"}
 
 event: orchestrator.step.dispatching
 data: {"step_id":"step-mcp-001","target":"mcp","task":"Send email to john@example.com..."}
@@ -1286,7 +1287,7 @@ curl -X POST http://localhost:8000/orchestrate/stream \
 **Event Highlights**:
 ```
 event: orchestrator.planning.completed
-data: {"target":"computer_use","task_preview":"Open calculator..."}
+data: {"target":"computer_use","task_preview":"Open the calculator app and compute 123 * 456"}
 
 event: computer_use.task.started
 data: {"task":"Open calculator...","step_id":"step-cu-001"}

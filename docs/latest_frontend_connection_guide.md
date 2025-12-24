@@ -7,7 +7,7 @@ Only the events below are required/most useful to drive frontend updates; other 
 ## Orchestrator Agent
 - `orchestrator.planning.completed`
   - Purpose: planner finished choosing what to do next (or to stop).
-  - Payload: `decision_type` (`next_step` | `task_complete` | `task_impossible`), `target` (`mcp` | `computer_use` | null), `task_preview` (string preview of the next task).
+  - Payload: `decision_type` (`next_step` | `task_complete` | `task_impossible`), `target` (`mcp` | `computer_use` | null), `task_preview` (full task string for the next step, not truncated).
 - `orchestrator.step.completed`
   - Purpose: one orchestrator step finished executing.
   - Payload: `step_id` (string), `status` (`completed` | `failed`), `success` (boolean).

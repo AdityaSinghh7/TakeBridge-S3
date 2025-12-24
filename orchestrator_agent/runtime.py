@@ -135,7 +135,7 @@ class OrchestratorRuntime:
             emit_event("orchestrator.planning.completed", {
                 "decision_type": decision["type"],
                 "target": decision.get("target"),
-                "task_preview": decision.get("task", "")[:80],
+                "task_preview": decision.get("task", ""),
             })
 
             if decision["type"] == "task_complete":

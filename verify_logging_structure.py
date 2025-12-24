@@ -56,7 +56,7 @@ def demonstrate_logging_structure():
     orch_logger.log_event("planning.completed", {
         "decision_type": "next_step",
         "target": "mcp",
-        "task_preview": "Send email to John",
+        "task_preview": task,
     })
 
     print("✓ Logged orchestrator events:")

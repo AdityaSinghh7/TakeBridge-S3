@@ -149,7 +149,7 @@ event: orchestrator.planning.started
 data: {"step_number":1,"last_failed":false}
 
 event: orchestrator.planning.completed
-data: {"decision_type":"next_step","target":"mcp","task_preview":"Send email"}
+data: {"decision_type":"next_step","target":"mcp","task_preview":"Send an email to john@example.com about the quarterly report"}
 
 event: orchestrator.step.dispatching
 data: {"step_id":"step-mcp-001","target":"mcp","task":"Send email"}
