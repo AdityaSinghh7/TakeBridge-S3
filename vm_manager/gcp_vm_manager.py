@@ -380,12 +380,15 @@ def stop_instance(instance_id: str, *, wait: bool = True) -> None:
     logger.info("stop_instance %s wait=%s", instance_id, wait)
     client = compute_v1.InstancesClient()
     try:
-        op = client.stop(
+        request = compute_v1.StopInstanceRequest(
             project=settings.GCP_PROJECT_ID,
             zone=settings.GCP_ZONE,
             instance=instance_id,
-            discard_local_ssd=True,
         )
+        # Support older google-cloud-compute versions that don't expose this field.
+        if hasattr(request, "discard_local_ssd"):
+            request.discard_local_ssd = True
+        op = client.stop(request=request)
     except gcp_exceptions.GoogleAPICallError as exc:
         if _is_gcp_stop_already_done(exc):
             logger.info("Instance %s already stopped or terminated; continuing", instance_id)

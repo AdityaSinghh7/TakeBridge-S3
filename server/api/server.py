@@ -815,8 +815,8 @@ def _create_streaming_response(
                     logger.warning("Failed to export artifacts for run %s: %s", run_id_local, exc)
             if run_id and run_id_local and final_status and final_status != "attention":
                 try:
-                    from vm_manager.vm_wrapper import stop_run_instance
-                    stop_run_instance(run_id_local, wait=False)
+                    from vm_manager.vm_wrapper import terminate_run_instance
+                    terminate_run_instance(run_id_local)
                 except Exception as exc:
                     logger.warning(
                         "Failed to stop VM instance for run_id=%s status=%s: %s",

@@ -237,3 +237,122 @@ def stop_run_instance(run_id: str, *, wait: bool = True) -> str:
         db.close()
 
     return instance_id
+
+
+def terminate_run_instance(run_id: str) -> str:
+    """
+    Terminate the VM instance associated with a workflow run.
+
+    This uses the same lookup logic as stop_run_instance, but calls
+    vm_provider.terminate_instance(...) and records terminated_at.
+    """
+    # Phase 1: fetch the run's instance_id without holding a long-lived transaction.
+    db: Session = SessionLocal()
+    vm_id: str | None = None
+    instance_id: str | None = None
+    try:
+        row = (
+            db.execute(
+                text("SELECT environment, vm_id FROM workflow_runs WHERE id = :run_id"),
+                {"run_id": run_id},
+            )
+            .mappings()
+            .first()
+        )
+        if not row:
+            raise RuntimeError("run_not_found")
+
+        vm_id = str(row.get("vm_id")) if row.get("vm_id") else None
+
+        env_raw = row.get("environment")
+        if isinstance(env_raw, dict):
+            environment = dict(env_raw)
+        elif isinstance(env_raw, str) and env_raw.strip():
+            try:
+                environment = json.loads(env_raw) or {}
+            except Exception:
+                environment = {}
+        else:
+            environment = {}
+
+        endpoint = environment.get("endpoint") or {}
+        if isinstance(endpoint, str) and endpoint.strip():
+            try:
+                endpoint = json.loads(endpoint) or {}
+            except Exception:
+                endpoint = {}
+
+        if isinstance(endpoint, dict) and endpoint.get("instance_id"):
+            instance_id = str(endpoint["instance_id"])
+
+        if not instance_id:
+            candidate_rows = []
+            if vm_id:
+                candidate_rows.append(
+                    db.execute(
+                        text("SELECT endpoint FROM vm_instances WHERE id = :vm_id"),
+                        {"vm_id": vm_id},
+                    ).scalar_one_or_none()
+                )
+            candidate_rows.append(
+                db.execute(
+                    text(
+                        """
+                        SELECT endpoint
+                        FROM vm_instances
+                        WHERE run_id = :run_id
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                        """
+                    ),
+                    {"run_id": run_id},
+                ).scalar_one_or_none()
+            )
+            for candidate in candidate_rows:
+                if not candidate:
+                    continue
+                if isinstance(candidate, dict):
+                    candidate_endpoint = candidate
+                elif isinstance(candidate, str) and candidate.strip():
+                    try:
+                        candidate_endpoint = json.loads(candidate) or {}
+                    except Exception:
+                        candidate_endpoint = {}
+                else:
+                    candidate_endpoint = {}
+                if isinstance(candidate_endpoint, dict) and candidate_endpoint.get("instance_id"):
+                    instance_id = str(candidate_endpoint["instance_id"])
+                    break
+    finally:
+        db.close()
+
+    if not instance_id:
+        raise RuntimeError("instance_id_not_found")
+
+    # Phase 2: terminate the instance.
+    terminate_instance(instance_id)
+
+    # Phase 3: record the terminate event in our DB (best-effort).
+    db = SessionLocal()
+    try:
+        db.execute(
+            text(
+                """
+                UPDATE vm_instances
+                SET status = 'terminated',
+                    terminated_at = NOW()
+                WHERE run_id = :run_id
+                """
+            ),
+            {"run_id": run_id},
+        )
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(
+            f"[workspace_service] Failed to update vm_instances terminated_at for run_id={run_id}: {e}"
+        )
+    finally:
+        db.close()
+
+    return instance_id
