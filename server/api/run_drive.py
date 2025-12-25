@@ -4,21 +4,21 @@ import hashlib
 import io
 import json
 import logging
+import mimetypes
 import os
 import posixpath
-import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Dict, List, Optional, Tuple
 
-import requests
 from sqlalchemy import text
 
 from shared.db.engine import SessionLocal
-from shared.db.models import WorkflowRunDriveChange
+from shared.db.models import WorkflowRunDriveChange, WorkflowRunFile
 from shared.storage import get_attachment_storage, AttachmentStorageError
 from server.api.controller_client import VMControllerClient
+from server.api.drive_utils import build_drive_key
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,86 @@ def _manifest_path(base_path: str, *, windows: bool) -> str:
     return str(PurePosixPath(base_path).parent / "manifest.json")
 
 
+def _lookup_run_user_id(db: Any, run_id: str) -> Optional[str]:
+    row = (
+        db.execute(
+            text("SELECT user_id FROM workflow_runs WHERE id = :run_id"),
+            {"run_id": run_id},
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        return None
+    return row.get("user_id")
+
+
+def _list_drive_objects(storage: Any, user_id: str) -> List[Dict[str, Any]]:
+    prefix = build_drive_key(user_id, "")
+    items: List[Dict[str, Any]] = []
+    token: Optional[str] = None
+    while True:
+        resp = storage.list_objects(prefix=prefix, continuation_token=token)
+        for entry in resp.get("Contents") or []:
+            key = entry.get("Key")
+            if not key or not key.startswith(prefix):
+                continue
+            rel = key[len(prefix) :]
+            if not rel or rel.endswith("/"):
+                continue
+            items.append(
+                {
+                    "drive_path": rel,
+                    "r2_key": key,
+                    "size_bytes": entry.get("Size"),
+                    "etag": (entry.get("ETag") or "").strip('"') or None,
+                }
+            )
+        if not resp.get("IsTruncated"):
+            break
+        token = resp.get("NextContinuationToken")
+        if not token:
+            break
+    return items
+
+
+def _insert_drive_rows_for_run(
+    db: Any,
+    *,
+    run_id: str,
+    user_id: str,
+    items: List[Dict[str, Any]],
+) -> None:
+    records: List[WorkflowRunFile] = []
+    for item in items:
+        drive_path = item.get("drive_path")
+        r2_key = item.get("r2_key")
+        if not drive_path or not r2_key:
+            continue
+        content_type = mimetypes.guess_type(drive_path)[0]
+        records.append(
+            WorkflowRunFile(
+                id=str(uuid.uuid4()),
+                run_id=run_id,
+                workflow_file_id=None,
+                user_id=user_id,
+                source_type="drive",
+                storage_key=r2_key,
+                drive_path=drive_path,
+                r2_key=r2_key,
+                filename=posixpath.basename(drive_path) or "file",
+                content_type=content_type,
+                size_bytes=item.get("size_bytes"),
+                checksum=None,
+                status="pending",
+                metadata_json={},
+            )
+        )
+    if records:
+        db.add_all(records)
+        db.commit()
+
+
 def _ensure_vm_dir(controller: VMControllerClient, dest_path: str, *, windows: bool) -> None:
     parent = str(PureWindowsPath(dest_path).parent) if windows else str(PurePosixPath(dest_path).parent)
     if not parent:
@@ -66,24 +146,6 @@ def _ensure_vm_dir(controller: VMControllerClient, dest_path: str, *, windows: b
             controller.execute(["cmd", "/c", "mkdir", parent], setup=True)
         return
     controller.execute(["mkdir", "-p", parent], setup=True)
-
-
-def _download_to_temp(url: str) -> Tuple[tempfile.SpooledTemporaryFile, int, str]:
-    logger.info("[drive] downloading from %s", url)
-    tmp = tempfile.SpooledTemporaryFile(max_size=64 * 1024 * 1024)
-    hasher = hashlib.sha256()
-    size = 0
-    with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as resp:
-        resp.raise_for_status()
-        for chunk in resp.iter_content(chunk_size=DOWNLOAD_CHUNK_BYTES):
-            if not chunk:
-                continue
-            hasher.update(chunk)
-            size += len(chunk)
-            tmp.write(chunk)
-    tmp.seek(0)
-    logger.info("[drive] download complete (%s bytes)", size)
-    return tmp, size, hasher.hexdigest()
 
 
 def _hash_vm_file(controller: VMControllerClient, path: str) -> Tuple[str, int]:
@@ -122,14 +184,43 @@ def stage_drive_files_for_run(run_id: str, workspace: Dict[str, Any]) -> List[Di
             .mappings()
             .all()
         )
-        if not rows:
-            return []
-        logger.info("[drive] staging %s files for run %s", len(rows), run_id)
-
         try:
             storage = get_attachment_storage()
         except AttachmentStorageError as exc:
             raise DriveStageError(str(exc)) from exc
+
+        if not rows:
+            user_id = _lookup_run_user_id(db, run_id)
+            if not user_id:
+                return []
+            drive_items = _list_drive_objects(storage, user_id)
+            if not drive_items:
+                return []
+            logger.info(
+                "[drive] no drive paths requested; staging full drive for user %s (%s files)",
+                user_id,
+                len(drive_items),
+            )
+            _insert_drive_rows_for_run(db, run_id=run_id, user_id=user_id, items=drive_items)
+            rows = (
+                db.execute(
+                    text(
+                        """
+                        SELECT id, user_id, drive_path, r2_key, storage_key, filename, content_type,
+                               size_bytes, checksum, status, vm_path
+                        FROM workflow_run_files
+                        WHERE run_id = :run_id AND (drive_path IS NOT NULL OR source_type = 'drive')
+                        ORDER BY created_at ASC
+                        """
+                    ),
+                    {"run_id": run_id},
+                )
+                .mappings()
+                .all()
+            )
+            if not rows:
+                return []
+        logger.info("[drive] staging %s files for run %s", len(rows), run_id)
 
         controller = VMControllerClient(base_url=controller_url)
         controller.wait_for_health()
@@ -172,12 +263,12 @@ def stage_drive_files_for_run(run_id: str, workspace: Dict[str, Any]) -> List[Di
                     content_type = head.get("ContentType")
             except Exception:
                 pass
-
-            tmp_file: Optional[tempfile.SpooledTemporaryFile] = None
+            if not content_type:
+                content_type = mimetypes.guess_type(drive_path)[0]
             try:
-                tmp_file, size, checksum = _download_to_temp(download_url)
                 _ensure_vm_dir(controller, dest_path, windows=windows)
-                controller.upload_file(dest_path, tmp_file)
+                controller.download_file(download_url, dest_path, timeout=DOWNLOAD_TIMEOUT)
+                checksum, size = _hash_vm_file(controller, dest_path)
             except Exception as exc:
                 logger.exception("[drive] failed transfer id=%s path=%s", row.get("id"), dest_path)
                 db.execute(
@@ -197,12 +288,6 @@ def stage_drive_files_for_run(run_id: str, workspace: Dict[str, Any]) -> List[Di
                 )
                 db.commit()
                 raise DriveStageError(f"failed_to_stage_drive_file:{drive_path}") from exc
-            finally:
-                if tmp_file is not None:
-                    try:
-                        tmp_file.close()
-                    except Exception:
-                        pass
 
             db.execute(
                 text(

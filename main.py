@@ -11,6 +11,7 @@ import threading
 import time
 import traceback
 import uuid
+import urllib.request
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -1891,6 +1892,42 @@ def upload_file():
             except Exception:
                 pass
         return jsonify({"error": f"Failed to upload file: {exc}"}), 500
+
+
+@app.post("/setup/download_file")
+def download_file_to_path():
+    data = request.get_json(force=True, silent=True) or {}
+    url = data.get("url")
+    dest_path = data.get("path") or data.get("file_path")
+    if not url or not dest_path:
+        return jsonify({"error": "url and path are required"}), 400
+
+    timeout_val = data.get("timeout", data.get("timeout_seconds", 300))
+    try:
+        timeout_s = int(timeout_val) if timeout_val is not None else 300
+    except Exception:
+        timeout_s = 300
+    if timeout_s <= 0:
+        timeout_s = 300
+
+    dest_path = os.path.expandvars(os.path.expanduser(str(dest_path)))
+    try:
+        target_dir = os.path.dirname(dest_path)
+        if target_dir:
+            os.makedirs(target_dir, exist_ok=True)
+        with urllib.request.urlopen(url, timeout=timeout_s) as resp, open(dest_path, "wb") as out:
+            shutil.copyfileobj(resp, out, length=1024 * 1024)
+        downloaded_size = os.path.getsize(dest_path)
+        logger.info("File downloaded successfully: %s (%s bytes)", dest_path, downloaded_size)
+        return f"File Downloaded: {downloaded_size} bytes"
+    except Exception as exc:
+        logger.error("Error downloading file to %s: %s", dest_path, exc)
+        if os.path.exists(dest_path):
+            try:
+                os.remove(dest_path)
+            except Exception:
+                pass
+        return jsonify({"error": f"Failed to download file: {exc}"}), 500
 
 
 @app.get("/platform")

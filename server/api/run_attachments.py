@@ -2,11 +2,9 @@ from __future__ import annotations
 
 import os
 import logging
-import tempfile
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-import requests
 from sqlalchemy import text
 
 from shared.db.engine import SessionLocal
@@ -16,7 +14,6 @@ from server.api.controller_client import VMControllerClient
 logger = logging.getLogger(__name__)
 
 ATTACHMENT_VM_BASE_PATH = os.path.expanduser(os.getenv("ATTACHMENTS_VM_BASE_PATH", "/home/user/context"))
-DOWNLOAD_CHUNK_BYTES = 4 * 1024 * 1024
 DOWNLOAD_TIMEOUT = int(os.getenv("ATTACHMENTS_DOWNLOAD_TIMEOUT", "300"))
 
 
@@ -29,31 +26,10 @@ def _default_vm_path(run_id: str, filename: str) -> str:
     return os.path.join(ATTACHMENT_VM_BASE_PATH, safe_name)
 
 
-def _download_to_temp(url: str) -> tempfile.SpooledTemporaryFile:
-    logger.info("[attachments] downloading from %s", url)
-    tmp = tempfile.SpooledTemporaryFile(max_size=64 * 1024 * 1024)
-    with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as resp:
-        resp.raise_for_status()
-        for chunk in resp.iter_content(chunk_size=DOWNLOAD_CHUNK_BYTES):
-            if chunk:
-                tmp.write(chunk)
-    size = tmp.tell()
-    tmp.seek(0)
-    logger.info("[attachments] download complete (%s bytes)", size)
-    return tmp
-
-
 def _transfer_to_vm(controller: VMControllerClient, dest_path: str, download_url: str) -> None:
-    logger.info("[attachments] transferring to VM path=%s", dest_path)
-    tmp_file = _download_to_temp(download_url)
-    try:
-        controller.upload_file(dest_path, tmp_file)
-        logger.info("[attachments] upload complete path=%s", dest_path)
-    finally:
-        try:
-            tmp_file.close()
-        except Exception:
-            pass
+    logger.info("[attachments] downloading to VM path=%s", dest_path)
+    controller.download_file(download_url, dest_path, timeout=DOWNLOAD_TIMEOUT)
+    logger.info("[attachments] download complete path=%s", dest_path)
 
 
 def stage_files_for_run(run_id: str, workspace: Dict[str, Any]) -> List[Dict[str, Any]]:
