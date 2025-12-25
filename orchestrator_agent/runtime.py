@@ -136,6 +136,7 @@ class OrchestratorRuntime:
                 "decision_type": decision["type"],
                 "target": decision.get("target"),
                 "task_preview": decision.get("task", ""),
+                "reasoning": decision.get("reasoning"),
             })
 
             if decision["type"] == "task_complete":
@@ -560,7 +561,7 @@ class OrchestratorRuntime:
                 response = client.create_response(
                     model="o4-mini",
                     messages=messages,
-
+                    text={"format": {"type": "json_object"}},
                     reasoning_effort="high",
                 )
 
@@ -570,24 +571,25 @@ class OrchestratorRuntime:
 
                 # Validate response type
                 if result.get("type") not in ["next_step", "task_complete", "task_impossible"]:
+                    logger.info(f"Retryying Orchestrator LLM with invalid response type: {result.get('type')}")
                     raise ValueError(f"Invalid response type: {result.get('type')}")
 
                 return result
 
             except json.JSONDecodeError as e:
                 if attempt == 0:
-                    logger.warning(f"LLM returned invalid JSON, retrying: {e}")
+                    logger.error(f"LLM returned invalid JSON, retrying: {e}")
                     continue
                 else:
-                    logger.error(f"LLM retry failed with invalid JSON: {e}")
+                    logger.critical(f"LLM retry failed with invalid JSON: {e}")
                     raise
 
             except Exception as e:
                 if attempt == 0:
-                    logger.warning(f"Orchestrator LLM failed, retrying: {e}")
+                    logger.error(f"Orchestrator LLM failed, retrying: {e}")
                     continue
                 else:
-                    logger.error(f"Orchestrator LLM retry failed: {e}")
+                    logger.critical(f"Orchestrator LLM retry failed: {e}")
                     raise
 
     def _get_cached_capabilities(

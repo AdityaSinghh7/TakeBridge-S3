@@ -4,15 +4,98 @@ import base64
 import gzip
 import json
 import logging
+import os
+import random
+import time
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from .engine import SessionLocal
 
 logger = logging.getLogger(__name__)
+
+_AGENT_STATES_MAX_RETRIES = int(os.getenv("AGENT_STATES_DB_RETRIES", "2"))
+_AGENT_STATES_RETRY_BACKOFF_BASE = float(os.getenv("AGENT_STATES_DB_RETRY_BACKOFF_BASE", "0.25"))
+_AGENT_STATES_RETRY_BACKOFF_CAP = float(os.getenv("AGENT_STATES_DB_RETRY_BACKOFF_CAP", "2.0"))
+_AGENT_STATES_RETRY_BACKOFF_JITTER = float(os.getenv("AGENT_STATES_DB_RETRY_BACKOFF_JITTER", "0.25"))
+
+
+def _is_retryable_db_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(
+        token in message
+        for token in (
+            "ssl",
+            "tls",
+            "bad record mac",
+            "connection",
+            "server closed",
+            "could not connect",
+            "connection reset",
+            "connection aborted",
+            "connection refused",
+            "timeout",
+            "terminating connection",
+        )
+    )
+
+
+def _sleep_with_backoff(attempt: int) -> None:
+    if _AGENT_STATES_RETRY_BACKOFF_BASE <= 0:
+        return
+    delay = min(
+        _AGENT_STATES_RETRY_BACKOFF_CAP,
+        _AGENT_STATES_RETRY_BACKOFF_BASE * (2**attempt),
+    )
+    if _AGENT_STATES_RETRY_BACKOFF_JITTER:
+        delay += random.uniform(0.0, _AGENT_STATES_RETRY_BACKOFF_JITTER)
+    time.sleep(delay)
+
+
+def _run_with_retry(
+    *,
+    label: str,
+    db: Optional[Session],
+    op: Callable[[Session, bool], int],
+) -> int:
+    owns_session = db is None
+    session = db or SessionLocal()
+    max_attempts = _AGENT_STATES_MAX_RETRIES + 1
+    try:
+        for attempt in range(max_attempts):
+            try:
+                return op(session, owns_session)
+            except OperationalError as exc:
+                if owns_session:
+                    session.rollback()
+                if (
+                    not owns_session
+                    or attempt >= _AGENT_STATES_MAX_RETRIES
+                    or not _is_retryable_db_error(exc)
+                ):
+                    raise
+                logger.warning(
+                    "%s failed due to database error; retrying attempt=%s/%s error=%s",
+                    label,
+                    attempt + 1,
+                    max_attempts,
+                    exc,
+                )
+                if owns_session:
+                    session.close()
+                    session = SessionLocal()
+                _sleep_with_backoff(attempt)
+            except Exception:
+                if owns_session:
+                    session.rollback()
+                raise
+    finally:
+        if owns_session:
+            session.close()
 
 
 def _deep_merge(dest: Dict[str, Any], src: Dict[str, Any]) -> Dict[str, Any]:
@@ -144,9 +227,7 @@ def update_agent_states(
 
     compressed = _compress_agent_states(agent_states)
 
-    owns_session = db is None
-    session = db or SessionLocal()
-    try:
+    def _op(session: Session, owns_session: bool) -> int:
         now = datetime.now(timezone.utc)
         result = session.execute(
             text(
@@ -167,13 +248,8 @@ def update_agent_states(
         if owns_session:
             session.commit()
         return result.rowcount or 0
-    except Exception:
-        if owns_session:
-            session.rollback()
-        raise
-    finally:
-        if owns_session:
-            session.close()
+
+    return _run_with_retry(label="update_agent_states", db=db, op=_op)
 
 
 def merge_agent_states(
@@ -200,9 +276,7 @@ def merge_agent_states(
     if not isinstance(patch, dict):
         raise ValueError("patch must be a dict")
 
-    owns_session = db is None
-    session = db or SessionLocal()
-    try:
+    def _op(session: Session, owns_session: bool) -> int:
         row = session.execute(
             text("SELECT agent_states FROM workflow_runs WHERE id = :run_id FOR UPDATE"),
             {"run_id": run_id},
@@ -238,13 +312,8 @@ def merge_agent_states(
         if owns_session:
             session.commit()
         return result.rowcount or 0
-    except Exception:
-        if owns_session:
-            session.rollback()
-        raise
-    finally:
-        if owns_session:
-            session.close()
+
+    return _run_with_retry(label="merge_agent_states", db=db, op=_op)
 
 
 __all__ = ["update_agent_states", "merge_agent_states", "get_agent_states", "mark_run_attention"]

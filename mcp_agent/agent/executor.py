@@ -869,7 +869,7 @@ class ActionExecutor:
                 "success": sandbox_result.success,
                 "timed_out": sandbox_result.timed_out,
                 "log_lines": len(sandbox_result.logs),
-                "code_preview": code_body[:200],
+                "code_preview": code_body,
                 "label": label,
             },
         )

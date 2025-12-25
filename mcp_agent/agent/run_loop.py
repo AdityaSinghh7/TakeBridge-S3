@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional
 from mcp_agent.core.context import AgentContext
 from mcp_agent.actions import SUPPORTED_PROVIDERS
 from mcp_agent.env_sync import ensure_env_for_provider
+from mcp_agent.registry.crud import get_available_providers
 from mcp_agent.user_identity import normalize_user_id
 from mcp_agent.sandbox.ephemeral import generate_ephemeral_toolbox
 from shared import agent_signal
@@ -107,7 +108,7 @@ class AgentOrchestrator:
         if not text:
             self.agent_state.record_event(
                 "mcp.llm.retry_empty",
-                {"model": self.llm.model},
+                {"raw_output": text},
             )
             llm_result = self.llm.generate_plan(self.agent_state)
             text = llm_result.get("text") or ""
@@ -213,10 +214,11 @@ class AgentOrchestrator:
             self.agent_state.record_event(
                 "mcp.search.completed",
                 {
-                    "query": query[:200],
+                    "query": query,
                     "detail_level": "full",
                     "result_count": len(found_tools),
                     "tool_ids": [r.get("tool_id") for r in found_tools if r.get("tool_id")],
+                    "tool_names": tool_names,
                 },
             )
             reasoning = command.get("reasoning") or result.preview
@@ -627,6 +629,35 @@ def execute_mcp_task(
 
             generate_ephemeral_toolbox(agent_context, toolbox_path)
 
+            provider_infos = get_available_providers(agent_context)
+            available_providers = [
+                info.get("provider")
+                for info in provider_infos
+                if info.get("authorized") and info.get("provider")
+            ]
+            if tool_constraints and tool_constraints.get("mode") == "custom":
+                allowed_providers = tool_constraints.get("providers") or []
+                allowed_tools = tool_constraints.get("tools") or []
+                if allowed_providers:
+                    allowed_provider_set = set(allowed_providers)
+                    available_providers = [
+                        provider
+                        for provider in available_providers
+                        if provider in allowed_provider_set
+                    ]
+                if allowed_tools:
+                    tool_provider_set = {
+                        tool.split(".", 1)[0]
+                        for tool in allowed_tools
+                        if isinstance(tool, str) and tool
+                    }
+                    if tool_provider_set:
+                        available_providers = [
+                            provider
+                            for provider in available_providers
+                            if provider in tool_provider_set
+                        ]
+
             state = AgentState(
                 task=task.strip(),
                 user_id=normalized_user,
@@ -644,6 +675,7 @@ def execute_mcp_task(
                     "extra_context_keys": sorted(state.extra_context.keys()),
                     "ephemeral_toolbox": str(toolbox_path),
                     "tool_constraints": tool_constraints,
+                    "available_providers": available_providers,
                 },
             )
             runtime = AgentOrchestrator(agent_context, state, llm=llm)
