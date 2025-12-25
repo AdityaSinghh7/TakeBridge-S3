@@ -88,6 +88,27 @@ class _AttachmentStorage:
     def head_object(self, key: str) -> Dict[str, Any]:
         return self._client.head_object(Bucket=self.bucket, Key=key)
 
+    def list_objects(
+        self,
+        *,
+        prefix: str,
+        delimiter: Optional[str] = None,
+        max_keys: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        params: Dict[str, Any] = {"Bucket": self.bucket, "Prefix": prefix}
+        if delimiter:
+            params["Delimiter"] = delimiter
+        if max_keys:
+            params["MaxKeys"] = max_keys
+        return self._client.list_objects_v2(**params)
+
+    def copy_object(self, source_key: str, destination_key: str) -> None:
+        self._client.copy_object(
+            Bucket=self.bucket,
+            Key=destination_key,
+            CopySource={"Bucket": self.bucket, "Key": source_key},
+        )
+
     def delete_object(self, key: str) -> None:
         try:
             self._client.delete_object(Bucket=self.bucket, Key=key)

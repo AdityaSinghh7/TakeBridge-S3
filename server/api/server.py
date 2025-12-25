@@ -49,8 +49,9 @@ from vm_manager.config import settings
 from orchestrator_agent.data_types import OrchestratorRequest
 from shared.run_context import RUN_LOG_ID
 from .auth import get_current_user, CurrentUser
-from .run_attachments import stage_files_for_run, AttachmentStageError
+from .run_attachments import stage_files_for_run as stage_attachment_files_for_run, AttachmentStageError
 from .run_artifacts import capture_context_baseline, export_context_artifacts, merge_run_environment
+from .run_drive import stage_drive_files_for_run, DriveStageError, detect_drive_changes
 from shared.supabase_client import get_service_supabase_client
 from shared.db.engine import SessionLocal, DB_URL
 from sqlalchemy import text
@@ -291,6 +292,14 @@ try:
     logger.info("Mounted workflow routes")
 except Exception as _e:  # pragma: no cover
     logger.warning("Failed to mount workflow routes: %s", _e)
+
+# Mount drive routes
+try:
+    from server.api.routes_drive import router as drive_router  # type: ignore
+    app.include_router(drive_router)
+    logger.info("Mounted drive routes")
+except Exception as _e:  # pragma: no cover
+    logger.warning("Failed to mount drive routes: %s", _e)
 
 # Mount Guacamole auth routes
 try:
@@ -612,14 +621,18 @@ def _attach_workspace_files(workspace: Dict[str, Any], run_id: Optional[str]) ->
     if not run_id:
         return workspace
     try:
-        attachments = stage_files_for_run(run_id, workspace)
+        drive_files = stage_drive_files_for_run(run_id, workspace)
+    except DriveStageError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+    try:
+        attachments = stage_attachment_files_for_run(run_id, workspace)
     except AttachmentStageError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-    if not attachments:
-        capture_context_baseline(run_id, workspace)
-        return workspace
     updated = dict(workspace)
-    updated["attachments"] = attachments
+    if drive_files:
+        updated["drive"] = drive_files
+    if attachments:
+        updated["attachments"] = attachments
     capture_context_baseline(run_id, updated)
     return updated
 
@@ -808,11 +821,18 @@ def _create_streaming_response(
                     _update_run_status(run_id, result_dict.get("status") or "success", summary=summary or None)
         finally:
             exported_artifacts: List[Dict[str, Any]] = []
+            drive_changes: List[Dict[str, Any]] = []
             if run_id_local and workspace:
                 try:
                     exported_artifacts = export_context_artifacts(run_id_local, workspace)
                 except Exception as exc:
                     logger.warning("Failed to export artifacts for run %s: %s", run_id_local, exc)
+                try:
+                    drive_changes = detect_drive_changes(run_id_local, workspace)
+                except Exception as exc:
+                    logger.warning("Failed to detect drive changes for run %s: %s", run_id_local, exc)
+                if drive_changes:
+                    logger.info("[drive] detected %s changed files for run %s", len(drive_changes), run_id_local)
             if run_id and run_id_local and final_status and final_status != "attention":
                 try:
                     from vm_manager.vm_wrapper import terminate_run_instance

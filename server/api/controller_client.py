@@ -273,6 +273,22 @@ class VMControllerClient:
             )
         return response
 
+    def _request_with_fallback(
+        self,
+        method: str,
+        path: str,
+        *,
+        fallback_path: Optional[str],
+        **kwargs: Any,
+    ) -> requests.Response:
+        try:
+            return self._request(method, path, **kwargs)
+        except VMControllerError as exc:
+            if exc.status_code == 404 and fallback_path:
+                logger.info("VMControllerClient fallback %s -> %s", path, fallback_path)
+                return self._request(method, fallback_path, **kwargs)
+            raise
+
     # ------------------------------------------------------------------ #
     # Public api methods
     # ------------------------------------------------------------------ #
@@ -286,6 +302,14 @@ class VMControllerClient:
             logger.info("controller.execute path=%s shell=%s command=%s", path, shell, command)
         except Exception:
             logger.debug("controller.execute path=%s shell=%s (command log failed)", path, shell)
+        if setup:
+            return self._request_with_fallback(
+                "POST",
+                path,
+                fallback_path="/execute",
+                json={"command": command, "shell": shell},
+                timeout=timeout,
+            ).json()
         return self._request(
             "POST",
             path,
@@ -326,6 +350,14 @@ class VMControllerClient:
             )
         except Exception:
             pass
+        if setup:
+            return self._request_with_fallback(
+                "POST",
+                path,
+                fallback_path="/execute_with_verification",
+                json=payload,
+                timeout=timeout,
+            ).json()
         return self._request("POST", path, json=payload, timeout=timeout).json()
 
     def launch(self, command: Command, *, shell: bool = False, setup: bool = False, timeout: Optional[float] = None) -> str:
@@ -333,7 +365,16 @@ class VMControllerClient:
         Launch an application/process (`/launch`).
         """
         path = "/setup/launch" if setup else "/setup/launch"  # Server only exposes setup route.
-        response = self._request("POST", path, json={"command": command, "shell": shell}, timeout=timeout)
+        if setup:
+            response = self._request_with_fallback(
+                "POST",
+                path,
+                fallback_path="/launch",
+                json={"command": command, "shell": shell},
+                timeout=timeout,
+            )
+        else:
+            response = self._request("POST", path, json={"command": command, "shell": shell}, timeout=timeout)
         return response.text
 
     def capture_screenshot(self, *, save_to: Optional[Union[str, Path]] = None, timeout: Optional[float] = None) -> bytes:
@@ -549,6 +590,18 @@ class VMControllerClient:
         )
         return response.content
 
+    def stream_file(self, path: Union[str, Path], *, timeout: Optional[float] = None) -> requests.Response:
+        """
+        Stream a file from the VM (`/file`).
+        """
+        return self._request(
+            "POST",
+            "/file",
+            data={"file_path": str(path)},
+            timeout=timeout,
+            stream=True,
+        )
+
     def upload_file(
         self,
         path: Union[str, Path],
@@ -568,9 +621,10 @@ class VMControllerClient:
         else:
             file_payload = ("payload", io.BytesIO(data))
 
-        response = self._request(
+        response = self._request_with_fallback(
             "POST",
             "/setup/upload",
+            fallback_path="/upload",
             data={"file_path": str(path)},
             files={"file_data": file_payload},
             timeout=timeout,

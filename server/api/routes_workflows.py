@@ -8,6 +8,9 @@ import time
 import uuid
 import httpx
 import httpcore
+import mimetypes
+import posixpath
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Dict, Optional
 from datetime import datetime, timezone
 import re
@@ -15,6 +18,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy import text, select
 from sqlalchemy.orm import Session
 from botocore.exceptions import ClientError
@@ -22,11 +26,19 @@ from postgrest.exceptions import APIError
 from pydantic import BaseModel, Field
 
 from server.api.auth import CurrentUser, get_current_user
+from server.api.controller_client import VMControllerClient
+from server.api.drive_utils import build_drive_key, normalize_drive_path
+from server.api.run_drive import DRIVE_VM_BASE_PATH, DOWNLOAD_CHUNK_BYTES
 from shared.db.engine import SessionLocal, DB_URL
 from shared.supabase_client import get_supabase_client
 from uuid import UUID
 from shared.storage import get_attachment_storage, AttachmentStorageError
-from shared.db.models import WorkflowFile, WorkflowRunFile, WorkflowRunArtifact
+from shared.db.models import (
+    WorkflowFile,
+    WorkflowRunFile,
+    WorkflowRunArtifact,
+    WorkflowRunDriveChange,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +103,8 @@ def _serialize_run_file(data: Any) -> Dict[str, Any]:
             "user_id": data.user_id,
             "source_type": data.source_type,
             "storage_key": data.storage_key,
+            "drive_path": data.drive_path,
+            "r2_key": data.r2_key,
             "filename": data.filename,
             "content_type": data.content_type,
             "size_bytes": data.size_bytes,
@@ -187,6 +201,42 @@ def _execute_with_backoff(q, retries: int = 3, base_delay: float = 0.5, factor: 
             time.sleep(delay)
 
 
+def _get_run_controller_base_url(db: Session, run_id: str, user_id: str) -> str:
+    env_raw = (
+        db.execute(
+            text(
+                """
+                SELECT environment FROM workflow_runs
+                WHERE id = :run_id AND user_id = :user_id
+                """
+            ),
+            {"run_id": run_id, "user_id": user_id},
+        )
+        .scalar_one_or_none()
+    )
+    if not env_raw:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run_not_found")
+    if isinstance(env_raw, dict):
+        env = dict(env_raw)
+    else:
+        try:
+            env = json.loads(env_raw)
+        except Exception:
+            env = {}
+    endpoint = env.get("endpoint") if isinstance(env, dict) else None
+    if isinstance(endpoint, str):
+        try:
+            endpoint = json.loads(endpoint)
+        except Exception:
+            endpoint = {}
+    controller_base_url = None
+    if isinstance(endpoint, dict):
+        controller_base_url = endpoint.get("controller_base_url") or endpoint.get("base_url")
+    if not controller_base_url:
+        raise HTTPException(status_code=400, detail="controller_base_url_missing")
+    return controller_base_url
+
+
 @router.post("/workflows/{workflow_id}/run")
 def enqueue_workflow_run(
     workflow_id: str,
@@ -216,6 +266,23 @@ def enqueue_workflow_run(
             for fid in file_ids_raw
             if fid is not None and str(fid).strip()
         ]
+    drive_paths_raw = payload.get("drive_paths")
+    if drive_paths_raw is not None and not isinstance(drive_paths_raw, list):
+        raise HTTPException(status_code=400, detail="drive_paths_must_be_list")
+    drive_paths: List[str] = []
+    if isinstance(drive_paths_raw, list):
+        seen_paths = set()
+        for raw in drive_paths_raw:
+            if raw is None:
+                continue
+            try:
+                normalized = normalize_drive_path(str(raw))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            if normalized in seen_paths:
+                continue
+            seen_paths.add(normalized)
+            drive_paths.append(normalized)
 
     metadata_keys = sorted(metadata.keys()) if isinstance(metadata, dict) else [f"<{type(metadata).__name__}>"]
     environment_keys = (
@@ -226,12 +293,17 @@ def enqueue_workflow_run(
         file_ids_summary = "default"
     else:
         file_ids_summary = {"count": len(requested_file_ids), "preview": requested_file_ids[:3]}
+    if drive_paths_raw is None:
+        drive_paths_summary: Any = "none"
+    else:
+        drive_paths_summary = {"count": len(drive_paths), "preview": drive_paths[:3]}
     logger.info(
-        "Enqueue requested workflow_id=%s user_id=%s trigger_source=%s file_ids=%s metadata_keys=%s environment_keys=%s",
+        "Enqueue requested workflow_id=%s user_id=%s trigger_source=%s file_ids=%s drive_paths=%s metadata_keys=%s environment_keys=%s",
         workflow_id,
         user_id,
         trigger_source,
         file_ids_summary,
+        drive_paths_summary,
         metadata_keys,
         environment_keys,
     )
@@ -269,6 +341,26 @@ def enqueue_workflow_run(
                     metadata_json=wf_file.metadata_json or {},
                 )
             )
+        for drive_path in drive_paths:
+            r2_key = build_drive_key(current_user.sub, drive_path)
+            run_file_records.append(
+                WorkflowRunFile(
+                    id=str(uuid.uuid4()),
+                    run_id=run_id,
+                    workflow_file_id=None,
+                    user_id=current_user.sub,
+                    source_type="drive",
+                    storage_key=r2_key,
+                    r2_key=r2_key,
+                    drive_path=drive_path,
+                    filename=posixpath.basename(drive_path) or "file",
+                    content_type=None,
+                    size_bytes=None,
+                    checksum=None,
+                    status="pending",
+                    metadata_json={},
+                )
+            )
 
         logger.info(
             "Enqueue attachments resolved run_id=%s workflow_id=%s files=%s",
@@ -290,9 +382,14 @@ def enqueue_workflow_run(
                     "status": rf.status,
                 }
                 for rf in run_file_records
+                if rf.source_type != "drive"
             ]
             environment_payload = dict(environment_payload)
-            environment_payload["files"] = env_files
+            if env_files:
+                environment_payload["files"] = env_files
+        if drive_paths:
+            environment_payload = dict(environment_payload)
+            environment_payload["drive_paths"] = drive_paths
         logger.info(
             "Enqueue payload finalized run_id=%s metadata_keys=%s environment_keys=%s",
             run_id,
@@ -792,6 +889,120 @@ def list_run_artifacts(
         )
 
     return {"artifacts": artifacts}
+
+
+@router.post("/runs/{run_id}/commit-drive-changes")
+def commit_drive_changes(
+    run_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+) -> List[Dict[str, Any]]:
+    db = SessionLocal()
+    try:
+        run_row = db.execute(
+            text(
+                """
+                SELECT id FROM workflow_runs
+                WHERE id = :run_id AND user_id = :user_id
+                """
+            ),
+            {"run_id": run_id, "user_id": current_user.sub},
+        ).fetchone()
+        if not run_row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run_not_found")
+
+        rows = (
+            db.execute(
+                select(WorkflowRunDriveChange)
+                .where(
+                    WorkflowRunDriveChange.run_id == run_id,
+                    WorkflowRunDriveChange.user_id == current_user.sub,
+                )
+                .order_by(WorkflowRunDriveChange.created_at.asc())
+            )
+            .scalars()
+            .all()
+        )
+    finally:
+        db.close()
+
+    if not rows:
+        return []
+
+    try:
+        storage = get_attachment_storage()
+    except AttachmentStorageError as exc:
+        logger.error("Attachment storage misconfigured: %s", exc)
+        raise HTTPException(status_code=500, detail="attachments_not_configured")
+
+    results: List[Dict[str, Any]] = []
+    for row in rows:
+        content_type = row.content_type or mimetypes.guess_type(row.path or "")[0] or DEFAULT_ATTACHMENT_CONTENT_TYPE
+        presigned_put_url = storage.generate_presigned_put(row.r2_key, content_type=content_type)
+        results.append(
+            {
+                "path": row.path,
+                "r2_key": row.r2_key,
+                "presigned_put_url": presigned_put_url,
+                "content_type": content_type,
+                "size": row.size_bytes,
+                "source_baseline_hash": row.baseline_hash,
+                "new_hash": row.new_hash,
+            }
+        )
+    return results
+
+
+@router.get("/runs/{run_id}/drive-file")
+def download_drive_file(
+    run_id: str,
+    path: str,
+    current_user: CurrentUser = Depends(get_current_user),
+) -> StreamingResponse:
+    try:
+        drive_path = normalize_drive_path(path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.execute(
+                text(
+                    """
+                    SELECT drive_path, vm_path, content_type
+                    FROM workflow_run_files
+                    WHERE run_id = :run_id AND user_id = :user_id AND drive_path = :drive_path
+                    """
+                ),
+                {"run_id": run_id, "user_id": current_user.sub, "drive_path": drive_path},
+            )
+            .mappings()
+            .first()
+        )
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="drive_file_not_found")
+        controller_base_url = _get_run_controller_base_url(db, run_id, current_user.sub)
+    finally:
+        db.close()
+
+    controller = VMControllerClient(base_url=controller_base_url)
+    controller.wait_for_health()
+    windows = ":" in DRIVE_VM_BASE_PATH or "\\" in DRIVE_VM_BASE_PATH
+    vm_path = row.get("vm_path")
+    if not vm_path:
+        if windows:
+            vm_path = str(PureWindowsPath(DRIVE_VM_BASE_PATH, *drive_path.split("/")))
+        else:
+            vm_path = str(PurePosixPath(DRIVE_VM_BASE_PATH, *drive_path.split("/")))
+    content_type = row.get("content_type") or mimetypes.guess_type(drive_path)[0] or DEFAULT_ATTACHMENT_CONTENT_TYPE
+
+    def _iter_stream():
+        with controller.stream_file(vm_path) as resp:
+            for chunk in resp.iter_content(chunk_size=DOWNLOAD_CHUNK_BYTES):
+                if chunk:
+                    yield chunk
+
+    return StreamingResponse(_iter_stream(), media_type=content_type)
 
 
 @router.patch("/workflows/{workflow_id}")

@@ -119,6 +119,8 @@ class WorkflowRunFile(Base):
     user_id = Column(String, index=True, nullable=False)
     source_type = Column(String, nullable=False, default="upload")
     storage_key = Column(Text, nullable=False)
+    drive_path = Column(Text)
+    r2_key = Column(Text)
     filename = Column(Text, nullable=False)
     content_type = Column(Text)
     size_bytes = Column(BigInteger)
@@ -145,5 +147,23 @@ class WorkflowRunArtifact(Base):
     checksum = Column(String(128))
     source_path = Column(Text)
     metadata_json = Column(JSONType, nullable=False, server_default="{}")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class WorkflowRunDriveChange(Base):
+    __tablename__ = "workflow_run_drive_changes"
+
+    id = Column(String, primary_key=True)
+    run_id = Column(String, index=True, nullable=False)
+    user_id = Column(String, index=True, nullable=False)
+    path = Column(Text, nullable=False)
+    r2_key = Column(Text, nullable=False)
+    baseline_hash = Column(String(128))
+    new_hash = Column(String(128))
+    size_bytes = Column(BigInteger)
+    content_type = Column(Text)
+    status = Column(String, nullable=False, default="pending")
+    committed_at = Column(DateTime(timezone=True))
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

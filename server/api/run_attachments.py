@@ -71,7 +71,7 @@ def stage_files_for_run(run_id: str, workspace: Dict[str, Any]) -> List[Dict[str
                     SELECT id, workflow_file_id, storage_key, filename, content_type,
                            size_bytes, status, vm_path
                     FROM workflow_run_files
-                    WHERE run_id = :run_id
+                    WHERE run_id = :run_id AND (drive_path IS NULL AND source_type != 'drive')
                     ORDER BY created_at ASC
                     """
                 ),
