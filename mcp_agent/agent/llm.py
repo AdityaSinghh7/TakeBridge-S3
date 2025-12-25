@@ -67,7 +67,7 @@ class PlannerLLM:
         text = extract_assistant_text(response) or ""
         context.record_event(
             "mcp.llm.completed",
-            {"model": self.model, "output_chars": len(text)},
+            { "raw_output": text},
         )
         return {
             "messages": messages,

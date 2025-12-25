@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+import json
 import hashlib
 import re
 import uuid
@@ -35,6 +36,66 @@ def _redact_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     # Basic implementation - just return as-is for now
     # Could add keyword filtering if needed
     return payload
+
+
+def _json_safe(value: Any) -> Any:
+    """Coerce values into JSON-serializable types."""
+    try:
+        json.dumps(value, ensure_ascii=False)
+        return value
+    except Exception:
+        return _coerce_json_safe(value)
+
+
+def _coerce_json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k): _coerce_json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_coerce_json_safe(v) for v in value]
+    if isinstance(value, tuple):
+        return [_coerce_json_safe(v) for v in value]
+    if isinstance(value, set):
+        return [_coerce_json_safe(v) for v in value]
+    try:
+        json.dumps(value, ensure_ascii=False)
+        return value
+    except Exception:
+        return str(value)
+
+
+def _flatten_observation_keys(observation: Any) -> List[str]:
+    """Return flattened key paths for a JSON-like observation."""
+    keys: List[str] = []
+    seen: set[str] = set()
+
+    def _add(path: str) -> None:
+        if not path or path in seen:
+            return
+        seen.add(path)
+        keys.append(path)
+
+    def _walk(value: Any, prefix: str) -> None:
+        if isinstance(value, dict):
+            for raw_key, child in value.items():
+                key = str(raw_key)
+                path = f"{prefix}.{key}" if prefix else key
+                _add(path)
+                _walk(child, path)
+            return
+        if isinstance(value, list):
+            list_prefix = f"{prefix}[]" if prefix else "[]"
+            _add(list_prefix)
+            for item in value:
+                _walk(item, list_prefix)
+            return
+        if isinstance(value, tuple) or isinstance(value, set):
+            list_prefix = f"{prefix}[]" if prefix else "[]"
+            _add(list_prefix)
+            for item in value:
+                _walk(item, list_prefix)
+
+    _walk(observation, "")
+    return keys
 
 @dataclass
 class AgentState:
@@ -170,12 +231,20 @@ class AgentState:
             "success": success,
             "reasoning": action_reasoning,
         }
+        if action_type == "sandbox":
+            payload["observation"] = _json_safe(observation)
         if error:
             payload["error"] = error
         if action_input:
             payload["action_input_keys"] = sorted(action_input.keys())
+            if action_type == "inspect_tool_output" or action_type == "tool":
+                payload["action_input_KV_pairs"] = action_input
         if action_outcome:
             payload["action_outcome_keys"] = sorted(action_outcome.keys())
+            if action_type == "inspect_tool_output" or action_type == "tool":
+                payload["action_outcome_KV_pairs"] = action_outcome
+        if action_type == "tool":
+            payload["observation_keys"] = _flatten_observation_keys(observation)
         if observation_metadata:
             payload["observation_metadata"] = dict(observation_metadata)
         self.record_event("mcp.step.recorded", payload)

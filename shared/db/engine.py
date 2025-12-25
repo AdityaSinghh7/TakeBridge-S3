@@ -15,10 +15,28 @@ ECHO = bool(int(os.getenv("DB_ECHO", "0")))
 
 # SQLite needs check_same_thread=False for FastAPI multi-thread
 connect_args = {}
+pool_recycle = None
 if DB_URL.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
+else:
+    pool_recycle = int(os.getenv("DB_POOL_RECYCLE", "300"))
+    connect_args = {
+        "keepalives": 1,
+        "keepalives_idle": int(os.getenv("DB_KEEPALIVES_IDLE", "30")),
+        "keepalives_interval": int(os.getenv("DB_KEEPALIVES_INTERVAL", "10")),
+        "keepalives_count": int(os.getenv("DB_KEEPALIVES_COUNT", "5")),
+    }
 
-engine = create_engine(DB_URL, echo=ECHO, future=True, pool_pre_ping=True, connect_args=connect_args)
+engine_kwargs = {
+    "echo": ECHO,
+    "future": True,
+    "pool_pre_ping": True,
+    "connect_args": connect_args,
+}
+if pool_recycle is not None:
+    engine_kwargs["pool_recycle"] = pool_recycle
+
+engine = create_engine(DB_URL, **engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
 @contextmanager
