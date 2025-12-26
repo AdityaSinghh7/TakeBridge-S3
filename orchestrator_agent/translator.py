@@ -331,6 +331,7 @@ Output:
 - Extract actual data from JSON blocks in markdown - don't summarize
 - Count step headers accurately (## Step N or ### Step N)
 - If trajectory shows error in last step, last_step_failed=true
+- If the computer-use agent's trajectory has a save_to_knowledge call, include the exact data that was saved to the knowledge bank in the data field.
 """
 
 

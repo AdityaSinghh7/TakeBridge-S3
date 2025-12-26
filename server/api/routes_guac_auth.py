@@ -8,10 +8,10 @@ from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, status
-from sqlalchemy import text
 
 from server.api.auth import CurrentUser, get_current_user
 from shared.db.engine import SessionLocal
+from shared.db import workflow_runs
 from shared.db.models import Workspace
 from vm_manager.config import settings
 
@@ -184,39 +184,12 @@ def get_run_guac_token(
 
     db = SessionLocal()
     try:
-        row = db.execute(
-            text(
-                """
-                SELECT wr.user_id, wr.vm_id, wr.environment, vi.endpoint
-                FROM workflow_runs wr
-                LEFT JOIN vm_instances vi ON vi.id = wr.vm_id
-                WHERE wr.id = :run_id
-                """
-            ),
-            {"run_id": run_id},
-        ).mappings().all()
+        endpoint = workflow_runs.get_run_vm_endpoint(db, run_id=run_id, user_id=current_user.sub)
     finally:
         db.close()
 
-    match = next((dict(r) for r in row if str(r.get("user_id")) == current_user.sub), None)
-    if not match:
+    if endpoint is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run_not_found")
-
-    endpoint = match.get("endpoint")
-    env = match.get("environment")
-    if env and not endpoint:
-        try:
-            env_json = json.loads(env) if isinstance(env, str) else env
-            endpoint = env_json.get("endpoint")
-        except Exception:
-            endpoint = None
-
-    if isinstance(endpoint, str):
-        try:
-            endpoint = json.loads(endpoint)
-        except Exception:
-            endpoint = {}
-
     endpoint = endpoint or {}
     guac_url = endpoint.get("vnc_url")
     if not guac_url:

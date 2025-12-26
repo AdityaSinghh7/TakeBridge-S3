@@ -14,7 +14,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from .engine import SessionLocal
+from .engine import DB_URL, SessionLocal
+from .sql import execute_text
 
 logger = logging.getLogger(__name__)
 
@@ -405,3 +406,330 @@ def mark_run_attention(
     finally:
         if owns_session:
             session.close()
+
+
+def _parse_json_dict(value: Any) -> Dict[str, Any]:
+    if not value:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            loaded = json.loads(value)
+            return loaded if isinstance(loaded, dict) else {}
+        except Exception:
+            return {}
+    try:
+        return dict(value)
+    except Exception:
+        return {}
+
+
+def get_environment(db: Session, *, run_id: str, user_id: Optional[str] = None) -> Dict[str, Any] | None:
+    """
+    Fetch workflow_runs.environment as a dict.
+
+    Returns None if the run is not found (or not owned by user_id when provided).
+    """
+    sql = "SELECT environment FROM workflow_runs WHERE id = :run_id"
+    params: Dict[str, Any] = {"run_id": run_id}
+    if user_id is not None:
+        sql += " AND user_id = :user_id"
+        params["user_id"] = user_id
+    row = execute_text(db, sql, params).scalar_one_or_none()
+    if row is None:
+        return None
+    return _parse_json_dict(row)
+
+
+def get_user_id(db: Session, *, run_id: str) -> str | None:
+    return execute_text(
+        db,
+        "SELECT user_id FROM workflow_runs WHERE id = :run_id",
+        {"run_id": run_id},
+    ).scalar_one_or_none()
+
+
+def merge_environment(db: Session, *, run_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Read/merge/write workflow_runs.environment using a shallow dict update.
+    """
+    env = get_environment(db, run_id=run_id) or {}
+    env.update(patch or {})
+    execute_text(
+        db,
+        """
+        UPDATE workflow_runs
+        SET environment = :env,
+            updated_at = NOW()
+        WHERE id = :run_id
+        """,
+        {"env": json.dumps(env), "run_id": run_id},
+    )
+    return env
+
+
+def touch_run(db: Session, *, run_id: str) -> int:
+    result = execute_text(
+        db,
+        """
+        UPDATE workflow_runs
+        SET last_heartbeat_at = NOW(), updated_at = NOW()
+        WHERE id = :run_id
+        """,
+        {"run_id": run_id},
+    )
+    return result.rowcount or 0
+
+
+def update_status(
+    db: Session,
+    *,
+    run_id: str,
+    status: str,
+    summary: Optional[str] = None,
+    updated_at: Optional[datetime] = None,
+    terminal_statuses: Optional[set[str]] = None,
+) -> int:
+    terminal_set = terminal_statuses or {"success", "error", "attention", "cancelled"}
+    terminal = status in terminal_set
+    if updated_at is None:
+        result = execute_text(
+            db,
+            """
+            UPDATE workflow_runs
+            SET status = :status,
+                summary = COALESCE(:summary, summary),
+                ended_at = CASE WHEN :terminal THEN NOW() ELSE ended_at END,
+                updated_at = NOW()
+            WHERE id = :run_id
+            """,
+            {"status": status, "summary": summary, "run_id": run_id, "terminal": terminal},
+        )
+        return result.rowcount or 0
+
+    result = execute_text(
+        db,
+        """
+        UPDATE workflow_runs
+        SET status = :status,
+            summary = COALESCE(:summary, summary),
+            ended_at = CASE WHEN :terminal THEN :updated_at ELSE ended_at END,
+            updated_at = :updated_at
+        WHERE id = :run_id
+        """,
+        {
+            "status": status,
+            "summary": summary,
+            "run_id": run_id,
+            "terminal": terminal,
+            "updated_at": updated_at,
+        },
+    )
+    return result.rowcount or 0
+
+
+def set_vm_id(db: Session, *, run_id: str, vm_id: str) -> int:
+    result = execute_text(
+        db,
+        """
+        UPDATE workflow_runs
+        SET vm_id = :vm_id,
+            updated_at = NOW()
+        WHERE id = :run_id
+        """,
+        {"vm_id": vm_id, "run_id": run_id},
+    )
+    return result.rowcount or 0
+
+
+def is_owned(db: Session, *, run_id: str, user_id: str) -> bool:
+    row = (
+        execute_text(
+            db,
+            """
+            SELECT id FROM workflow_runs
+            WHERE id = :run_id AND user_id = :user_id
+            """,
+            {"run_id": run_id, "user_id": user_id},
+        ).fetchone()
+        or None
+    )
+    return bool(row)
+
+
+def insert_run(
+    db: Session,
+    *,
+    run_id: str,
+    workflow_id: str,
+    user_id: str,
+    folder_id: Optional[str],
+    trigger_source: Optional[str],
+    metadata: Dict[str, Any],
+    environment: Dict[str, Any],
+) -> None:
+    execute_text(
+        db,
+        """
+        INSERT INTO workflow_runs (
+            id, workflow_id, user_id, folder_id, status, trigger_source,
+            metadata, environment, created_at, updated_at
+        )
+        VALUES (
+            :id, :workflow_id, :user_id, :folder_id, 'queued', :trigger_source,
+            :metadata, :environment, NOW(), NOW()
+        )
+        """,
+        {
+            "id": run_id,
+            "workflow_id": workflow_id,
+            "user_id": user_id,
+            "folder_id": folder_id,
+            "trigger_source": trigger_source,
+            "metadata": json.dumps(metadata or {}),
+            "environment": json.dumps(environment or {}),
+        },
+    )
+
+
+def notify_run_queued(db: Session, *, run_id: str, user_id: str) -> None:
+    if not DB_URL.startswith("postgres"):
+        return
+    execute_text(
+        db,
+        """
+        SELECT pg_notify(
+            'workflow_run_queued',
+            json_build_object('run_id', :run_id, 'user_id', :user_id)::text
+        )
+        """,
+        {"run_id": run_id, "user_id": user_id},
+    )
+
+
+def list_runs_with_workflow(
+    db: Session,
+    *,
+    user_id: str,
+    status_filter: Optional[str],
+    folder_id: Optional[str],
+    limit: int,
+) -> list[Dict[str, Any]]:
+    limit = max(1, min(int(limit), 200))
+    query = """
+        SELECT wr.id,
+               wr.workflow_id,
+               wr.user_id,
+               wr.folder_id,
+               wr.status,
+               wr.vm_id,
+               wr.trigger_source,
+               wr.metadata,
+               wr.environment,
+               wr.started_at,
+               wr.ended_at,
+               wr.created_at,
+               wr.updated_at,
+               wr.summary,
+               w.name AS workflow_name,
+               w.prompt AS workflow_prompt
+        FROM workflow_runs wr
+        LEFT JOIN workflows w ON w.id = wr.workflow_id
+        WHERE wr.user_id = :user_id
+    """
+    params: Dict[str, Any] = {"user_id": user_id, "limit": limit}
+    if status_filter:
+        query += " AND status = :status"
+        params["status"] = status_filter
+    if folder_id:
+        query += " AND folder_id = :folder_id"
+        params["folder_id"] = folder_id
+
+    query += " ORDER BY COALESCE(wr.started_at, wr.created_at) DESC LIMIT :limit"
+    rows = execute_text(db, query, params).mappings().all()
+    return [dict(r) for r in rows]
+
+
+def get_run_vm_endpoint(db: Session, *, run_id: str, user_id: str) -> Dict[str, Any] | None:
+    row = (
+        execute_text(
+            db,
+            """
+            SELECT wr.user_id, wr.vm_id, wr.environment, vi.endpoint
+            FROM workflow_runs wr
+            LEFT JOIN vm_instances vi ON vi.id = wr.vm_id
+            WHERE wr.id = :run_id AND wr.user_id = :user_id
+            """,
+            {"run_id": run_id, "user_id": user_id},
+        )
+        .mappings()
+        .first()
+    )
+    if not row:
+        return None
+
+    endpoint = row.get("endpoint")
+    env_raw = row.get("environment")
+    if env_raw and not endpoint:
+        env_json = _parse_json_dict(env_raw)
+        endpoint = env_json.get("endpoint")
+
+    if isinstance(endpoint, str):
+        try:
+            endpoint = json.loads(endpoint)
+        except Exception:
+            endpoint = {}
+    return endpoint if isinstance(endpoint, dict) else {}
+
+
+def get_controller_base_url(db: Session, *, run_id: str, user_id: Optional[str] = None) -> str | None:
+    env = get_environment(db, run_id=run_id, user_id=user_id)
+    if env is None:
+        return None
+    endpoint = env.get("endpoint") if isinstance(env, dict) else None
+    if isinstance(endpoint, str):
+        try:
+            endpoint = json.loads(endpoint)
+        except Exception:
+            endpoint = None
+    if not isinstance(endpoint, dict):
+        return None
+    base_url = endpoint.get("controller_base_url") or endpoint.get("base_url")
+    return str(base_url) if base_url else None
+
+
+def get_resume_row(db: Session, *, run_id: str) -> Dict[str, Any] | None:
+    row = (
+        execute_text(
+            db,
+            """
+            SELECT id, user_id, status, agent_states, environment
+            FROM workflow_runs
+            WHERE id = :run_id
+            """,
+            {"run_id": run_id},
+        )
+        .mappings()
+        .first()
+    )
+    return dict(row) if row else None
+
+
+__all__.extend(
+    [
+        "get_controller_base_url",
+        "get_environment",
+        "get_user_id",
+        "get_resume_row",
+        "get_run_vm_endpoint",
+        "insert_run",
+        "is_owned",
+        "list_runs_with_workflow",
+        "merge_environment",
+        "notify_run_queued",
+        "set_vm_id",
+        "touch_run",
+        "update_status",
+    ]
+)

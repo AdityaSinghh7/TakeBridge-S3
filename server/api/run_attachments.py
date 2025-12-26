@@ -5,9 +5,8 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-from sqlalchemy import text
-
 from shared.db.engine import SessionLocal
+from shared.db import workflow_run_files
 from shared.storage import get_attachment_storage, AttachmentStorageError
 from server.api.controller_client import VMControllerClient
 
@@ -40,22 +39,7 @@ def stage_files_for_run(run_id: str, workspace: Dict[str, Any]) -> List[Dict[str
 
     db = SessionLocal()
     try:
-        rows = (
-            db.execute(
-                text(
-                    """
-                    SELECT id, workflow_file_id, storage_key, filename, content_type,
-                           size_bytes, status, vm_path
-                    FROM workflow_run_files
-                    WHERE run_id = :run_id AND (drive_path IS NULL AND source_type != 'drive')
-                    ORDER BY created_at ASC
-                    """
-                ),
-                {"run_id": run_id},
-            )
-            .mappings()
-            .all()
-        )
+        rows = workflow_run_files.list_non_drive_files_for_run(db, run_id=run_id)
         if not rows:
             return []
         logger.info("[attachments] staging %s files for run %s", len(rows), run_id)
@@ -91,39 +75,21 @@ def stage_files_for_run(run_id: str, workspace: Dict[str, Any]) -> List[Dict[str
                 _transfer_to_vm(controller, dest_path, download_url)
             except Exception as exc:
                 logger.exception("[attachments] failed transfer id=%s path=%s", row["id"], dest_path)
-                db.execute(
-                    text(
-                        """
-                        UPDATE workflow_run_files
-                        SET status = :status, error = :error, updated_at = :updated_at
-                        WHERE id = :id
-                        """
-                    ),
-                    {
-                        "status": "failed",
-                        "error": str(exc),
-                        "updated_at": now,
-                        "id": row["id"],
-                    },
+                workflow_run_files.mark_failed(
+                    db,
+                    run_file_id=row["id"],
+                    error=str(exc),
+                    updated_at=now,
                 )
                 db.commit()
                 logger.exception("Failed to stage attachment %s: %s", row["id"], exc)
                 raise AttachmentStageError(f"failed_to_stage_attachment:{row['filename']}") from exc
 
-            db.execute(
-                text(
-                    """
-                    UPDATE workflow_run_files
-                    SET status = :status, vm_path = :vm_path, error = NULL, updated_at = :updated_at
-                    WHERE id = :id
-                    """
-                ),
-                {
-                    "status": "ready",
-                    "vm_path": dest_path,
-                    "updated_at": now,
-                    "id": row["id"],
-                },
+            workflow_run_files.mark_ready_attachment(
+                db,
+                run_file_id=row["id"],
+                vm_path=dest_path,
+                updated_at=now,
             )
             db.commit()
 

@@ -54,7 +54,7 @@ from .run_artifacts import capture_context_baseline, export_context_artifacts, m
 from .run_drive import stage_drive_files_for_run, DriveStageError, detect_drive_changes
 from shared.supabase_client import get_service_supabase_client
 from shared.db.engine import SessionLocal, DB_URL
-from sqlalchemy import text
+from shared.db import vm_instances, workflow_runs
 
 # Persisted event whitelist (see docs/latest_frontend_connection_guide.md)
 PERSISTED_EVENTS = {
@@ -355,16 +355,7 @@ def _json_safe(val: Any) -> Any:
 def _touch_run_row(run_id: str) -> None:
     db = SessionLocal()
     try:
-        db.execute(
-            text(
-                """
-                UPDATE workflow_runs
-                SET last_heartbeat_at = NOW(), updated_at = NOW()
-                WHERE id = :run_id
-                """
-            ),
-            {"run_id": run_id},
-        )
+        workflow_runs.touch_run(db, run_id=run_id)
         db.commit()
     except Exception:
         db.rollback()
@@ -435,23 +426,12 @@ def _format_sse_event(event: str, data: Optional[Any] = None) -> bytes:
 def _update_run_status(run_id: str, status: str, summary: Optional[str] = None):
     db = SessionLocal()
     try:
-        db.execute(
-            text(
-                """
-                UPDATE workflow_runs
-                SET status = :status,
-                    summary = COALESCE(:summary, summary),
-                    ended_at = CASE WHEN :terminal THEN NOW() ELSE ended_at END,
-                    updated_at = NOW()
-                WHERE id = :run_id
-                """
-            ),
-            {
-                "status": status,
-                "summary": summary,
-                "run_id": run_id,
-                "terminal": status in {"success", "error", "attention", "cancelled"},
-            },
+        workflow_runs.update_status(
+            db,
+            run_id=run_id,
+            status=status,
+            summary=summary,
+            terminal_statuses={"success", "error", "attention", "cancelled"},
         )
         db.commit()
     except Exception:
@@ -512,33 +492,16 @@ def _provision_controller_session(user_id: str, run_id: Optional[str] = None) ->
         vm_id = workspace_info["id"]
         db = SessionLocal()
         try:
-            db.execute(
-                text(
-                    """
-                    INSERT INTO vm_instances (id, run_id, status, provider, spec, endpoint, created_at)
-                    VALUES (:id, :run_id, :status, :provider, :spec, :endpoint, NOW())
-                    """
-                ),
-                {
-                    "id": vm_id,
-                    "run_id": run_id,
-                    "status": "ready",
-                    "provider": current_provider(),
-                    "spec": json.dumps(provider_spec()),
-                    "endpoint": json.dumps(endpoint),
-                },
+            vm_instances.insert_vm_instance(
+                db,
+                vm_id=vm_id,
+                run_id=run_id,
+                status="ready",
+                provider=current_provider(),
+                spec=provider_spec(),
+                endpoint=endpoint,
             )
-            db.execute(
-                text(
-                    """
-                    UPDATE workflow_runs
-                    SET vm_id = :vm_id,
-                        updated_at = NOW()
-                    WHERE id = :run_id
-                    """
-                ),
-                {"vm_id": vm_id, "run_id": run_id},
-            )
+            workflow_runs.set_vm_id(db, run_id=run_id, vm_id=vm_id)
             db.commit()
         except Exception:
             db.rollback()
@@ -571,20 +534,11 @@ def _resolve_controller_session(
     if run_id:
         db = SessionLocal()
         try:
-            row = db.execute(
-                text("SELECT environment FROM workflow_runs WHERE id = :run_id"),
-                {"run_id": run_id},
-            ).mappings().first()
+            env = workflow_runs.get_environment(db, run_id=run_id)
         finally:
             db.close()
 
-        if row and row.get("environment"):
-            env_raw = row["environment"]
-            try:
-                env = json.loads(env_raw) if isinstance(env_raw, str) else dict(env_raw)
-            except Exception:
-                env = {}
-
+        if env:
             endpoint = env.get("endpoint") if isinstance(env, dict) else None
             if isinstance(endpoint, str):
                 try:
@@ -1148,22 +1102,14 @@ async def resume_run(
         log_token = RUN_LOG_ID.set(run_id)
 
         # 1. Fetch the run and validate ownership + status
-        row = db.execute(
-            text("""
-                SELECT id, user_id, status, agent_states, environment
-                FROM workflow_runs
-                WHERE id = :run_id
-            """),
-            {"run_id": run_id},
-        ).fetchone()
-
+        row = workflow_runs.get_resume_row(db, run_id=run_id)
         if row is None:
             raise HTTPException(status_code=404, detail="Run not found")
 
-        row_user_id = row[1]
-        row_status = row[2]
-        row_agent_states = row[3]
-        row_environment = row[4]
+        row_user_id = row.get("user_id")
+        row_status = row.get("status")
+        row_agent_states = row.get("agent_states")
+        row_environment = row.get("environment")
 
         # Check ownership
         if str(row_user_id) != str(user_id):
@@ -1448,14 +1394,11 @@ async def resume_run(
             logger.error("Failed to update agent_states with resume artifacts: %s", e)
 
         # 10. Update run status to 'queued' for continuation
-        db.execute(
-            text("""
-                UPDATE workflow_runs
-                SET status = 'queued',
-                    updated_at = :now
-                WHERE id = :run_id
-            """),
-            {"run_id": run_id, "now": now},
+        workflow_runs.update_status(
+            db,
+            run_id=run_id,
+            status="queued",
+            updated_at=now,
         )
         db.commit()
 

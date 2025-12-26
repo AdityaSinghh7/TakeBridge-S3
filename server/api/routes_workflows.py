@@ -3,42 +3,42 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import mimetypes
 import os
+import posixpath
+import re
 import time
 import uuid
-import httpx
-import httpcore
-import mimetypes
-import posixpath
 from pathlib import PurePosixPath, PureWindowsPath
-from typing import Any, Dict, Optional
-from datetime import datetime, timezone
-import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
+from uuid import UUID
 
+import httpcore
+import httpx
+from botocore.exceptions import ClientError
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import text, select
-from sqlalchemy.orm import Session
-from botocore.exceptions import ClientError
 from postgrest.exceptions import APIError
 from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
 
 from server.api.auth import CurrentUser, get_current_user
 from server.api.controller_client import VMControllerClient
 from server.api.drive_utils import build_drive_key, normalize_drive_path
-from server.api.run_drive import DRIVE_VM_BASE_PATH, DOWNLOAD_CHUNK_BYTES
-from shared.db.engine import SessionLocal, DB_URL
-from shared.supabase_client import get_supabase_client
-from uuid import UUID
-from shared.storage import get_attachment_storage, AttachmentStorageError
-from shared.db.models import (
-    WorkflowFile,
-    WorkflowRunFile,
-    WorkflowRunArtifact,
-    WorkflowRunDriveChange,
+from server.api.run_drive import DOWNLOAD_CHUNK_BYTES, DRIVE_VM_BASE_PATH
+from shared.db import (
+    profiles,
+    workflow_files,
+    workflow_run_artifacts,
+    workflow_run_drive_changes,
+    workflow_run_files,
+    workflow_runs,
 )
+from shared.db.engine import DB_URL, SessionLocal
+from shared.db.models import WorkflowFile
+from shared.storage import AttachmentStorageError, get_attachment_storage
+from shared.supabase_client import get_supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -94,34 +94,6 @@ def _serialize_workflow_file(data: Any) -> Dict[str, Any]:
     return payload
 
 
-def _serialize_run_file(data: Any) -> Dict[str, Any]:
-    if isinstance(data, WorkflowRunFile):
-        payload = {
-            "id": data.id,
-            "run_id": data.run_id,
-            "workflow_file_id": data.workflow_file_id,
-            "user_id": data.user_id,
-            "source_type": data.source_type,
-            "storage_key": data.storage_key,
-            "drive_path": data.drive_path,
-            "r2_key": data.r2_key,
-            "filename": data.filename,
-            "content_type": data.content_type,
-            "size_bytes": data.size_bytes,
-            "checksum": data.checksum,
-            "status": data.status,
-            "vm_path": data.vm_path,
-            "error": data.error,
-            "created_at": data.created_at,
-            "updated_at": data.updated_at,
-            "metadata_json": data.metadata_json,
-        }
-    else:
-        payload = dict(data)
-    payload["metadata"] = payload.pop("metadata_json", None) or {}
-    return payload
-
-
 def _get_supabase_workflow(client, workflow_id: str) -> Dict[str, Any]:
     try:
         res = (
@@ -146,23 +118,14 @@ def _load_ready_workflow_files(
     user_id: str,
     file_ids: Optional[List[str]] = None,
 ) -> List[WorkflowFile]:
-    stmt = (
-        select(WorkflowFile)
-        .where(
-            WorkflowFile.workflow_id == workflow_id,
-            WorkflowFile.user_id == user_id,
-            WorkflowFile.status == "ready",
-        )
-        .order_by(WorkflowFile.created_at.asc())
+    rows, missing = workflow_files.load_ready_for_workflow(
+        db,
+        workflow_id=workflow_id,
+        user_id=user_id,
+        file_ids=file_ids,
     )
-    if file_ids:
-        stmt = stmt.where(WorkflowFile.id.in_(file_ids))
-    rows = db.execute(stmt).scalars().all()
-    if file_ids:
-        found_ids = {wf.id for wf in rows}
-        missing = [fid for fid in file_ids if fid not in found_ids]
-        if missing:
-            raise HTTPException(status_code=400, detail="invalid_or_unready_file_ids")
+    if missing:
+        raise HTTPException(status_code=400, detail="invalid_or_unready_file_ids")
     return rows
 
 
@@ -202,27 +165,9 @@ def _execute_with_backoff(q, retries: int = 3, base_delay: float = 0.5, factor: 
 
 
 def _get_run_controller_base_url(db: Session, run_id: str, user_id: str) -> str:
-    env_raw = (
-        db.execute(
-            text(
-                """
-                SELECT environment FROM workflow_runs
-                WHERE id = :run_id AND user_id = :user_id
-                """
-            ),
-            {"run_id": run_id, "user_id": user_id},
-        )
-        .scalar_one_or_none()
-    )
-    if not env_raw:
+    env = workflow_runs.get_environment(db, run_id=run_id, user_id=user_id)
+    if env is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run_not_found")
-    if isinstance(env_raw, dict):
-        env = dict(env_raw)
-    else:
-        try:
-            env = json.loads(env_raw)
-        except Exception:
-            env = {}
     endpoint = env.get("endpoint") if isinstance(env, dict) else None
     if isinstance(endpoint, str):
         try:
@@ -234,7 +179,7 @@ def _get_run_controller_base_url(db: Session, run_id: str, user_id: str) -> str:
         controller_base_url = endpoint.get("controller_base_url") or endpoint.get("base_url")
     if not controller_base_url:
         raise HTTPException(status_code=400, detail="controller_base_url_missing")
-    return controller_base_url
+    return str(controller_base_url)
 
 
 @router.post("/workflows/{workflow_id}/run")
@@ -323,44 +268,20 @@ def enqueue_workflow_run(
         elif requested_file_ids:
             attachments = _load_ready_workflow_files(db, workflow_id, current_user.sub, requested_file_ids)
 
-        run_file_records: List[WorkflowRunFile] = []
-        for wf_file in attachments:
-            run_file_records.append(
-                WorkflowRunFile(
-                    id=str(uuid.uuid4()),
-                    run_id=run_id,
-                    workflow_file_id=wf_file.id,
-                    user_id=current_user.sub,
-                    source_type=wf_file.source_type or "upload",
-                    storage_key=wf_file.storage_key,
-                    filename=wf_file.filename,
-                    content_type=wf_file.content_type,
-                    size_bytes=wf_file.size_bytes,
-                    checksum=wf_file.checksum,
-                    status="pending",
-                    metadata_json=wf_file.metadata_json or {},
-                )
+        run_file_records = workflow_run_files.build_pending_for_workflow_files(
+            run_id=run_id,
+            user_id=current_user.sub,
+            workflow_files=attachments,
+        )
+        r2_key_by_path = {drive_path: build_drive_key(current_user.sub, drive_path) for drive_path in drive_paths}
+        run_file_records.extend(
+            workflow_run_files.build_pending_for_drive_paths(
+                run_id=run_id,
+                user_id=current_user.sub,
+                drive_paths=drive_paths,
+                r2_key_by_path=r2_key_by_path,
             )
-        for drive_path in drive_paths:
-            r2_key = build_drive_key(current_user.sub, drive_path)
-            run_file_records.append(
-                WorkflowRunFile(
-                    id=str(uuid.uuid4()),
-                    run_id=run_id,
-                    workflow_file_id=None,
-                    user_id=current_user.sub,
-                    source_type="drive",
-                    storage_key=r2_key,
-                    r2_key=r2_key,
-                    drive_path=drive_path,
-                    filename=posixpath.basename(drive_path) or "file",
-                    content_type=None,
-                    size_bytes=None,
-                    checksum=None,
-                    status="pending",
-                    metadata_json={},
-                )
-            )
+        )
 
         logger.info(
             "Enqueue attachments resolved run_id=%s workflow_id=%s files=%s",
@@ -398,19 +319,8 @@ def enqueue_workflow_run(
         )
 
         # Debit credits atomically
-        credit_row = db.execute(
-            text(
-                """
-                UPDATE profiles
-                SET credits = credits - :cost
-                WHERE id = :user_id AND credits >= :cost
-                RETURNING credits
-                """
-            ),
-            {"cost": RUN_CREDIT_COST, "user_id": user_id},
-        ).fetchone()
-
-        if not credit_row:
+        credits_remaining = profiles.debit_credits(db, user_id=user_id, cost=RUN_CREDIT_COST)
+        if credits_remaining is None:
             db.rollback()
             logger.warning(
                 "Enqueue rejected insufficient credits workflow_id=%s user_id=%s cost=%s",
@@ -424,38 +334,24 @@ def enqueue_workflow_run(
             "Enqueue debited credits run_id=%s user_id=%s credits_remaining=%s",
             run_id,
             user_id,
-            credit_row[0],
+            credits_remaining,
         )
 
         # Insert run row
-        db.execute(
-            text(
-                """
-                INSERT INTO workflow_runs (
-                    id, workflow_id, user_id, folder_id, status, trigger_source,
-                    metadata, environment, created_at, updated_at
-                )
-                VALUES (
-                    :id, :workflow_id, :user_id, :folder_id, 'queued', :trigger_source,
-                    :metadata, :environment, NOW(), NOW()
-                )
-                """
-            ),
-            {
-                "id": run_id,
-                "workflow_id": workflow_id,
-                "user_id": user_id,
-                "folder_id": wf_res.get("folder_id"),
-                "trigger_source": trigger_source,
-                "metadata": json.dumps(metadata),
-                "environment": json.dumps(environment_payload),
-            },
+        workflow_runs.insert_run(
+            db,
+            run_id=run_id,
+            workflow_id=workflow_id,
+            user_id=user_id,
+            folder_id=wf_res.get("folder_id"),
+            trigger_source=trigger_source,
+            metadata=metadata if isinstance(metadata, dict) else {},
+            environment=environment_payload if isinstance(environment_payload, dict) else {},
         )
         logger.info("Enqueue inserted workflow_runs row run_id=%s workflow_id=%s user_id=%s", run_id, workflow_id, user_id)
 
         if run_file_records:
-            for record in run_file_records:
-                db.add(record)
+            workflow_run_files.add_many(db, run_file_records)
 
         # Notify listeners (Postgres only) that a run was enqueued.
         if DB_URL.startswith("postgres"):
@@ -465,17 +361,7 @@ def enqueue_workflow_run(
                 run_id,
                 user_id,
             )
-            db.execute(
-                text(
-                    """
-                    SELECT pg_notify(
-                        'workflow_run_queued',
-                        json_build_object('run_id', :run_id, 'user_id', :user_id)::text
-                    )
-                    """
-                ),
-                {"run_id": run_id, "user_id": user_id},
-            )
+            workflow_runs.notify_run_queued(db, run_id=run_id, user_id=user_id)
         else:
             logger.info(
                 "Enqueue skipping worker notify (DB is not Postgres) run_id=%s db=%s",
@@ -490,7 +376,7 @@ def enqueue_workflow_run(
             run_id,
             workflow_id,
             user_id,
-            credit_row[0],
+            credits_remaining,
             elapsed_ms,
         )
 
@@ -503,7 +389,7 @@ def enqueue_workflow_run(
     finally:
         db.close()
 
-    return {"run_id": run_id, "status": "queued", "credits_remaining": credit_row[0]}
+    return {"run_id": run_id, "status": "queued", "credits_remaining": credits_remaining}
 
 
 @router.get("/workflows/{workflow_id}/files")
@@ -516,18 +402,7 @@ def list_workflow_files(
 
     db = SessionLocal()
     try:
-        rows = (
-            db.execute(
-                select(WorkflowFile)
-                .where(
-                    WorkflowFile.workflow_id == workflow_id,
-                    WorkflowFile.user_id == current_user.sub,
-                )
-                .order_by(WorkflowFile.created_at.asc())
-            )
-            .scalars()
-            .all()
-        )
+        rows = workflow_files.list_for_workflow(db, workflow_id=workflow_id, user_id=current_user.sub)
         return {"files": [_serialize_workflow_file(row) for row in rows]}
     finally:
         db.close()
@@ -553,23 +428,20 @@ def request_workflow_file_upload(
     storage_key = f"{current_user.sub}/{workflow_id}/{file_id}/{safe_name}"
     content_type = payload.content_type or DEFAULT_ATTACHMENT_CONTENT_TYPE
 
-    record = WorkflowFile(
-        id=file_id,
-        workflow_id=workflow_id,
-        user_id=current_user.sub,
-        source_type="upload",
-        storage_key=storage_key,
-        filename=safe_name,
-        content_type=content_type,
-        size_bytes=payload.size_bytes,
-        checksum=payload.checksum,
-        status="pending",
-        metadata_json=payload.metadata or {},
-    )
-
     db = SessionLocal()
     try:
-        db.add(record)
+        record = workflow_files.create_pending(
+            db,
+            file_id=file_id,
+            workflow_id=workflow_id,
+            user_id=current_user.sub,
+            storage_key=storage_key,
+            filename=safe_name,
+            content_type=content_type,
+            size_bytes=payload.size_bytes,
+            checksum=payload.checksum,
+            metadata=payload.metadata,
+        )
         db.commit()
         db.refresh(record)
     except Exception as exc:  # pragma: no cover - DB error guard
@@ -608,16 +480,11 @@ def finalize_workflow_file(
 
     db = SessionLocal()
     try:
-        record = (
-            db.execute(
-                select(WorkflowFile).where(
-                    WorkflowFile.id == file_id,
-                    WorkflowFile.workflow_id == workflow_id,
-                    WorkflowFile.user_id == current_user.sub,
-                )
-            )
-            .scalars()
-            .first()
+        record = workflow_files.get_for_user(
+            db,
+            workflow_id=workflow_id,
+            user_id=current_user.sub,
+            file_id=file_id,
         )
         if not record:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file_not_found")
@@ -630,17 +497,14 @@ def finalize_workflow_file(
                 raise HTTPException(status_code=400, detail="file_not_uploaded") from exc
             raise
 
-        record.size_bytes = payload.size_bytes
-        if payload.checksum:
-            record.checksum = payload.checksum
-        if payload.metadata is not None:
-            record.metadata_json = payload.metadata
-        if payload.content_type:
-            record.content_type = payload.content_type
-        record.status = "ready"
-        record.updated_at = datetime.now(timezone.utc)
-
-        db.add(record)
+        workflow_files.finalize(
+            db,
+            record,
+            size_bytes=payload.size_bytes,
+            checksum=payload.checksum,
+            metadata=payload.metadata,
+            content_type=payload.content_type,
+        )
         db.commit()
         db.refresh(record)
     except HTTPException:
@@ -666,16 +530,11 @@ def delete_workflow_file(
 
     db = SessionLocal()
     try:
-        record = (
-            db.execute(
-                select(WorkflowFile).where(
-                    WorkflowFile.id == file_id,
-                    WorkflowFile.workflow_id == workflow_id,
-                    WorkflowFile.user_id == current_user.sub,
-                )
-            )
-            .scalars()
-            .first()
+        record = workflow_files.get_for_user(
+            db,
+            workflow_id=workflow_id,
+            user_id=current_user.sub,
+            file_id=file_id,
         )
         if not record:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="file_not_found")
@@ -688,7 +547,7 @@ def delete_workflow_file(
         except Exception as exc:  # pragma: no cover - log but do not block deletion
             logger.warning("Failed to delete attachment object %s: %s", record.storage_key, exc)
 
-        db.delete(record)
+        workflow_files.delete(db, record)
         db.commit()
     finally:
         db.close()
@@ -768,36 +627,9 @@ def get_run_vm(
     """
     db = SessionLocal()
     try:
-        row = db.execute(
-            text(
-                """
-                SELECT wr.user_id, wr.vm_id, wr.environment, vi.endpoint
-                FROM workflow_runs wr
-                LEFT JOIN vm_instances vi ON vi.id = wr.vm_id
-                WHERE wr.id = :run_id
-                """
-            ),
-            {"run_id": run_id},
-        )
-        res = row.mappings().all()
-        match = next((dict(r) for r in res if str(r.get("user_id")) == current_user.sub), None)
-        if not match:
+        endpoint = workflow_runs.get_run_vm_endpoint(db, run_id=run_id, user_id=current_user.sub)
+        if endpoint is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run_not_found")
-
-        endpoint = match.get("endpoint")
-        env = match.get("environment")
-        if env and not endpoint:
-            try:
-                env_json = json.loads(env) if isinstance(env, str) else env
-                endpoint = env_json.get("endpoint")
-            except Exception:
-                endpoint = None
-
-        if isinstance(endpoint, str):
-            try:
-                endpoint = json.loads(endpoint)
-            except Exception:
-                endpoint = {}
 
         endpoint = endpoint or {}
 
@@ -841,27 +673,10 @@ def list_run_artifacts(
 ) -> Dict[str, Any]:
     db = SessionLocal()
     try:
-        run_row = db.execute(
-            text(
-                """
-                SELECT id FROM workflow_runs
-                WHERE id = :run_id AND user_id = :user_id
-                """
-            ),
-            {"run_id": run_id, "user_id": current_user.sub},
-        ).fetchone()
-        if not run_row:
+        if not workflow_runs.is_owned(db, run_id=run_id, user_id=current_user.sub):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run_not_found")
 
-        rows = (
-            db.execute(
-                select(WorkflowRunArtifact)
-                .where(WorkflowRunArtifact.run_id == run_id)
-                .order_by(WorkflowRunArtifact.created_at.asc())
-            )
-            .scalars()
-            .all()
-        )
+        rows = workflow_run_artifacts.list_for_run(db, run_id=run_id)
     finally:
         db.close()
 
@@ -898,29 +713,13 @@ def commit_drive_changes(
 ) -> List[Dict[str, Any]]:
     db = SessionLocal()
     try:
-        run_row = db.execute(
-            text(
-                """
-                SELECT id FROM workflow_runs
-                WHERE id = :run_id AND user_id = :user_id
-                """
-            ),
-            {"run_id": run_id, "user_id": current_user.sub},
-        ).fetchone()
-        if not run_row:
+        if not workflow_runs.is_owned(db, run_id=run_id, user_id=current_user.sub):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run_not_found")
 
-        rows = (
-            db.execute(
-                select(WorkflowRunDriveChange)
-                .where(
-                    WorkflowRunDriveChange.run_id == run_id,
-                    WorkflowRunDriveChange.user_id == current_user.sub,
-                )
-                .order_by(WorkflowRunDriveChange.created_at.asc())
-            )
-            .scalars()
-            .all()
+        rows = workflow_run_drive_changes.list_for_run_user(
+            db,
+            run_id=run_id,
+            user_id=current_user.sub,
         )
     finally:
         db.close()
@@ -965,19 +764,11 @@ def download_drive_file(
 
     db = SessionLocal()
     try:
-        row = (
-            db.execute(
-                text(
-                    """
-                    SELECT drive_path, vm_path, content_type
-                    FROM workflow_run_files
-                    WHERE run_id = :run_id AND user_id = :user_id AND drive_path = :drive_path
-                    """
-                ),
-                {"run_id": run_id, "user_id": current_user.sub, "drive_path": drive_path},
-            )
-            .mappings()
-            .first()
+        row = workflow_run_files.get_drive_file_row(
+            db,
+            run_id=run_id,
+            user_id=current_user.sub,
+            drive_path=drive_path,
         )
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="drive_file_not_found")
@@ -1057,43 +848,16 @@ def list_runs(
     """
     Fetch recent runs with optional status and folder filters.
     """
-    limit = max(1, min(limit, 200))
     db = SessionLocal()
     try:
-        query = """
-            SELECT wr.id,
-                   wr.workflow_id,
-                   wr.user_id,
-                   wr.folder_id,
-                   wr.status,
-                   wr.vm_id,
-                   wr.trigger_source,
-                   wr.metadata,
-                   wr.environment,
-                   wr.started_at,
-                   wr.ended_at,
-                   wr.created_at,
-                   wr.updated_at,
-                   wr.summary,
-                   w.name AS workflow_name,
-                   w.prompt AS workflow_prompt
-            FROM workflow_runs wr
-            LEFT JOIN workflows w ON w.id = wr.workflow_id
-            WHERE wr.user_id = :user_id
-        """
-        params: Dict[str, Any] = {"user_id": current_user.sub}
-        if status_filter:
-            query += " AND status = :status"
-            params["status"] = status_filter
-        if folder_id:
-            query += " AND folder_id = :folder_id"
-            params["folder_id"] = folder_id
-
-        query += " ORDER BY COALESCE(wr.started_at, wr.created_at) DESC LIMIT :limit"
-        params["limit"] = limit
-
-        rows = db.execute(text(query), params).mappings().all()
-        return {"runs": [dict(r) for r in rows]}
+        rows = workflow_runs.list_runs_with_workflow(
+            db,
+            user_id=current_user.sub,
+            status_filter=status_filter,
+            folder_id=folder_id,
+            limit=limit,
+        )
+        return {"runs": rows}
     finally:
         db.close()
 
