@@ -8,8 +8,8 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from shared.db.engine import SessionLocal
-from shared.db.models import Workspace, User
-from shared.db import crud
+from shared.db.models import Workspace
+from mcp_agent.registry import crud
 from vm_manager.config import settings
 from .vm_provider import (
     create_agent_instance_for_user,

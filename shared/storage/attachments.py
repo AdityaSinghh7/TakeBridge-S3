@@ -94,12 +94,15 @@ class _AttachmentStorage:
         prefix: str,
         delimiter: Optional[str] = None,
         max_keys: Optional[int] = None,
+        continuation_token: Optional[str] = None,
     ) -> Dict[str, Any]:
         params: Dict[str, Any] = {"Bucket": self.bucket, "Prefix": prefix}
         if delimiter:
             params["Delimiter"] = delimiter
         if max_keys:
             params["MaxKeys"] = max_keys
+        if continuation_token:
+            params["ContinuationToken"] = continuation_token
         return self._client.list_objects_v2(**params)
 
     def copy_object(self, source_key: str, destination_key: str) -> None:

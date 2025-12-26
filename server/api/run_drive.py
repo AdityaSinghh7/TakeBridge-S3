@@ -4,21 +4,19 @@ import hashlib
 import io
 import json
 import logging
+import mimetypes
 import os
-import posixpath
-import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Dict, List, Optional, Tuple
 
-import requests
-from sqlalchemy import text
-
 from shared.db.engine import SessionLocal
 from shared.db.models import WorkflowRunDriveChange
+from shared.db import workflow_run_drive_changes, workflow_run_files, workflow_runs
 from shared.storage import get_attachment_storage, AttachmentStorageError
 from server.api.controller_client import VMControllerClient
+from server.api.drive_utils import build_drive_key
 
 logger = logging.getLogger(__name__)
 
@@ -68,24 +66,6 @@ def _ensure_vm_dir(controller: VMControllerClient, dest_path: str, *, windows: b
     controller.execute(["mkdir", "-p", parent], setup=True)
 
 
-def _download_to_temp(url: str) -> Tuple[tempfile.SpooledTemporaryFile, int, str]:
-    logger.info("[drive] downloading from %s", url)
-    tmp = tempfile.SpooledTemporaryFile(max_size=64 * 1024 * 1024)
-    hasher = hashlib.sha256()
-    size = 0
-    with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as resp:
-        resp.raise_for_status()
-        for chunk in resp.iter_content(chunk_size=DOWNLOAD_CHUNK_BYTES):
-            if not chunk:
-                continue
-            hasher.update(chunk)
-            size += len(chunk)
-            tmp.write(chunk)
-    tmp.seek(0)
-    logger.info("[drive] download complete (%s bytes)", size)
-    return tmp, size, hasher.hexdigest()
-
-
 def _hash_vm_file(controller: VMControllerClient, path: str) -> Tuple[str, int]:
     hasher = hashlib.sha256()
     size = 0
@@ -98,6 +78,35 @@ def _hash_vm_file(controller: VMControllerClient, path: str) -> Tuple[str, int]:
     return hasher.hexdigest(), size
 
 
+def _list_drive_objects(storage: Any, user_id: str) -> List[Dict[str, Any]]:
+    prefix = build_drive_key(user_id, "")
+    items: List[Dict[str, Any]] = []
+    token: Optional[str] = None
+    while True:
+        resp = storage.list_objects(prefix=prefix, continuation_token=token)
+        for entry in resp.get("Contents") or []:
+            key = entry.get("Key")
+            if not key or not key.startswith(prefix):
+                continue
+            rel = key[len(prefix) :]
+            if not rel or rel.endswith("/"):
+                continue
+            items.append(
+                {
+                    "drive_path": rel,
+                    "r2_key": key,
+                    "size_bytes": entry.get("Size"),
+                    "etag": (entry.get("ETag") or "").strip('"') or None,
+                }
+            )
+        if not resp.get("IsTruncated"):
+            break
+        token = resp.get("NextContinuationToken")
+        if not token:
+            break
+    return items
+
+
 def stage_drive_files_for_run(run_id: str, workspace: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Download drive files for a run into its VM workspace."""
     controller_url = workspace.get("controller_base_url")
@@ -106,30 +115,37 @@ def stage_drive_files_for_run(run_id: str, workspace: Dict[str, Any]) -> List[Di
 
     db = SessionLocal()
     try:
-        rows = (
-            db.execute(
-                text(
-                    """
-                    SELECT id, user_id, drive_path, r2_key, storage_key, filename, content_type,
-                           size_bytes, checksum, status, vm_path
-                    FROM workflow_run_files
-                    WHERE run_id = :run_id AND (drive_path IS NOT NULL OR source_type = 'drive')
-                    ORDER BY created_at ASC
-                    """
-                ),
-                {"run_id": run_id},
-            )
-            .mappings()
-            .all()
-        )
-        if not rows:
-            return []
-        logger.info("[drive] staging %s files for run %s", len(rows), run_id)
-
         try:
             storage = get_attachment_storage()
         except AttachmentStorageError as exc:
             raise DriveStageError(str(exc)) from exc
+
+        rows = workflow_run_files.list_drive_files_for_run(db, run_id=run_id)
+        if not rows:
+            user_id = workflow_runs.get_user_id(db, run_id=run_id)
+            if not user_id:
+                return []
+            drive_items = _list_drive_objects(storage, user_id)
+            if not drive_items:
+                return []
+            logger.info(
+                "[drive] no drive paths requested; staging full drive for user %s (%s files)",
+                user_id,
+                len(drive_items),
+            )
+            run_file_records = workflow_run_files.build_pending_for_drive_items(
+                run_id=run_id,
+                user_id=user_id,
+                items=drive_items,
+            )
+            if run_file_records:
+                workflow_run_files.add_many(db, run_file_records)
+                db.commit()
+            rows = workflow_run_files.list_drive_files_for_run(db, run_id=run_id)
+            if not rows:
+                return []
+
+        logger.info("[drive] staging %s files for run %s", len(rows), run_id)
 
         controller = VMControllerClient(base_url=controller_url)
         controller.wait_for_health()
@@ -172,59 +188,35 @@ def stage_drive_files_for_run(run_id: str, workspace: Dict[str, Any]) -> List[Di
                     content_type = head.get("ContentType")
             except Exception:
                 pass
+            if not content_type:
+                content_type = mimetypes.guess_type(drive_path)[0]
 
-            tmp_file: Optional[tempfile.SpooledTemporaryFile] = None
             try:
-                tmp_file, size, checksum = _download_to_temp(download_url)
                 _ensure_vm_dir(controller, dest_path, windows=windows)
-                controller.upload_file(dest_path, tmp_file)
+                controller.download_file(download_url, dest_path, timeout=DOWNLOAD_TIMEOUT)
+                checksum, size = _hash_vm_file(controller, dest_path)
             except Exception as exc:
                 logger.exception("[drive] failed transfer id=%s path=%s", row.get("id"), dest_path)
-                db.execute(
-                    text(
-                        """
-                        UPDATE workflow_run_files
-                        SET status = :status, error = :error, updated_at = :updated_at
-                        WHERE id = :id
-                        """
-                    ),
-                    {
-                        "status": "failed",
-                        "error": str(exc),
-                        "updated_at": now,
-                        "id": row.get("id"),
-                    },
+                workflow_run_files.mark_failed(
+                    db,
+                    run_file_id=row.get("id") or "",
+                    error=str(exc),
+                    updated_at=now,
                 )
                 db.commit()
                 raise DriveStageError(f"failed_to_stage_drive_file:{drive_path}") from exc
-            finally:
-                if tmp_file is not None:
-                    try:
-                        tmp_file.close()
-                    except Exception:
-                        pass
 
-            db.execute(
-                text(
-                    """
-                    UPDATE workflow_run_files
-                    SET status = :status, vm_path = :vm_path, size_bytes = :size_bytes,
-                        checksum = :checksum, content_type = :content_type, error = NULL,
-                        updated_at = :updated_at, r2_key = :r2_key, drive_path = :drive_path
-                    WHERE id = :id
-                    """
-                ),
-                {
-                    "status": "ready",
-                    "vm_path": dest_path,
-                    "size_bytes": size,
-                    "checksum": checksum,
-                    "content_type": content_type,
-                    "updated_at": now,
-                    "r2_key": r2_key,
-                    "drive_path": drive_path,
-                    "id": row.get("id"),
-                },
+            workflow_run_files.mark_ready_drive(
+                db,
+                run_file_id=row.get("id") or "",
+                status="ready",
+                vm_path=dest_path,
+                size_bytes=size,
+                checksum=checksum,
+                content_type=content_type,
+                updated_at=now,
+                r2_key=r2_key,
+                drive_path=drive_path,
             )
             db.commit()
 
@@ -258,22 +250,7 @@ def detect_drive_changes(run_id: str, workspace: Dict[str, Any]) -> List[Dict[st
 
     db = SessionLocal()
     try:
-        rows = (
-            db.execute(
-                text(
-                    """
-                    SELECT id, user_id, drive_path, r2_key, storage_key, filename,
-                           checksum, vm_path, content_type
-                    FROM workflow_run_files
-                    WHERE run_id = :run_id AND (drive_path IS NOT NULL OR source_type = 'drive')
-                    ORDER BY created_at ASC
-                    """
-                ),
-                {"run_id": run_id},
-            )
-            .mappings()
-            .all()
-        )
+        rows = workflow_run_files.list_drive_files_for_changes(db, run_id=run_id)
         if not rows:
             return []
 
@@ -303,14 +280,10 @@ def detect_drive_changes(run_id: str, workspace: Dict[str, Any]) -> List[Dict[st
             if baseline_hash and baseline_hash == new_hash:
                 continue
 
-            db.execute(
-                text(
-                    """
-                    DELETE FROM workflow_run_drive_changes
-                    WHERE run_id = :run_id AND path = :path
-                    """
-                ),
-                {"run_id": run_id, "path": drive_path},
+            workflow_run_drive_changes.delete_for_run_path(
+                db,
+                run_id=run_id,
+                path=drive_path,
             )
             change = WorkflowRunDriveChange(
                 id=str(uuid.uuid4()),
@@ -327,7 +300,7 @@ def detect_drive_changes(run_id: str, workspace: Dict[str, Any]) -> List[Dict[st
                 created_at=now,
                 updated_at=now,
             )
-            db.add(change)
+            workflow_run_drive_changes.add(db, change)
             changes.append(
                 {
                     "path": drive_path,

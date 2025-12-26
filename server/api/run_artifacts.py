@@ -8,10 +8,9 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-from sqlalchemy import text
-
 from server.api.controller_client import VMControllerClient
 from shared.db.engine import SessionLocal
+from shared.db import workflow_run_artifacts, workflow_runs
 from shared.storage import get_attachment_storage
 from shared.db.models import WorkflowRunArtifact
 from .run_attachments import ATTACHMENT_VM_BASE_PATH
@@ -111,14 +110,10 @@ def export_context_artifacts(run_id: str, workspace: Dict[str, Any]) -> List[Dic
                 logger.warning("Failed to upload artifact %s: %s", entry["name"], exc)
                 continue
 
-            db.execute(
-                text(
-                    """
-                    DELETE FROM workflow_run_artifacts
-                    WHERE run_id = :run_id AND filename = :filename
-                    """
-                ),
-                {"run_id": run_id, "filename": entry["name"]},
+            workflow_run_artifacts.delete_for_run_filename(
+                db,
+                run_id=run_id,
+                filename=entry["name"],
             )
             artifact = WorkflowRunArtifact(
                 id=str(uuid.uuid4()),
@@ -130,7 +125,7 @@ def export_context_artifacts(run_id: str, workspace: Dict[str, Any]) -> List[Dic
                 source_path=entry["path"],
                 metadata_json={},
             )
-            db.add(artifact)
+            workflow_run_artifacts.add(db, artifact)
             exported.append(
                 {
                     "id": artifact.id,
@@ -152,18 +147,7 @@ def export_context_artifacts(run_id: str, workspace: Dict[str, Any]) -> List[Dic
 def _get_run_environment(run_id: str) -> Dict[str, Any]:
     db = SessionLocal()
     try:
-        row = db.execute(
-            text("SELECT environment FROM workflow_runs WHERE id = :run_id"),
-            {"run_id": run_id},
-        ).scalar_one_or_none()
-        if not row:
-            return {}
-        if isinstance(row, dict):
-            return row
-        try:
-            return json.loads(row)
-        except Exception:
-            return {}
+        return workflow_runs.get_environment(db, run_id=run_id) or {}
     finally:
         db.close()
 
@@ -171,32 +155,7 @@ def _get_run_environment(run_id: str) -> Dict[str, Any]:
 def merge_run_environment(run_id: str, patch: Dict[str, Any]) -> None:
     db = SessionLocal()
     try:
-        row = db.execute(
-            text("SELECT environment FROM workflow_runs WHERE id = :run_id"),
-            {"run_id": run_id},
-        ).scalar_one_or_none()
-        env: Dict[str, Any]
-        if not row:
-            env = {}
-        elif isinstance(row, dict):
-            env = dict(row)
-        else:
-            try:
-                env = json.loads(row) or {}
-            except Exception:
-                env = {}
-        env.update(patch)
-        db.execute(
-            text(
-                """
-                UPDATE workflow_runs
-                SET environment = :env,
-                    updated_at = NOW()
-                WHERE id = :run_id
-                """
-            ),
-            {"env": json.dumps(env), "run_id": run_id},
-        )
+        workflow_runs.merge_environment(db, run_id=run_id, patch=patch)
         db.commit()
     except Exception:
         db.rollback()

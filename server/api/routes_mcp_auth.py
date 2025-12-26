@@ -8,7 +8,7 @@ import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from sqlalchemy import select
 from shared.db.engine import session_scope
-from shared.db import crud
+from mcp_agent.registry import crud
 from mcp_agent.core.context import AgentContext
 from mcp_agent.registry.oauth import (
     OAuthManager,
@@ -243,7 +243,6 @@ def list_providers(request: Request, current_user: CurrentUser = Depends(get_cur
     # Batch fetch all provider contexts in a single database query
     context = AgentContext.create(user_id)
     with context.get_db() as db:
-        from mcp_agent.registry import crud
         provider_contexts = crud.get_active_contexts_for_all_providers(
             db, user_id, list(SUPPORTED_PROVIDERS)
         )
@@ -624,7 +623,7 @@ def debug_auth_configs(provider: str | None = None):
 @router.get("/_debug/db")
 def debug_db(request: Request):
     from shared.db.engine import session_scope
-    from shared.db.models import User, ConnectedAccount, MCPConnection
+    from mcp_agent.registry.db_models import ConnectedAccount, MCPConnection, User
     with session_scope() as db:
         users = db.query(User).count()
         cas = db.query(ConnectedAccount).count()

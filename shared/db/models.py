@@ -1,13 +1,12 @@
 from __future__ import annotations
-from sqlalchemy import (
-    Column, String, Text, Integer, BigInteger, ForeignKey,
-    DateTime, func, UniqueConstraint, JSON
-)
-from sqlalchemy.orm import declarative_base, relationship
+
 import os
 
+from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Integer, JSON, String, Text, func
+from sqlalchemy.orm import declarative_base, relationship
+
 Base = declarative_base()
-IS_PG = os.getenv("DB_URL","").startswith("postgres")
+IS_PG = os.getenv("DB_URL", "").startswith("postgres")
 
 # JSON column: JSONB on PG, JSON on SQLite
 if IS_PG:
@@ -15,49 +14,91 @@ if IS_PG:
 else:
     JSONType = JSON
 
-class User(Base):
-    __tablename__ = "users"
-    id = Column(String, primary_key=True)  # Historically "singleton" in dev; now per-user ids.
-    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
-    accounts = relationship("ConnectedAccount", back_populates="user", cascade="all,delete-orphan")
 
-class AuthConfig(Base):
-    __tablename__ = "auth_configs"
-    id = Column(String, primary_key=True)          # ac_...
-    provider = Column(String, nullable=False)      # "gmail"|"slack"
+class Profile(Base):
+    __tablename__ = "profiles"
+
+    id = Column(String, primary_key=True)
     name = Column(Text)
+    avatar_url = Column(Text)
+    credits = Column(Integer, nullable=False, server_default="0")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
-    accounts = relationship("ConnectedAccount", back_populates="auth_config")
 
-class ConnectedAccount(Base):
-    __tablename__ = "connected_accounts"
-    id = Column(String, primary_key=True)          # ca_...
-    user_id = Column(String, ForeignKey("users.id", ondelete="cascade"), nullable=False)
-    auth_config_id = Column(String, ForeignKey("auth_configs.id"), nullable=False)
-    provider = Column(String, nullable=False)
-    status = Column(String, nullable=False)        # ACTIVE|INITIATED|...
-    provider_uid = Column(String)                  # email or slack team id
+class Folder(Base):
+    __tablename__ = "folders"
+
+    id = Column(String, primary_key=True)
+    user_id = Column(String, ForeignKey("profiles.id", ondelete="cascade"), nullable=False)
+    name = Column(Text, nullable=False)
+    position = Column(Integer)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class Workflow(Base):
+    __tablename__ = "workflows"
+
+    id = Column(String, primary_key=True)
+    user_id = Column(String, ForeignKey("profiles.id", ondelete="cascade"), nullable=False)
+    folder_id = Column(String, ForeignKey("folders.id", ondelete="set null"))
+    name = Column(Text, nullable=False)
+    prompt = Column(Text)
+    description = Column(Text)
+    status = Column(String, nullable=False, server_default="draft")
+    definition_json = Column(JSONType)
+    metadata = Column(JSONType, nullable=False, server_default="{}")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
-    user = relationship("User", back_populates="accounts")
-    auth_config = relationship("AuthConfig", back_populates="accounts")
-    mcp_connections = relationship("MCPConnection", back_populates="connected_account", cascade="all,delete-orphan")
 
-    __table_args__ = (
-        UniqueConstraint("user_id", "auth_config_id", name="uq_user_authconfig"),
-    )
+class WorkflowRun(Base):
+    __tablename__ = "workflow_runs"
 
-class MCPConnection(Base):
-    __tablename__ = "mcp_connections"
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    connected_account_id = Column(String, ForeignKey("connected_accounts.id", ondelete="cascade"), nullable=False)
-    mcp_url = Column(Text)
-    headers_json = Column(JSONType, server_default="{}", nullable=False)
-    last_synced_at = Column(DateTime(timezone=True))
-    last_error = Column(Text)
+    id = Column(String, primary_key=True)
+    workflow_id = Column(String, ForeignKey("workflows.id", ondelete="cascade"), nullable=False)
+    user_id = Column(String, ForeignKey("profiles.id", ondelete="cascade"), nullable=False)
+    folder_id = Column(String)
+    status = Column(String, nullable=False, server_default="queued")
+    vm_id = Column(String)
+    claimed_by = Column(String)
+    summary = Column(Text)
+    trigger_source = Column(String)
+    metadata = Column(JSONType, nullable=False, server_default="{}")
+    environment = Column(JSONType, nullable=False, server_default="{}")
+    agent_states = Column(JSONType, nullable=False, server_default="{}")
+    agent_states_updated_at = Column(DateTime(timezone=True))
+    started_at = Column(DateTime(timezone=True))
+    ended_at = Column(DateTime(timezone=True))
+    last_heartbeat_at = Column(DateTime(timezone=True))
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
-    connected_account = relationship("ConnectedAccount", back_populates="mcp_connections")
+
+class RunEvent(Base):
+    __tablename__ = "run_events"
+
+    id = Column(String, primary_key=True)
+    run_id = Column(String, ForeignKey("workflow_runs.id", ondelete="cascade"), nullable=False)
+    ts = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    kind = Column(String, nullable=False)
+    message = Column(Text, nullable=False)
+    payload = Column(JSONType, nullable=False, server_default="{}")
+    step_id = Column(String)
+    actor = Column(String)
+
+
+class VMInstance(Base):
+    __tablename__ = "vm_instances"
+
+    id = Column(String, primary_key=True)
+    run_id = Column(String, ForeignKey("workflow_runs.id", ondelete="cascade"), nullable=False)
+    status = Column(String, nullable=False)
+    provider = Column(Text)
+    spec = Column(JSONType)
+    endpoint = Column(JSONType)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    terminated_at = Column(DateTime(timezone=True))
+    stopped_at = Column(DateTime(timezone=True))
 
 
 class Workspace(Base):
