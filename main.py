@@ -643,6 +643,21 @@ DEFAULT_APPS_BY_PLATFORM: Dict[str, List[Dict[str, Any]]] = {
             "match": ["libreoffice calc"],
         },
         {
+            "id": "libreoffice-impress",
+            "label": "LibreOffice Impress",
+            "match": ["libreoffice impress"],
+        },
+        {
+            "id": "libreoffice-base",
+            "label": "LibreOffice Base",
+            "match": ["libreoffice base"],
+        },
+        {
+            "id": "libreoffice-math",
+            "label": "LibreOffice Math",
+            "match": ["libreoffice math"],
+        },
+        {
             "id": "notepad",
             "label": "Notepad",
             "match": ["notepad"],
