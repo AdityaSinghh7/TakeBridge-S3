@@ -23,6 +23,7 @@ from computer_use_agent.utils.common_utils import (
 from computer_use_agent.utils.formatters import (
     SINGLE_ACTION_FORMATTER,
     CODE_VALID_FORMATTER,
+    CALL_CODE_AGENT_SUBTASK_REQUIRED_FORMATTER,
 )
 from shared.streaming import emit_event
 from shared.hierarchical_logger import (
@@ -541,7 +542,7 @@ class Worker(BaseModule):
         )
 
         self.grounding_agent.assign_screenshot(obs)
-        self.grounding_agent.set_task_instruction(instruction)
+        self.grounding_agent.set_task_context(instruction)
         previous_behavior = obs.get("previous_behavior")
 
         if self.turn_count > 0:
@@ -802,6 +803,7 @@ class Worker(BaseModule):
         # Generate the plan and next action
         format_checkers = [
             SINGLE_ACTION_FORMATTER,
+            CALL_CODE_AGENT_SUBTASK_REQUIRED_FORMATTER,
             partial(CODE_VALID_FORMATTER, self.grounding_agent, obs),
         ]
         plan = call_llm_formatted(
