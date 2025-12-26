@@ -46,7 +46,7 @@ class Workflow(Base):
     description = Column(Text)
     status = Column(String, nullable=False, server_default="draft")
     definition_json = Column(JSONType)
-    metadata = Column(JSONType, nullable=False, server_default="{}")
+    metadata_json = Column("metadata", JSONType, nullable=False, server_default="{}")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -63,7 +63,7 @@ class WorkflowRun(Base):
     claimed_by = Column(String)
     summary = Column(Text)
     trigger_source = Column(String)
-    metadata = Column(JSONType, nullable=False, server_default="{}")
+    metadata_json = Column("metadata", JSONType, nullable=False, server_default="{}")
     environment = Column(JSONType, nullable=False, server_default="{}")
     agent_states = Column(JSONType, nullable=False, server_default="{}")
     agent_states_updated_at = Column(DateTime(timezone=True))
