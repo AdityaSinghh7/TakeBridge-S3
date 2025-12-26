@@ -588,7 +588,6 @@ def _attach_workspace_files(workspace: Dict[str, Any], run_id: Optional[str]) ->
         updated["drive"] = drive_files
     if attachments:
         updated["attachments"] = attachments
-    capture_context_baseline(run_id, updated)
     return updated
 
 def _create_streaming_response(
@@ -778,10 +777,6 @@ def _create_streaming_response(
             exported_artifacts: List[Dict[str, Any]] = []
             drive_changes: List[Dict[str, Any]] = []
             if run_id_local and workspace:
-                try:
-                    exported_artifacts = export_context_artifacts(run_id_local, workspace)
-                except Exception as exc:
-                    logger.warning("Failed to export artifacts for run %s: %s", run_id_local, exc)
                 try:
                     drive_changes = detect_drive_changes(run_id_local, workspace)
                 except Exception as exc:

@@ -295,21 +295,16 @@ class VMControllerClient:
 
     def execute(self, command: Command, *, shell: bool = False, setup: bool = False, timeout: Optional[float] = None) -> JsonDict:
         """
-        Execute a command on the VM (`/execute` or `/setup/execute`).
+        Execute a command on the VM (`/execute`).
+
+        Note: Some controller deployments do not expose `/setup/execute`; `setup`
+        is accepted for compatibility but is not used for routing.
         """
-        path = "/setup/execute" if setup else "/execute"
+        path = "/execute"
         try:
-            logger.info("controller.execute path=%s shell=%s command=%s", path, shell, command)
+            logger.info("controller.execute path=%s shell=%s setup=%s command=%s", path, shell, setup, command)
         except Exception:
-            logger.debug("controller.execute path=%s shell=%s (command log failed)", path, shell)
-        if setup:
-            return self._request_with_fallback(
-                "POST",
-                path,
-                fallback_path="/execute",
-                json={"command": command, "shell": shell},
-                timeout=timeout,
-            ).json()
+            logger.debug("controller.execute path=%s shell=%s setup=%s (command log failed)", path, shell, setup)
         return self._request(
             "POST",
             path,
