@@ -113,14 +113,18 @@ class _FakeResponse:
 
 
 class _FakeController:
-    def __init__(self, content_map):
+    def __init__(self, content_map, listing_map):
         self._content_map = content_map
+        self._listing_map = listing_map
 
     def wait_for_health(self):
         return None
 
     def stream_file(self, path: str, timeout: int | None = None):
         return _FakeResponse(self._content_map[path])
+
+    def list_directory(self, path: str, timeout: int | None = None):
+        return {"entries": self._listing_map.get(path, [])}
 
 
 class _FakeResult:
@@ -191,18 +195,31 @@ def test_detect_drive_changes(monkeypatch):
     fake_session = _FakeSession(rows)
     monkeypatch.setattr(run_drive, "SessionLocal", lambda: fake_session)
 
+    base_path = run_drive.DRIVE_VM_BASE_PATH
+    docs_path = posixpath.join(base_path, "Documents")
     content_map = {
-        posixpath.join(run_drive.DRIVE_VM_BASE_PATH, "Documents/keep.txt"): b"same",
-        posixpath.join(run_drive.DRIVE_VM_BASE_PATH, "Documents/change.txt"): b"new",
+        posixpath.join(base_path, "Documents/keep.txt"): b"same",
+        posixpath.join(base_path, "Documents/change.txt"): b"new",
+        posixpath.join(base_path, "Documents/new.txt"): b"added",
+    }
+    listing_map = {
+        base_path: [{"path": docs_path, "is_dir": True}],
+        docs_path: [
+            {"path": posixpath.join(docs_path, "keep.txt"), "is_dir": False},
+            {"path": posixpath.join(docs_path, "change.txt"), "is_dir": False},
+            {"path": posixpath.join(docs_path, "new.txt"), "is_dir": False},
+        ],
     }
     monkeypatch.setattr(
         run_drive,
         "VMControllerClient",
-        lambda base_url=None: _FakeController(content_map),
+        lambda base_url=None: _FakeController(content_map, listing_map),
     )
 
     changes = run_drive.detect_drive_changes("run-123", {"controller_base_url": "http://vm"})
-    assert len(changes) == 1
-    assert changes[0]["path"] == "Documents/change.txt"
+    assert len(changes) == 2
+    paths = {change["path"] for change in changes}
+    assert "Documents/change.txt" in paths
+    assert "Documents/new.txt" in paths
     assert fake_session.committed is True
-    assert len(fake_session.added) == 1
+    assert len(fake_session.added) == 3

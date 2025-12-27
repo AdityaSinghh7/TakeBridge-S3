@@ -6,17 +6,20 @@ import json
 import logging
 import mimetypes
 import os
+import posixpath
 import uuid
 from datetime import datetime, timezone
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Dict, List, Optional, Tuple
 
+from sqlalchemy import text
+
 from shared.db.engine import SessionLocal
-from shared.db.models import WorkflowRunDriveChange
+from shared.db.models import WorkflowRunDriveChange, WorkflowRunFile
 from shared.db import workflow_run_drive_changes, workflow_run_files, workflow_runs
 from shared.storage import get_attachment_storage, AttachmentStorageError
 from server.api.controller_client import VMControllerClient
-from server.api.drive_utils import build_drive_key
+from server.api.drive_utils import build_drive_key, normalize_drive_path
 
 logger = logging.getLogger(__name__)
 
@@ -158,33 +161,42 @@ def _hash_vm_file(controller: VMControllerClient, path: str) -> Tuple[str, int]:
     return hasher.hexdigest(), size
 
 
-def _list_drive_objects(storage: Any, user_id: str) -> List[Dict[str, Any]]:
-    prefix = build_drive_key(user_id, "")
-    items: List[Dict[str, Any]] = []
-    token: Optional[str] = None
-    while True:
-        resp = storage.list_objects(prefix=prefix, continuation_token=token)
-        for entry in resp.get("Contents") or []:
-            key = entry.get("Key")
-            if not key or not key.startswith(prefix):
+def _list_vm_files(controller: VMControllerClient, base_path: str) -> List[str]:
+    pending = [base_path]
+    files: List[str] = []
+    while pending:
+        current = pending.pop()
+        try:
+            resp = controller.list_directory(current)
+        except Exception as exc:
+            logger.warning("[drive] list_directory failed for %s: %s", current, exc)
+            continue
+        entries = resp.get("entries") or []
+        for entry in entries:
+            path = entry.get("path")
+            if not path:
                 continue
-            rel = key[len(prefix) :]
-            if not rel or rel.endswith("/"):
-                continue
-            items.append(
-                {
-                    "drive_path": rel,
-                    "r2_key": key,
-                    "size_bytes": entry.get("Size"),
-                    "etag": (entry.get("ETag") or "").strip('"') or None,
-                }
-            )
-        if not resp.get("IsTruncated"):
-            break
-        token = resp.get("NextContinuationToken")
-        if not token:
-            break
-    return items
+            if entry.get("is_dir"):
+                pending.append(path)
+            else:
+                files.append(path)
+    return files
+
+
+def _drive_path_from_vm_path(vm_path: str, *, base_path: str, windows: bool) -> Optional[str]:
+    base = PureWindowsPath(base_path) if windows else PurePosixPath(base_path)
+    path = PureWindowsPath(vm_path) if windows else PurePosixPath(vm_path)
+    try:
+        relative = path.relative_to(base)
+    except ValueError:
+        return None
+    if not relative.parts:
+        return None
+    rel_path = "/".join(relative.parts)
+    try:
+        return normalize_drive_path(rel_path)
+    except ValueError:
+        return None
 
 
 def stage_drive_files_for_run(run_id: str, workspace: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -331,14 +343,17 @@ def detect_drive_changes(run_id: str, workspace: Dict[str, Any]) -> List[Dict[st
     db = SessionLocal()
     try:
         rows = workflow_run_files.list_drive_files_for_changes(db, run_id=run_id)
-        if not rows:
-            return []
 
         controller = VMControllerClient(base_url=controller_url)
         controller.wait_for_health()
         windows = _is_windows_path(DRIVE_VM_BASE_PATH)
         now = datetime.now(timezone.utc)
         changes: List[Dict[str, Any]] = []
+        known_paths = {
+            (row.get("drive_path") or row.get("filename"))
+            for row in rows
+            if row.get("drive_path") or row.get("filename")
+        }
 
         for row in rows:
             drive_path = row.get("drive_path") or row.get("filename")
@@ -389,8 +404,86 @@ def detect_drive_changes(run_id: str, workspace: Dict[str, Any]) -> List[Dict[st
                     "new_hash": new_hash,
                     "size": size,
                     "content_type": row.get("content_type"),
+                    "change_type": "modified" if baseline_hash else "new",
                 }
             )
+
+        user_id = None
+        if rows:
+            user_id = rows[0].get("user_id")
+        if not user_id:
+            user_id = workflow_runs.get_user_id(db, run_id=run_id)
+
+        if user_id:
+            vm_files = _list_vm_files(controller, DRIVE_VM_BASE_PATH)
+            for vm_path in vm_files:
+                drive_path = _drive_path_from_vm_path(
+                    vm_path,
+                    base_path=DRIVE_VM_BASE_PATH,
+                    windows=windows,
+                )
+                if not drive_path or drive_path in known_paths:
+                    continue
+
+                r2_key = build_drive_key(user_id, drive_path)
+                content_type = mimetypes.guess_type(drive_path)[0]
+                try:
+                    new_hash, size = _hash_vm_file(controller, vm_path)
+                except Exception as exc:
+                    logger.warning("[drive] failed to hash new file %s: %s", vm_path, exc)
+                    continue
+
+                workflow_run_drive_changes.delete_for_run_path(
+                    db,
+                    run_id=run_id,
+                    path=drive_path,
+                )
+                change = WorkflowRunDriveChange(
+                    id=str(uuid.uuid4()),
+                    run_id=run_id,
+                    user_id=user_id,
+                    path=drive_path,
+                    r2_key=r2_key,
+                    baseline_hash=None,
+                    new_hash=new_hash,
+                    size_bytes=size,
+                    content_type=content_type,
+                    status="pending",
+                    committed_at=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+                workflow_run_drive_changes.add(db, change)
+                changes.append(
+                    {
+                        "path": drive_path,
+                        "r2_key": r2_key,
+                        "baseline_hash": None,
+                        "new_hash": new_hash,
+                        "size": size,
+                        "content_type": content_type,
+                        "change_type": "new",
+                    }
+                )
+
+                new_run_file = WorkflowRunFile(
+                    id=str(uuid.uuid4()),
+                    run_id=run_id,
+                    workflow_file_id=None,
+                    user_id=user_id,
+                    source_type="drive",
+                    storage_key=r2_key,
+                    r2_key=r2_key,
+                    drive_path=drive_path,
+                    filename=posixpath.basename(drive_path) or "file",
+                    content_type=content_type,
+                    size_bytes=size,
+                    checksum=new_hash,
+                    status="ready",
+                    vm_path=vm_path,
+                    metadata_json={},
+                )
+                db.add(new_run_file)
 
         db.commit()
         return changes

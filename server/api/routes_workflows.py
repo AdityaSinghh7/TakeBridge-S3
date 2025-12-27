@@ -737,6 +737,10 @@ def commit_drive_changes(
     for row in rows:
         content_type = row.content_type or mimetypes.guess_type(row.path or "")[0] or DEFAULT_ATTACHMENT_CONTENT_TYPE
         presigned_put_url = storage.generate_presigned_put(row.r2_key, content_type=content_type)
+        change_type = "new" if not row.baseline_hash else "modified"
+        backup_presigned_get_url = None
+        if change_type == "modified":
+            backup_presigned_get_url = storage.generate_presigned_get(row.r2_key)
         results.append(
             {
                 "path": row.path,
@@ -746,6 +750,8 @@ def commit_drive_changes(
                 "size": row.size_bytes,
                 "source_baseline_hash": row.baseline_hash,
                 "new_hash": row.new_hash,
+                "change_type": change_type,
+                "backup_presigned_get_url": backup_presigned_get_url,
             }
         )
     return results
