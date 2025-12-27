@@ -12,6 +12,7 @@ import time
 import traceback
 import uuid
 import urllib.request
+import requests
 from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -1943,6 +1944,46 @@ def download_file_to_path():
             except Exception:
                 pass
         return jsonify({"error": f"Failed to download file: {exc}"}), 500
+
+
+
+
+@app.post("/upload_to_url")
+def upload_to_url():
+    data = request.get_json(force=True, silent=True) or {}
+    file_path = data.get("file_path") or data.get("path")
+    upload_url = data.get("upload_url") or data.get("url")
+    content_type = data.get("content_type") or "application/octet-stream"
+    if not file_path or not upload_url:
+        return jsonify({"error": "file_path and upload_url are required"}), 400
+    resolved_path = os.path.expandvars(os.path.expanduser(str(file_path)))
+    if not os.path.isfile(resolved_path):
+        return jsonify({"error": "file_not_found"}), 404
+
+    timeout_val = data.get("timeout", data.get("timeout_seconds", 300))
+    try:
+        timeout_s = int(timeout_val) if timeout_val is not None else 300
+    except Exception:
+        timeout_s = 300
+    if timeout_s <= 0:
+        timeout_s = 300
+
+    try:
+        with open(resolved_path, "rb") as handle:
+            resp = requests.put(
+                upload_url,
+                data=handle,
+                headers={"Content-Type": content_type},
+                timeout=timeout_s,
+            )
+        if not resp.ok:
+            return jsonify({"error": f"upload_failed_{resp.status_code}"}), 502
+        size_bytes = os.path.getsize(resolved_path)
+        logger.info("File uploaded to URL: %s (%s bytes)", resolved_path, size_bytes)
+        return jsonify({"status": "ok", "bytes": size_bytes})
+    except Exception as exc:
+        logger.error("Error uploading file %s: %s", resolved_path, exc)
+        return jsonify({"error": f"upload_failed: {exc}"}), 500
 
 
 @app.get("/platform")

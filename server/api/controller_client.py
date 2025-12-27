@@ -602,6 +602,34 @@ class VMControllerClient:
             stream=True,
         )
 
+    def upload_file_to_url(
+        self,
+        path: Union[str, Path],
+        upload_url: str,
+        *,
+        content_type: Optional[str] = None,
+        timeout: Optional[float] = None,
+    ) -> JsonDict:
+        """
+        Upload a file from the VM to a presigned URL (`/upload_to_url`).
+        """
+        payload: JsonDict = {
+            "file_path": str(path),
+            "upload_url": upload_url,
+        }
+        if content_type:
+            payload["content_type"] = content_type
+        response = self._request(
+            "POST",
+            "/upload_to_url",
+            json=payload,
+            timeout=timeout,
+        )
+        try:
+            return response.json()
+        except Exception:
+            return {"status": response.text}
+
     def upload_file(
         self,
         path: Union[str, Path],

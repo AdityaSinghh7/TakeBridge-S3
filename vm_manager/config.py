@@ -61,6 +61,7 @@ class Settings(BaseSettings):
     GUAC_ADMIN_USER: str = ""
     GUAC_ADMIN_PASS: str = ""
     GUAC_CONNECTION_ID: str = ""
+    GUAC_AUTH_CACHE_TTL_SECONDS: int = 3600
 
     @field_validator("SUPABASE_JWT_SECRET")
     @classmethod

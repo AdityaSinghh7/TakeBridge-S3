@@ -51,7 +51,12 @@ from shared.run_context import RUN_LOG_ID
 from .auth import get_current_user, CurrentUser
 from .run_attachments import stage_files_for_run as stage_attachment_files_for_run, AttachmentStageError
 from .run_artifacts import capture_context_baseline, export_context_artifacts, merge_run_environment
-from .run_drive import stage_drive_files_for_run, DriveStageError, detect_drive_changes
+from .run_drive import (
+    stage_drive_files_for_run,
+    DriveStageError,
+    detect_drive_changes,
+    commit_drive_changes_for_run,
+)
 from shared.supabase_client import get_service_supabase_client
 from shared.db.engine import SessionLocal, DB_URL
 from shared.db import vm_instances, workflow_runs
@@ -777,6 +782,7 @@ def _create_streaming_response(
         finally:
             exported_artifacts: List[Dict[str, Any]] = []
             drive_changes: List[Dict[str, Any]] = []
+            committed_drive_changes: List[Dict[str, Any]] = []
             if run_id_local and workspace:
                 try:
                     exported_artifacts = export_context_artifacts(run_id_local, workspace)
@@ -788,6 +794,10 @@ def _create_streaming_response(
                     logger.warning("Failed to detect drive changes for run %s: %s", run_id_local, exc)
                 if drive_changes:
                     logger.info("[drive] detected %s changed files for run %s", len(drive_changes), run_id_local)
+                try:
+                    committed_drive_changes = commit_drive_changes_for_run(run_id_local, workspace)
+                except Exception as exc:
+                    logger.warning("Failed to commit drive changes for run %s: %s", run_id_local, exc)
             if run_id and run_id_local and final_status and final_status != "attention":
                 try:
                     from vm_manager.vm_wrapper import terminate_run_instance
@@ -820,6 +830,11 @@ def _create_streaming_response(
                 _publish(
                     "run.artifacts.created",
                     {"run_id": run_id_local, "artifacts": exported_artifacts},
+                )
+            if committed_drive_changes:
+                _publish(
+                    "run.drive.committed",
+                    {"run_id": run_id_local, "changes": committed_drive_changes},
                 )
             await queue.put(None)
 

@@ -57,3 +57,13 @@ def build_drive_prefix(user_id: str, prefix: str) -> str:
         return build_drive_key(user_id, "")
     base = build_drive_key(user_id, "")
     return f"{base}{prefix}"
+
+
+def build_drive_backup_key(user_id: str, run_id: str, drive_path: str) -> str:
+    if not user_id:
+        raise ValueError("drive_user_id_required")
+    if not run_id:
+        raise ValueError("drive_run_id_required")
+    if not drive_path:
+        raise ValueError("drive_path_required")
+    return posixpath.join(str(user_id), "drive_backups", str(run_id), drive_path)
