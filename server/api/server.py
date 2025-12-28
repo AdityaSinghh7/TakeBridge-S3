@@ -50,7 +50,6 @@ from orchestrator_agent.data_types import OrchestratorRequest
 from shared.run_context import RUN_LOG_ID
 from .auth import get_current_user, CurrentUser
 from .run_attachments import stage_files_for_run as stage_attachment_files_for_run, AttachmentStageError
-from .run_artifacts import capture_context_baseline, export_context_artifacts, merge_run_environment
 from .run_drive import (
     stage_drive_files_for_run,
     DriveStageError,
@@ -108,7 +107,6 @@ PERSISTED_EVENTS = {
     "human_attention.resumed",
     
     "workspace.attachments",
-    "run.artifacts.created",
 }
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -445,6 +443,18 @@ def _update_run_status(run_id: str, status: str, summary: Optional[str] = None):
         db.close()
 
 
+def _merge_run_environment(run_id: str, patch: Dict[str, Any]) -> None:
+    db = SessionLocal()
+    try:
+        workflow_runs.merge_environment(db, run_id=run_id, patch=patch)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
 def _normalize_controller_payload(controller_data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     base_url = controller_data.get("base_url")
     if not base_url:
@@ -513,7 +523,7 @@ def _provision_controller_session(user_id: str, run_id: Optional[str] = None) ->
             raise
         finally:
             db.close()
-        merge_run_environment(run_id, {"endpoint": endpoint})
+        _merge_run_environment(run_id, {"endpoint": endpoint})
 
     return controller_payload, workspace_info
 
@@ -593,7 +603,6 @@ def _attach_workspace_files(workspace: Dict[str, Any], run_id: Optional[str]) ->
         updated["drive"] = drive_files
     if attachments:
         updated["attachments"] = attachments
-    capture_context_baseline(run_id, updated)
     return updated
 
 def _create_streaming_response(
@@ -780,14 +789,9 @@ def _create_streaming_response(
                     )
                     _update_run_status(run_id, result_dict.get("status") or "success", summary=summary or None)
         finally:
-            exported_artifacts: List[Dict[str, Any]] = []
             drive_changes: List[Dict[str, Any]] = []
             committed_drive_changes: List[Dict[str, Any]] = []
             if run_id_local and workspace:
-                try:
-                    exported_artifacts = export_context_artifacts(run_id_local, workspace)
-                except Exception as exc:
-                    logger.warning("Failed to export artifacts for run %s: %s", run_id_local, exc)
                 try:
                     drive_changes = detect_drive_changes(run_id_local, workspace)
                 except Exception as exc:
@@ -826,11 +830,6 @@ def _create_streaming_response(
                     )
                 except Exception:
                     logger.info("Run log handlers detached for run_id=%s", run_id_local)
-            if exported_artifacts:
-                _publish(
-                    "run.artifacts.created",
-                    {"run_id": run_id_local, "artifacts": exported_artifacts},
-                )
             if committed_drive_changes:
                 _publish(
                     "run.drive.committed",

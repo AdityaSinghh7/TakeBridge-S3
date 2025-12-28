@@ -30,7 +30,6 @@ from server.api.run_drive import DOWNLOAD_CHUNK_BYTES, DRIVE_VM_BASE_PATH
 from shared.db import (
     profiles,
     workflow_files,
-    workflow_run_artifacts,
     workflow_run_drive_changes,
     workflow_run_files,
     workflow_runs,
@@ -664,46 +663,6 @@ def get_run_vm(
         return {"vm": vm_info}
     finally:
         db.close()
-
-
-@router.get("/runs/{run_id}/artifacts")
-def list_run_artifacts(
-    run_id: str,
-    current_user: CurrentUser = Depends(get_current_user),
-) -> Dict[str, Any]:
-    db = SessionLocal()
-    try:
-        if not workflow_runs.is_owned(db, run_id=run_id, user_id=current_user.sub):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run_not_found")
-
-        rows = workflow_run_artifacts.list_for_run(db, run_id=run_id)
-    finally:
-        db.close()
-
-    if not rows:
-        return {"artifacts": []}
-
-    try:
-        storage = get_attachment_storage()
-    except AttachmentStorageError as exc:
-        logger.error("Attachment storage misconfigured: %s", exc)
-        raise HTTPException(status_code=500, detail="attachments_not_configured")
-
-    artifacts = []
-    for row in rows:
-        artifacts.append(
-            {
-                "id": row.id,
-                "filename": row.filename,
-                "size_bytes": row.size_bytes,
-                "content_type": row.content_type,
-                "storage_key": row.storage_key,
-                "source_path": row.source_path,
-                "download_url": storage.generate_presigned_get(row.storage_key),
-            }
-        )
-
-    return {"artifacts": artifacts}
 
 
 @router.post("/runs/{run_id}/commit-drive-changes")
