@@ -4,6 +4,7 @@ import posixpath
 from typing import Optional
 
 DRIVE_PREFIX = "drive"
+DRIVE_CHANGES_PREFIX = "drive_changes"
 
 
 def normalize_drive_path(
@@ -67,3 +68,13 @@ def build_drive_backup_key(user_id: str, run_id: str, drive_path: str) -> str:
     if not drive_path:
         raise ValueError("drive_path_required")
     return posixpath.join(str(user_id), "drive_backups", str(run_id), drive_path)
+
+
+def build_drive_changes_key(user_id: str, run_id: str, drive_path: str) -> str:
+    if not user_id:
+        raise ValueError("drive_user_id_required")
+    if not run_id:
+        raise ValueError("drive_run_id_required")
+    if not drive_path:
+        raise ValueError("drive_path_required")
+    return posixpath.join(str(user_id), DRIVE_CHANGES_PREFIX, str(run_id), drive_path)

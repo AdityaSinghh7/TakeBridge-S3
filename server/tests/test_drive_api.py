@@ -11,6 +11,7 @@ from server.api.auth import CurrentUser, get_current_user
 from server.api.server import app
 from server.api import routes_drive
 from server.api import run_drive
+from shared.db.models import WorkflowRunDriveChange
 
 
 @pytest.fixture
@@ -223,3 +224,8 @@ def test_detect_drive_changes(monkeypatch):
     assert "Documents/new.txt" in paths
     assert fake_session.committed is True
     assert len(fake_session.added) == 3
+    change_keys = [
+        obj.r2_key for obj in fake_session.added if isinstance(obj, WorkflowRunDriveChange)
+    ]
+    assert len(change_keys) == 2
+    assert all(key.startswith("user-123/drive_changes/run-123/") for key in change_keys)

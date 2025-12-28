@@ -94,7 +94,7 @@ def show(label, items, extra_keys=()):
         print(" - " + " | ".join(bits))
 
 show("New files", new_files)
-show("Changed files", changes, extra_keys=("backup_get_url",))
+show("Changed files", changes, extra_keys=("current_get_url", "change_get_url"))
 show("Unchanged files", unchanged)
 PY
 
@@ -109,16 +109,16 @@ urls = []
 for item in data.get("changes", []):
     url = item.get("current_get_url")
     if url:
-        urls.append(("current", item.get("path"), url))
-    backup = item.get("backup_get_url")
-    if backup:
-        urls.append(("backup", item.get("path"), backup))
+        urls.append(("main", item.get("path"), url))
+    change = item.get("change_get_url")
+    if change:
+        urls.append(("change", item.get("path"), change))
 for item in data.get("unchanged", []):
     url = item.get("current_get_url")
     if url:
         urls.append(("unchanged", item.get("path"), url))
 for item in data.get("new_files", []):
-    url = item.get("current_get_url")
+    url = item.get("change_get_url") or item.get("current_get_url")
     if url:
         urls.append(("new", item.get("path"), url))
 

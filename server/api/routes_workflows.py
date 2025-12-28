@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from server.api.auth import CurrentUser, get_current_user
 from server.api.controller_client import VMControllerClient
-from server.api.drive_utils import build_drive_backup_key, build_drive_key, normalize_drive_path
+from server.api.drive_utils import build_drive_key, normalize_drive_path
 from server.api.run_drive import DOWNLOAD_CHUNK_BYTES, DRIVE_VM_BASE_PATH
 from shared.db import (
     profiles,
@@ -696,22 +696,28 @@ def commit_drive_changes(
     results: List[Dict[str, Any]] = []
     for row in rows:
         content_type = row.content_type or mimetypes.guess_type(row.path or "")[0] or DEFAULT_ATTACHMENT_CONTENT_TYPE
-        presigned_put_url = storage.generate_presigned_put(row.r2_key, content_type=content_type)
+        change_key = row.r2_key
+        presigned_put_url = storage.generate_presigned_put(change_key, content_type=content_type)
         change_type = "new" if not row.baseline_hash else "modified"
-        backup_presigned_get_url = None
+        current_get_url = None
+        main_r2_key = None
         if change_type == "modified":
-            backup_presigned_get_url = storage.generate_presigned_get(row.r2_key)
+            main_r2_key = build_drive_key(current_user.sub, row.path or "")
+            current_get_url = storage.generate_presigned_get(main_r2_key)
         results.append(
             {
                 "path": row.path,
-                "r2_key": row.r2_key,
+                "r2_key": change_key,
+                "main_r2_key": main_r2_key,
+                "change_r2_key": change_key,
                 "presigned_put_url": presigned_put_url,
                 "content_type": content_type,
                 "size": row.size_bytes,
                 "source_baseline_hash": row.baseline_hash,
                 "new_hash": row.new_hash,
                 "change_type": change_type,
-                "backup_presigned_get_url": backup_presigned_get_url,
+                "current_get_url": current_get_url,
+                "change_get_url": storage.generate_presigned_get(change_key),
             }
         )
     return results
@@ -792,6 +798,89 @@ def commit_drive_file(
     }
 
 
+@router.post("/runs/{run_id}/apply-drive-changes")
+def apply_drive_changes(
+    run_id: str,
+    payload: Dict[str, Any] = Body(default_factory=dict),
+    current_user: CurrentUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    paths_raw = payload.get("paths") or payload.get("drive_paths")
+    paths: Optional[List[str]] = None
+    if paths_raw is not None:
+        if not isinstance(paths_raw, list):
+            raise HTTPException(status_code=400, detail="drive_paths_must_be_list")
+        paths = []
+        for raw in paths_raw:
+            try:
+                normalized = normalize_drive_path(str(raw))
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            paths.append(normalized)
+
+    db = SessionLocal()
+    try:
+        if not workflow_runs.is_owned(db, run_id=run_id, user_id=current_user.sub):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run_not_found")
+        rows = workflow_run_drive_changes.list_for_run_user(
+            db,
+            run_id=run_id,
+            user_id=current_user.sub,
+        )
+    finally:
+        db.close()
+
+    if paths is not None:
+        path_set = set(paths)
+        available_paths = {row.path for row in rows if row.path}
+        rows = [row for row in rows if row.path in path_set]
+        missing = [path for path in paths if path not in available_paths]
+    else:
+        missing = []
+
+    if not rows and not missing:
+        return {"run_id": run_id, "applied": []}
+
+    try:
+        storage = get_attachment_storage()
+    except AttachmentStorageError as exc:
+        logger.error("Attachment storage misconfigured: %s", exc)
+        raise HTTPException(status_code=500, detail="attachments_not_configured")
+
+    results: List[Dict[str, Any]] = []
+    for drive_path in missing:
+        results.append({"path": drive_path, "status": "missing"})
+
+    for row in rows:
+        drive_path = row.path
+        if not drive_path:
+            continue
+        if getattr(row, "status", None) != "committed":
+            results.append({"path": drive_path, "status": "skipped", "reason": "change_not_committed"})
+            continue
+        change_key = row.r2_key
+        if not change_key:
+            results.append({"path": drive_path, "status": "skipped", "reason": "missing_change_key"})
+            continue
+        main_key = build_drive_key(current_user.sub, drive_path)
+        try:
+            storage.copy_object(change_key, main_key)
+        except Exception as exc:
+            logger.warning("[drive] failed to apply change %s: %s", drive_path, exc)
+            results.append({"path": drive_path, "status": "failed", "error": str(exc)})
+            continue
+        results.append(
+            {
+                "path": drive_path,
+                "status": "applied",
+                "r2_key": main_key,
+                "main_r2_key": main_key,
+                "change_r2_key": change_key,
+            }
+        )
+
+    return {"run_id": run_id, "applied": results}
+
+
 @router.get("/runs/{run_id}/drive-summary")
 def get_drive_summary(
     run_id: str,
@@ -829,22 +918,26 @@ def get_drive_summary(
             continue
         change_type = "new" if not row.baseline_hash else "modified"
         content_type = row.content_type or mimetypes.guess_type(drive_path)[0] or DEFAULT_ATTACHMENT_CONTENT_TYPE
-        current_get_url = storage.generate_presigned_get(row.r2_key)
-        backup_get_url = None
+        change_key = row.r2_key
+        change_get_url = storage.generate_presigned_get(change_key)
+        current_get_url = None
+        main_r2_key = None
         if change_type == "modified":
-            backup_key = build_drive_backup_key(current_user.sub, run_id, drive_path)
-            backup_get_url = storage.generate_presigned_get(backup_key)
+            main_r2_key = build_drive_key(current_user.sub, drive_path)
+            current_get_url = storage.generate_presigned_get(main_r2_key)
 
         change_payload = {
             "path": drive_path,
-            "r2_key": row.r2_key,
+            "r2_key": change_key,
+            "main_r2_key": main_r2_key,
+            "change_r2_key": change_key,
             "content_type": content_type,
             "size": row.size_bytes,
             "change_type": change_type,
             "baseline_hash": row.baseline_hash,
             "new_hash": row.new_hash,
             "current_get_url": current_get_url,
-            "backup_get_url": backup_get_url,
+            "change_get_url": change_get_url,
         }
         changes.append(change_payload)
         if change_type == "new":

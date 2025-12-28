@@ -128,7 +128,7 @@ def main() -> None:
         print(f"- {item.get('path')} ({item.get('change_type')})")
     print(f"Committed changes: {len(committed)}")
     for item in committed:
-        print(f"- {item.get('path')} ({item.get('change_type')}) backup={item.get('backup_r2_key')}")
+        print(f"- {item.get('path')} ({item.get('change_type')}) change={item.get('r2_key')}")
 
     api_base_url = os.getenv("API_BASE_URL", "").strip()
     auth_token = os.getenv("AUTH_TOKEN", "").strip()
