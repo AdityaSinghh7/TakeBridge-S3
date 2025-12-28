@@ -41,6 +41,10 @@ _HEALTH_INTERVAL_ENV_VAR = "VM_CONTROLLER_HEALTHCHECK_INTERVAL_SECONDS"
 
 logger = logging.getLogger(__name__)
 
+_SCREENSHOT_RETRY_STATUS = {500, 503}
+_SCREENSHOT_RETRY_ATTEMPTS = 5
+_SCREENSHOT_RETRY_BASE_DELAY_S = 0.5
+
 
 class VMControllerError(RuntimeError):
     """Raised when the controller returns an unexpected response."""
@@ -103,6 +107,11 @@ def _env_float(name: str, default: float) -> float:
         return float(raw)
     except Exception:
         return default
+
+
+def _exp_backoff_seconds(attempt: int, base_delay: float) -> float:
+    delay = base_delay * (2 ** max(attempt, 0))
+    return delay
 
 
 @dataclass
@@ -377,8 +386,27 @@ class VMControllerClient:
         Retrieve a screenshot with cursor overlay (`/screenshot`).
         Optionally saves the bytes to `save_to` path.
         """
-        response = self._request("GET", "/screenshot", stream=True, timeout=timeout)
-        data = response.content
+        last_exc: Optional[Exception] = None
+        for attempt in range(_SCREENSHOT_RETRY_ATTEMPTS):
+            try:
+                response = self._request("GET", "/screenshot", stream=True, timeout=timeout)
+                data = response.content
+                break
+            except VMControllerError as exc:
+                last_exc = exc
+                if exc.status_code not in _SCREENSHOT_RETRY_STATUS or attempt >= _SCREENSHOT_RETRY_ATTEMPTS - 1:
+                    raise
+                backoff = _exp_backoff_seconds(attempt, _SCREENSHOT_RETRY_BASE_DELAY_S)
+                logger.warning(
+                    "Transient /screenshot failure (status=%s), retrying in %.2fs (attempt %s/%s)",
+                    exc.status_code,
+                    backoff,
+                    attempt + 1,
+                    _SCREENSHOT_RETRY_ATTEMPTS,
+                )
+                time.sleep(backoff)
+        else:
+            raise last_exc or VMControllerError("Controller /screenshot retry failed")
         if save_to:
             Path(save_to).expanduser().resolve().write_bytes(data)
         return data

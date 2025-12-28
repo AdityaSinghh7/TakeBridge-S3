@@ -735,7 +735,7 @@ def runner(
                     execution_result = _execute_remote_pyautogui(controller, action)
                 if "pyautogui.click" in action.lower():
                     did_click_action = True
-                agent_signal.sleep_with_interrupt(0.5)
+                agent_signal.sleep_with_interrupt(1.0)
                 with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
                     after_screenshot_bytes = controller.capture_screenshot()
                 try:
@@ -752,7 +752,7 @@ def runner(
                         "mode": execution_mode,
                     },
                 )
-                agent_signal.sleep_with_interrupt(0.5)
+                agent_signal.sleep_with_interrupt(1.0)
                 with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
                     after_screenshot_bytes = controller.capture_screenshot()
 
