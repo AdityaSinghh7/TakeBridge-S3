@@ -41,6 +41,10 @@ _HEALTH_INTERVAL_ENV_VAR = "VM_CONTROLLER_HEALTHCHECK_INTERVAL_SECONDS"
 
 logger = logging.getLogger(__name__)
 
+_SCREENSHOT_RETRY_STATUS = {500, 503}
+_SCREENSHOT_RETRY_ATTEMPTS = 5
+_SCREENSHOT_RETRY_BASE_DELAY_S = 0.5
+
 
 class VMControllerError(RuntimeError):
     """Raised when the controller returns an unexpected response."""
@@ -103,6 +107,11 @@ def _env_float(name: str, default: float) -> float:
         return float(raw)
     except Exception:
         return default
+
+
+def _exp_backoff_seconds(attempt: int, base_delay: float) -> float:
+    delay = base_delay * (2 ** max(attempt, 0))
+    return delay
 
 
 @dataclass
@@ -295,21 +304,16 @@ class VMControllerClient:
 
     def execute(self, command: Command, *, shell: bool = False, setup: bool = False, timeout: Optional[float] = None) -> JsonDict:
         """
-        Execute a command on the VM (`/execute` or `/setup/execute`).
+        Execute a command on the VM (`/execute`).
+
+        Note: Some controller deployments do not expose `/setup/execute`; `setup`
+        is accepted for compatibility but is not used for routing.
         """
-        path = "/setup/execute" if setup else "/execute"
+        path = "/execute"
         try:
-            logger.info("controller.execute path=%s shell=%s command=%s", path, shell, command)
+            logger.info("controller.execute path=%s shell=%s setup=%s command=%s", path, shell, setup, command)
         except Exception:
-            logger.debug("controller.execute path=%s shell=%s (command log failed)", path, shell)
-        if setup:
-            return self._request_with_fallback(
-                "POST",
-                path,
-                fallback_path="/execute",
-                json={"command": command, "shell": shell},
-                timeout=timeout,
-            ).json()
+            logger.debug("controller.execute path=%s shell=%s setup=%s (command log failed)", path, shell, setup)
         return self._request(
             "POST",
             path,
@@ -382,8 +386,27 @@ class VMControllerClient:
         Retrieve a screenshot with cursor overlay (`/screenshot`).
         Optionally saves the bytes to `save_to` path.
         """
-        response = self._request("GET", "/screenshot", stream=True, timeout=timeout)
-        data = response.content
+        last_exc: Optional[Exception] = None
+        for attempt in range(_SCREENSHOT_RETRY_ATTEMPTS):
+            try:
+                response = self._request("GET", "/screenshot", stream=True, timeout=timeout)
+                data = response.content
+                break
+            except VMControllerError as exc:
+                last_exc = exc
+                if exc.status_code not in _SCREENSHOT_RETRY_STATUS or attempt >= _SCREENSHOT_RETRY_ATTEMPTS - 1:
+                    raise
+                backoff = _exp_backoff_seconds(attempt, _SCREENSHOT_RETRY_BASE_DELAY_S)
+                logger.warning(
+                    "Transient /screenshot failure (status=%s), retrying in %.2fs (attempt %s/%s)",
+                    exc.status_code,
+                    backoff,
+                    attempt + 1,
+                    _SCREENSHOT_RETRY_ATTEMPTS,
+                )
+                time.sleep(backoff)
+        else:
+            raise last_exc or VMControllerError("Controller /screenshot retry failed")
         if save_to:
             Path(save_to).expanduser().resolve().write_bytes(data)
         return data
@@ -658,6 +681,34 @@ class VMControllerClient:
             timeout=timeout,
         )
         return response.text
+
+    def upload_file_to_url(
+        self,
+        path: Union[str, Path],
+        upload_url: str,
+        *,
+        content_type: Optional[str] = None,
+        timeout: Optional[float] = None,
+    ) -> JsonDict:
+        """
+        Upload a file from the VM to a presigned URL (`/upload_to_url`).
+        """
+        payload: JsonDict = {
+            "file_path": str(path),
+            "upload_url": upload_url,
+        }
+        if content_type:
+            payload["content_type"] = content_type
+        response = self._request(
+            "POST",
+            "/upload_to_url",
+            json=payload,
+            timeout=timeout,
+        )
+        try:
+            return response.json()
+        except Exception:
+            return {"status": response.text}
 
     def run_python(
         self,

@@ -28,10 +28,17 @@ class PROCEDURAL_MEMORY:
         ### Code Agent
         You have access to a code agent that can execute Python/Bash code for complex tasks.
 
-        **Usage Strategy**:
-        - **Full Task**: Use `agent.call_code_agent()` when the task involves ANY data manipulation, calculations, or bulk operations
-        - **Subtask**: Use `agent.call_code_agent("specific subtask")` for focused data tasks
-        - **CRITICAL**: If calling the code agent for the full task, pass the original task instruction without rewording or modification
+        **Usage Strategy (REQUIRED)**:
+        - Always call `agent.call_code_agent("...")` with a **specific, code-executable subtask**.
+        - The code agent's capability is **running Python/Bash scripts via the computer/controller**. It is **not** a GUI-clicking/typing agent.
+        - Your subtask string must be short and bounded, name the target artifacts (file paths / app files), and say what to print/check for verification.
+
+        Examples:
+        - Good: `agent.call_code_agent("Run a python script to compute the sum of column B in report.csv and print the result.")`
+        - Good: `agent.call_code_agent("Search the repo for 'FOO_BAR', update the config to 'baz', and print the diff.")`
+        - Bad: calling `agent.call_code_agent` without a subtask string (invalid)
+        - Bad: `agent.call_code_agent("Finish the whole task")` (too broad)
+        - Bad: `agent.call_code_agent("Click the Export button and save the file")` (GUI instruction)
 
         ### Code Agent Result Interpretation
         - The code agent runs Python/Bash code in the background (up to 20 steps), independently performing tasks like file modification, package installation, or system operations.

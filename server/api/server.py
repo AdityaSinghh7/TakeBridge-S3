@@ -153,6 +153,7 @@ logger.info(
 
 logger.info("Starting Orchestrator API")
 
+
 class _RunLogFilter(logging.Filter):
     """Filter that only allows records when the current run_id matches."""
 
@@ -791,6 +792,7 @@ def _create_streaming_response(
         finally:
             drive_changes: List[Dict[str, Any]] = []
             committed_drive_changes: List[Dict[str, Any]] = []
+            committed_drive_changes: List[Dict[str, Any]] = []
             if run_id_local and workspace:
                 try:
                     drive_changes = detect_drive_changes(run_id_local, workspace)
@@ -798,6 +800,10 @@ def _create_streaming_response(
                     logger.warning("Failed to detect drive changes for run %s: %s", run_id_local, exc)
                 if drive_changes:
                     logger.info("[drive] detected %s changed files for run %s", len(drive_changes), run_id_local)
+                try:
+                    committed_drive_changes = commit_drive_changes_for_run(run_id_local, workspace)
+                except Exception as exc:
+                    logger.warning("Failed to commit drive changes for run %s: %s", run_id_local, exc)
                 try:
                     committed_drive_changes = commit_drive_changes_for_run(run_id_local, workspace)
                 except Exception as exc:

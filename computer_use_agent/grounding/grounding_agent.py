@@ -277,8 +277,8 @@ class OSWorldACI(ACI):
         code_agent_engine_params.setdefault("model", "o4-mini")
         self.code_agent = CodeAgent(code_agent_engine_params, code_agent_budget)
 
-        # Store task instruction for code agent
-        self.current_task_instruction = None
+        # Store full task context (for composing code subtasks)
+        self.current_task_context = None
         self.last_code_agent_result = None
         # Store handback inference result for continuation after human intervention
         self.handback_inference = None
@@ -629,9 +629,13 @@ class OSWorldACI(ACI):
     def assign_screenshot(self, obs: Dict):
         self.obs = obs
 
-    def set_task_instruction(self, task_instruction: str):
-        """Set the current task instruction for the code agent."""
-        self.current_task_instruction = task_instruction
+    def set_task_context(self, task_context: str):
+        """Set the high-level task context used to compose code subtasks.
+
+        This context is *not* executed by the code agent. Any call to
+        `call_code_agent` must pass an explicit, code-executable subtask string.
+        """
+        self.current_task_context = task_context
 
     # Resize from grounding model dim into OSWorld dim (1920 * 1080)
     def resize_coordinates(self, coordinates: List[int]) -> List[int]:
@@ -887,31 +891,28 @@ class OSWorldACI(ACI):
         )
 
     @agent_action
-    def call_code_agent(self, task: str = None):
-        """Call the code agent to execute code for tasks or subtasks that can be completed solely with coding.
+    def call_code_agent(self, subtask: str):
+        """Call the code agent to run Python/Bash scripts for a specific subtask.
 
         Args:
-            task: str, the task or subtask to execute. If None, uses the current full task instruction.
+            subtask: str, required. A concrete, code-executable instruction for the
+                code agent to complete using Python/Bash scripts (no GUI actions).
+                Include target file paths/app names, the operation to perform, and
+                what outputs to print/verify.
 
-        **🚨 CRITICAL GUIDELINES:**
-        - **ONLY pass a task parameter for SPECIFIC subtasks** (e.g., "Calculate sum of column B", "Filter data by date")
-        - **NEVER pass a task parameter for full tasks** - let it default to the original task instruction
-        - **NEVER rephrase or modify the original task** - this prevents hallucination corruption
-        - **If unsure, omit the task parameter entirely** to use the original task instruction
-
-        Use this for tasks that can be fully accomplished through code execution, particularly for:
-        - Spreadsheet applications (LibreOffice Calc, Excel): data processing, filtering, sorting, calculations, formulas, data analysis
-        - Document editors (LibreOffice Writer, Word): text processing, content editing, formatting, document manipulation
-        - Code editors (VS Code, text editors): code editing, file processing, text manipulation, configuration
-        - Data analysis tools: statistical analysis, data transformation, reporting
-        - File management: bulk operations, file processing, content extraction
-        - System utilities: configuration, setup, automation
+        Notes:
+            - You MUST pass a non-empty `subtask` string.
+            - Do NOT delegate the entire user task; pass the next actionable
+              code subtask that advances the overall goal.
+            - The code agent's capability is running Python/Bash scripts via the
+              controller. It does not perform GUI clicks/typing directly.
         """
+        if not isinstance(subtask, str) or not subtask.strip():
+            raise ValueError("call_code_agent_task_required")
+
         # If being evaluated for formatting only, avoid real execution
         if getattr(self, "_validation_only", False):
-            logger.info(
-                "GROUNDING AGENT: Skipping code agent execution during validation"
-            )
+            logger.info("GROUNDING AGENT: Skipping code agent execution during validation")
             # Return a harmless no-op snippet to satisfy validation
             return "import time; time.sleep(0.123)"
 
@@ -927,80 +928,67 @@ class OSWorldACI(ACI):
         logger.info("GROUNDING AGENT: Calling Code Agent")
         logger.info("=" * 50)
 
-        # **CRITICAL**: Only use provided task for specific subtasks, otherwise use original task instruction
-        if task is not None:
-            # This is a subtask - use the provided task
-            task_to_execute = task
-            logger.info(f"Executing SUBTASK: {task_to_execute}")
-        else:
-            # This is a full task - use the original task instruction to prevent hallucination
-            task_to_execute = self.current_task_instruction
-            logger.info(f"Executing FULL TASK: {task_to_execute}")
+        task_to_execute = subtask.strip()
+        logger.info("Executing CODE SUBTASK: %s", task_to_execute)
 
         # Log code agent call to hierarchical logger
         if grounding_logger:
             grounding_logger.log_event("code_agent.call_started", {
                 "task": task_to_execute,
-                "is_subtask": task is not None,
+                "task_context": self.current_task_context,
             })
 
-        if task_to_execute:
-            print("obs keys: ", self.obs.keys())
-            screenshot = self.obs.get("screenshot", "") if self.obs else ""
-            logger.info(f"Screenshot available: {'Yes' if screenshot else 'No'}")
+        print("obs keys: ", self.obs.keys())
+        screenshot = self.obs.get("screenshot", "") if self.obs else ""
+        logger.info("Screenshot available: %s", "Yes" if screenshot else "No")
 
-            logger.info("Executing code agent...")
-            emit_event(
-                "grounding.code_agent.started",
+        logger.info("Executing code agent...")
+        emit_event(
+            "grounding.code_agent.started",
+            {
+                "task": task_to_execute,
+                "task_context": self.current_task_context,
+            },
+        )
+        result = self.code_agent.execute(
+            task_to_execute, screenshot, self.env.controller
+        )
+
+        # Store the result for the worker to access
+        self.last_code_agent_result = result
+
+        logger.info("Code agent execution completed")
+        logger.info("Result - Completion reason: %s", result.get("completion_reason"))
+        logger.info("Steps executed: %s", result.get("steps_executed"))
+        logger.info("Summary: %s", result.get("summary"))
+
+        logger.info("=" * 50)
+        logger.info("GROUNDING AGENT: Code Agent Call Finished")
+        logger.info("=" * 50)
+
+        # Log code agent completion to hierarchical logger
+        if grounding_logger:
+            grounding_logger.log_event(
+                "code_agent.call_completed",
                 {
                     "task": task_to_execute,
+                    "completion_reason": result.get("completion_reason"),
+                    "steps_executed": result.get("steps_executed"),
+                    "summary": result.get("summary"),
                 },
             )
-            result = self.code_agent.execute(
-                task_to_execute, screenshot, self.env.controller
-            )
 
-            # Store the result for the worker to access
-            self.last_code_agent_result = result
-
-            logger.info("Code agent execution completed")
-            logger.info(f"Result - Completion reason: {result['completion_reason']}")
-            logger.info(f"Steps executed: {result['steps_executed']}")
-            logger.info(f"Summary: {result['summary']}")
-
-            logger.info("=" * 50)
-            logger.info("GROUNDING AGENT: Code Agent Call Finished")
-            logger.info("=" * 50)
-
-            # Log code agent completion to hierarchical logger
-            if grounding_logger:
-                grounding_logger.log_event("code_agent.call_completed", {
-                    "task": task_to_execute,
-                    "completion_reason": result["completion_reason"],
-                    "steps_executed": result["steps_executed"],
-                    "summary": result["summary"],
-                })
-
-            # Return code to be executed in the environment
-            emit_event(
-                "grounding.code_agent.completed",
-                {
-                    "task": task_to_execute,
-                    "completion_reason": result["completion_reason"],
-                    "steps_executed": result["steps_executed"],
-                    "summary": result["summary"],
-                },
-            )
-            return "import time; time.sleep(2.222)"
-        else:
-            logger.warning("No task instruction available for code agent call")
-            emit_event(
-                "grounding.code_agent.skipped",
-                {
-                    "reason": "missing_task_instruction",
-                },
-            )
-            return "import time; time.sleep(1.111)"
+        emit_event(
+            "grounding.code_agent.completed",
+            {
+                "task": task_to_execute,
+                "task_context": self.current_task_context,
+                "completion_reason": result.get("completion_reason"),
+                "steps_executed": result.get("steps_executed"),
+                "summary": result.get("summary"),
+            },
+        )
+        return "import time; time.sleep(2.222)"
 
     @agent_action
     def scroll(self, element_description: str, clicks: int, shift: bool = False):

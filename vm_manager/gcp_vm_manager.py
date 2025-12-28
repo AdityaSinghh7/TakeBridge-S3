@@ -255,14 +255,14 @@ def create_agent_instance_for_user(user_id: str) -> Tuple[str, str, Optional[str
     )
     if settings.GCP_MACHINE_IMAGE:
         logger.info(
-            "forcing pd-ssd override for machine image %s", settings.GCP_MACHINE_IMAGE
+            "forcing pd-standard override for machine image %s", settings.GCP_MACHINE_IMAGE
         )
         instance.source_machine_image = _resolve_machine_image_self_link()
         override_disk = compute_v1.AttachedDisk()
         override_disk.boot = True
         override_disk.auto_delete = True
         override_disk.initialize_params = compute_v1.AttachedDiskInitializeParams(
-            disk_type=f"zones/{zone}/diskTypes/pd-ssd",
+            disk_type=f"zones/{zone}/diskTypes/pd-standard",
             disk_size_gb=settings.GCP_DISK_SIZE_GB,
         )
         instance.disks = [override_disk]
@@ -275,7 +275,7 @@ def create_agent_instance_for_user(user_id: str) -> Tuple[str, str, Optional[str
         disk.initialize_params = compute_v1.AttachedDiskInitializeParams(
             source_image=_resolve_image_self_link(),
             disk_size_gb=settings.GCP_DISK_SIZE_GB,
-            disk_type=f"zones/{zone}/diskTypes/pd-ssd",
+            disk_type=f"zones/{zone}/diskTypes/pd-standard",
         )
         instance.disks = [disk]
 

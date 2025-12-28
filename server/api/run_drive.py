@@ -7,6 +7,7 @@ import logging
 import mimetypes
 import os
 import posixpath
+import posixpath
 import uuid
 from datetime import datetime, timezone
 from pathlib import PurePosixPath, PureWindowsPath
@@ -15,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from sqlalchemy import text
 
 from shared.db.engine import SessionLocal
+from shared.db.models import WorkflowRunDriveChange, WorkflowRunFile
 from shared.db.models import WorkflowRunDriveChange, WorkflowRunFile
 from shared.db import workflow_run_drive_changes, workflow_run_files, workflow_runs
 from shared.storage import get_attachment_storage, AttachmentStorageError
@@ -27,6 +29,7 @@ DRIVE_VM_BASE_PATH = os.path.expanduser(os.getenv("DRIVE_VM_BASE_PATH", "/home/u
 DRIVE_MANIFEST_PATH_OVERRIDE = os.getenv("DRIVE_MANIFEST_PATH")
 DOWNLOAD_CHUNK_BYTES = 4 * 1024 * 1024
 DOWNLOAD_TIMEOUT = int(os.getenv("DRIVE_DOWNLOAD_TIMEOUT", "300"))
+DEFAULT_ATTACHMENT_CONTENT_TYPE = "application/octet-stream"
 DEFAULT_ATTACHMENT_CONTENT_TYPE = "application/octet-stream"
 
 
@@ -355,6 +358,11 @@ def detect_drive_changes(run_id: str, workspace: Dict[str, Any]) -> List[Dict[st
             for row in rows
             if row.get("drive_path") or row.get("filename")
         }
+        known_paths = {
+            (row.get("drive_path") or row.get("filename"))
+            for row in rows
+            if row.get("drive_path") or row.get("filename")
+        }
 
         for row in rows:
             drive_path = row.get("drive_path") or row.get("filename")
@@ -406,8 +414,86 @@ def detect_drive_changes(run_id: str, workspace: Dict[str, Any]) -> List[Dict[st
                     "size": size,
                     "content_type": row.get("content_type"),
                     "change_type": "modified" if baseline_hash else "new",
+                    "change_type": "modified" if baseline_hash else "new",
                 }
             )
+
+        user_id = None
+        if rows:
+            user_id = rows[0].get("user_id")
+        if not user_id:
+            user_id = workflow_runs.get_user_id(db, run_id=run_id)
+
+        if user_id:
+            vm_files = _list_vm_files(controller, DRIVE_VM_BASE_PATH)
+            for vm_path in vm_files:
+                drive_path = _drive_path_from_vm_path(
+                    vm_path,
+                    base_path=DRIVE_VM_BASE_PATH,
+                    windows=windows,
+                )
+                if not drive_path or drive_path in known_paths:
+                    continue
+
+                r2_key = build_drive_key(user_id, drive_path)
+                content_type = mimetypes.guess_type(drive_path)[0]
+                try:
+                    new_hash, size = _hash_vm_file(controller, vm_path)
+                except Exception as exc:
+                    logger.warning("[drive] failed to hash new file %s: %s", vm_path, exc)
+                    continue
+
+                workflow_run_drive_changes.delete_for_run_path(
+                    db,
+                    run_id=run_id,
+                    path=drive_path,
+                )
+                change = WorkflowRunDriveChange(
+                    id=str(uuid.uuid4()),
+                    run_id=run_id,
+                    user_id=user_id,
+                    path=drive_path,
+                    r2_key=r2_key,
+                    baseline_hash=None,
+                    new_hash=new_hash,
+                    size_bytes=size,
+                    content_type=content_type,
+                    status="pending",
+                    committed_at=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+                workflow_run_drive_changes.add(db, change)
+                changes.append(
+                    {
+                        "path": drive_path,
+                        "r2_key": r2_key,
+                        "baseline_hash": None,
+                        "new_hash": new_hash,
+                        "size": size,
+                        "content_type": content_type,
+                        "change_type": "new",
+                    }
+                )
+
+                new_run_file = WorkflowRunFile(
+                    id=str(uuid.uuid4()),
+                    run_id=run_id,
+                    workflow_file_id=None,
+                    user_id=user_id,
+                    source_type="drive",
+                    storage_key=r2_key,
+                    r2_key=r2_key,
+                    drive_path=drive_path,
+                    filename=posixpath.basename(drive_path) or "file",
+                    content_type=content_type,
+                    size_bytes=size,
+                    checksum=new_hash,
+                    status="ready",
+                    vm_path=vm_path,
+                    metadata_json={},
+                )
+                db.add(new_run_file)
 
         user_id = None
         if rows:
@@ -491,6 +577,110 @@ def detect_drive_changes(run_id: str, workspace: Dict[str, Any]) -> List[Dict[st
     except Exception:
         db.rollback()
         raise
+    finally:
+        db.close()
+
+
+def commit_drive_changes_for_run(run_id: str, workspace: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Upload detected drive changes to R2 and store backups for modified files."""
+    controller_url = workspace.get("controller_base_url")
+    if not controller_url or not run_id:
+        return []
+
+    db = SessionLocal()
+    try:
+        user_id = workflow_runs.get_user_id(db, run_id=run_id)
+        if not user_id:
+            return []
+        rows = workflow_run_drive_changes.list_for_run_user(db, run_id=run_id, user_id=user_id)
+        if not rows:
+            return []
+        try:
+            storage = get_attachment_storage()
+        except AttachmentStorageError as exc:
+            raise DriveStageError(str(exc)) from exc
+
+        controller = VMControllerClient(base_url=controller_url)
+        controller.wait_for_health()
+        windows = _is_windows_path(DRIVE_VM_BASE_PATH)
+
+        drive_rows = workflow_run_files.list_drive_files_for_run(db, run_id=run_id)
+        drive_map = {
+            (row.get("drive_path") or row.get("filename")): row
+            for row in drive_rows
+            if row.get("drive_path") or row.get("filename")
+        }
+
+        now = datetime.now(timezone.utc)
+        results: List[Dict[str, Any]] = []
+
+        for row in rows:
+            if getattr(row, "status", None) == "committed":
+                continue
+            drive_path = row.path
+            r2_key = row.r2_key
+            if not drive_path or not r2_key:
+                continue
+
+            change_type = "new" if not row.baseline_hash else "modified"
+            content_type = row.content_type or mimetypes.guess_type(drive_path)[0] or DEFAULT_ATTACHMENT_CONTENT_TYPE
+            backup_key = None
+            if change_type == "modified":
+                backup_key = build_drive_backup_key(user_id, run_id, drive_path)
+                try:
+                    storage.copy_object(r2_key, backup_key)
+                except Exception as exc:
+                    logger.warning("[drive] failed to backup %s to %s: %s", drive_path, backup_key, exc)
+                    workflow_run_drive_changes.mark_failed(
+                        db,
+                        run_id=run_id,
+                        path=drive_path,
+                        error=str(exc),
+                        updated_at=now,
+                    )
+                    db.commit()
+                    continue
+
+            drive_row = drive_map.get(drive_path) or {}
+            vm_path = drive_row.get("vm_path") or _build_drive_vm_path(
+                drive_path,
+                base_path=DRIVE_VM_BASE_PATH,
+                windows=windows,
+            )
+            presigned_put_url = storage.generate_presigned_put(r2_key, content_type=content_type)
+            try:
+                controller.upload_file_to_url(vm_path, presigned_put_url, content_type=content_type)
+            except Exception as exc:
+                logger.warning("[drive] failed to upload %s to R2: %s", vm_path, exc)
+                workflow_run_drive_changes.mark_failed(
+                    db,
+                    run_id=run_id,
+                    path=drive_path,
+                    error=str(exc),
+                    updated_at=now,
+                )
+                db.commit()
+                continue
+
+            workflow_run_drive_changes.mark_committed(
+                db,
+                run_id=run_id,
+                path=drive_path,
+                committed_at=now,
+            )
+            db.commit()
+
+            results.append(
+                {
+                    "path": drive_path,
+                    "r2_key": r2_key,
+                    "backup_r2_key": backup_key,
+                    "change_type": change_type,
+                    "content_type": content_type,
+                }
+            )
+
+        return results
     finally:
         db.close()
 
