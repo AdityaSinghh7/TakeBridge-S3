@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from server.api.auth import CurrentUser, get_current_user
 from server.api.controller_client import VMControllerClient
-from server.api.drive_utils import build_drive_key, normalize_drive_path
+from server.api.drive_utils import build_drive_backup_key, build_drive_key, normalize_drive_path
 from server.api.run_drive import DOWNLOAD_CHUNK_BYTES, DRIVE_VM_BASE_PATH
 from shared.db import (
     profiles,
@@ -724,6 +724,7 @@ def commit_drive_changes(
     finally:
         db.close()
 
+    rows = [row for row in rows if getattr(row, "status", None) != "committed"]
     if not rows:
         return []
 
@@ -737,6 +738,10 @@ def commit_drive_changes(
     for row in rows:
         content_type = row.content_type or mimetypes.guess_type(row.path or "")[0] or DEFAULT_ATTACHMENT_CONTENT_TYPE
         presigned_put_url = storage.generate_presigned_put(row.r2_key, content_type=content_type)
+        change_type = "new" if not row.baseline_hash else "modified"
+        backup_presigned_get_url = None
+        if change_type == "modified":
+            backup_presigned_get_url = storage.generate_presigned_get(row.r2_key)
         results.append(
             {
                 "path": row.path,
@@ -746,9 +751,168 @@ def commit_drive_changes(
                 "size": row.size_bytes,
                 "source_baseline_hash": row.baseline_hash,
                 "new_hash": row.new_hash,
+                "change_type": change_type,
+                "backup_presigned_get_url": backup_presigned_get_url,
             }
         )
     return results
+
+
+@router.post("/runs/{run_id}/commit-drive-file")
+def commit_drive_file(
+    run_id: str,
+    payload: Dict[str, Any] = Body(default_factory=dict),
+    current_user: CurrentUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    path_raw = payload.get("path") or payload.get("drive_path")
+    if not path_raw:
+        raise HTTPException(status_code=400, detail="drive_path_required")
+    try:
+        drive_path = normalize_drive_path(str(path_raw))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    db = SessionLocal()
+    try:
+        if not workflow_runs.is_owned(db, run_id=run_id, user_id=current_user.sub):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run_not_found")
+
+        rows = workflow_run_drive_changes.list_for_run_user(
+            db,
+            run_id=run_id,
+            user_id=current_user.sub,
+        )
+        change_row = next((row for row in rows if row.path == drive_path), None)
+        if not change_row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="drive_change_not_found")
+
+        drive_row = workflow_run_files.get_drive_file_row(
+            db,
+            run_id=run_id,
+            user_id=current_user.sub,
+            drive_path=drive_path,
+        )
+        if not drive_row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="drive_file_not_found")
+
+        controller_base_url = _get_run_controller_base_url(db, run_id, current_user.sub)
+    finally:
+        db.close()
+
+    try:
+        storage = get_attachment_storage()
+    except AttachmentStorageError as exc:
+        logger.error("Attachment storage misconfigured: %s", exc)
+        raise HTTPException(status_code=500, detail="attachments_not_configured")
+
+    content_type = change_row.content_type or mimetypes.guess_type(drive_path)[0] or DEFAULT_ATTACHMENT_CONTENT_TYPE
+    presigned_put_url = storage.generate_presigned_put(change_row.r2_key, content_type=content_type)
+
+    controller = VMControllerClient(base_url=controller_base_url)
+    controller.wait_for_health()
+    windows = ":" in DRIVE_VM_BASE_PATH or "\\" in DRIVE_VM_BASE_PATH
+    vm_path = drive_row.get("vm_path")
+    if not vm_path:
+        if windows:
+            vm_path = str(PureWindowsPath(DRIVE_VM_BASE_PATH, *drive_path.split("/")))
+        else:
+            vm_path = str(PurePosixPath(DRIVE_VM_BASE_PATH, *drive_path.split("/")))
+
+    try:
+        controller.upload_file_to_url(vm_path, presigned_put_url, content_type=content_type)
+    except Exception as exc:
+        logger.error("[drive] failed to upload %s to R2: %s", vm_path, exc)
+        raise HTTPException(status_code=500, detail="drive_upload_failed")
+
+    return {
+        "path": drive_path,
+        "r2_key": change_row.r2_key,
+        "content_type": content_type,
+        "size": change_row.size_bytes,
+        "status": "uploaded",
+    }
+
+
+@router.get("/runs/{run_id}/drive-summary")
+def get_drive_summary(
+    run_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    db = SessionLocal()
+    try:
+        if not workflow_runs.is_owned(db, run_id=run_id, user_id=current_user.sub):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run_not_found")
+        drive_rows = workflow_run_files.list_drive_files_for_run(db, run_id=run_id)
+        change_rows = workflow_run_drive_changes.list_for_run_user(
+            db,
+            run_id=run_id,
+            user_id=current_user.sub,
+        )
+    finally:
+        db.close()
+
+    try:
+        storage = get_attachment_storage()
+    except AttachmentStorageError as exc:
+        logger.error("Attachment storage misconfigured: %s", exc)
+        raise HTTPException(status_code=500, detail="attachments_not_configured")
+
+    changes: List[Dict[str, Any]] = []
+    new_files: List[Dict[str, Any]] = []
+    unchanged: List[Dict[str, Any]] = []
+
+    change_by_path = {row.path: row for row in change_rows if row.path}
+    changed_paths = set(change_by_path.keys())
+
+    for row in change_rows:
+        drive_path = row.path
+        if not drive_path:
+            continue
+        change_type = "new" if not row.baseline_hash else "modified"
+        content_type = row.content_type or mimetypes.guess_type(drive_path)[0] or DEFAULT_ATTACHMENT_CONTENT_TYPE
+        current_get_url = storage.generate_presigned_get(row.r2_key)
+        backup_get_url = None
+        if change_type == "modified":
+            backup_key = build_drive_backup_key(current_user.sub, run_id, drive_path)
+            backup_get_url = storage.generate_presigned_get(backup_key)
+
+        change_payload = {
+            "path": drive_path,
+            "r2_key": row.r2_key,
+            "content_type": content_type,
+            "size": row.size_bytes,
+            "change_type": change_type,
+            "baseline_hash": row.baseline_hash,
+            "new_hash": row.new_hash,
+            "current_get_url": current_get_url,
+            "backup_get_url": backup_get_url,
+        }
+        changes.append(change_payload)
+        if change_type == "new":
+            new_files.append(change_payload)
+
+    for row in drive_rows:
+        drive_path = row.get("drive_path") or row.get("filename")
+        r2_key = row.get("r2_key") or row.get("storage_key")
+        if not drive_path or not r2_key or drive_path in changed_paths:
+            continue
+        content_type = row.get("content_type") or mimetypes.guess_type(drive_path)[0] or DEFAULT_ATTACHMENT_CONTENT_TYPE
+        unchanged.append(
+            {
+                "path": drive_path,
+                "r2_key": r2_key,
+                "content_type": content_type,
+                "size": row.get("size_bytes"),
+                "current_get_url": storage.generate_presigned_get(r2_key),
+            }
+        )
+
+    return {
+        "run_id": run_id,
+        "changes": changes,
+        "new_files": new_files,
+        "unchanged": unchanged,
+    }
 
 
 @router.get("/runs/{run_id}/drive-file")

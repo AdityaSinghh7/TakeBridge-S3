@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from dataclasses import dataclass
+from time import monotonic
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
@@ -18,6 +20,79 @@ from vm_manager.config import settings
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/guac", tags=["guacamole"])
+
+
+@dataclass
+class _GuacTokenCacheEntry:
+    auth_token: str
+    data_source: Optional[str]
+    guac_url: str
+    expires_at: float
+
+_RUN_TOKEN_CACHE: dict[str, _GuacTokenCacheEntry] = {}
+_WORKSPACE_TOKEN_CACHE: dict[str, _GuacTokenCacheEntry] = {}
+
+
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return False
+
+
+def _cache_ttl_seconds() -> int:
+    try:
+        return int(getattr(settings, "GUAC_AUTH_CACHE_TTL_SECONDS", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _get_cached_entry(
+    cache: dict[str, _GuacTokenCacheEntry],
+    key: str,
+    guac_url: str,
+    force_refresh: bool,
+) -> Optional[_GuacTokenCacheEntry]:
+    if force_refresh:
+        return None
+
+    ttl = _cache_ttl_seconds()
+    if ttl <= 0:
+        return None
+
+    entry = cache.get(key)
+    if not entry:
+        return None
+
+    if entry.guac_url != guac_url:
+        cache.pop(key, None)
+        return None
+
+    if entry.expires_at <= monotonic():
+        cache.pop(key, None)
+        return None
+
+    return entry
+
+
+def _store_cached_entry(
+    cache: dict[str, _GuacTokenCacheEntry],
+    key: str,
+    guac_url: str,
+    auth_token: str,
+    data_source: Optional[str],
+) -> None:
+    ttl = _cache_ttl_seconds()
+    if ttl <= 0:
+        return
+
+    cache[key] = _GuacTokenCacheEntry(
+        auth_token=auth_token,
+        data_source=data_source,
+        guac_url=guac_url,
+        expires_at=monotonic() + ttl,
+    )
 
 
 def _build_client_url(
@@ -178,6 +253,7 @@ def get_run_guac_token(
 
     Payload:
       - connection_id: Optional[str] (numeric id)
+      - force_refresh: Optional[bool] (skip cached auth token)
     """
     if not (settings.GUAC_ADMIN_USER and settings.GUAC_ADMIN_PASS):
         raise HTTPException(status_code=500, detail="guac_admin_credentials_missing")
@@ -199,30 +275,38 @@ def get_run_guac_token(
     if not parsed.scheme or not parsed.netloc:
         raise HTTPException(status_code=400, detail="guac_url_invalid")
 
-    token_url = f"{guac_url.rstrip('/')}/api/tokens"
-    try:
-        resp = httpx.post(
-            token_url,
-            data={"username": settings.GUAC_ADMIN_USER, "password": settings.GUAC_ADMIN_PASS},
-            timeout=10.0,
-        )
-    except httpx.HTTPError as exc:
-        logger.error("Guacamole token request failed: %s", exc)
-        raise HTTPException(status_code=502, detail="guac_token_upstream_error") from exc
+    force_refresh = _coerce_bool(payload.get("force_refresh"))
+    cache_key = f"run:{current_user.sub}:{run_id}"
+    cached = _get_cached_entry(_RUN_TOKEN_CACHE, cache_key, guac_url, force_refresh)
+    if cached:
+        auth_token = cached.auth_token
+        data_source = cached.data_source
+    else:
+        token_url = f"{guac_url.rstrip('/')}/api/tokens"
+        try:
+            resp = httpx.post(
+                token_url,
+                data={"username": settings.GUAC_ADMIN_USER, "password": settings.GUAC_ADMIN_PASS},
+                timeout=10.0,
+            )
+        except httpx.HTTPError as exc:
+            logger.error("Guacamole token request failed: %s", exc)
+            raise HTTPException(status_code=502, detail="guac_token_upstream_error") from exc
 
-    if resp.status_code >= 400:
-        logger.warning(
-            "Guacamole token request rejected status=%s body=%s",
-            resp.status_code,
-            resp.text[:200],
-        )
-        raise HTTPException(status_code=502, detail="guac_token_rejected")
+        if resp.status_code >= 400:
+            logger.warning(
+                "Guacamole token request rejected status=%s body=%s",
+                resp.status_code,
+                resp.text[:200],
+            )
+            raise HTTPException(status_code=502, detail="guac_token_rejected")
 
-    data = resp.json()
-    auth_token = data.get("authToken")
-    if not auth_token:
-        raise HTTPException(status_code=502, detail="guac_token_missing")
-    data_source = data.get("dataSource")
+        data = resp.json()
+        auth_token = data.get("authToken")
+        if not auth_token:
+            raise HTTPException(status_code=502, detail="guac_token_missing")
+        data_source = data.get("dataSource")
+        _store_cached_entry(_RUN_TOKEN_CACHE, cache_key, guac_url, auth_token, data_source)
 
     connection_id = _normalize_connection_id(payload.get("connection_id"))
     if not connection_id:
@@ -258,6 +342,7 @@ def get_workspace_guac_token(
     Payload:
       - workspace_id: Optional[str]
       - connection_id: Optional[str] (numeric id)
+      - force_refresh: Optional[bool] (skip cached auth token)
     """
     if not (settings.GUAC_ADMIN_USER and settings.GUAC_ADMIN_PASS):
         raise HTTPException(status_code=500, detail="guac_admin_credentials_missing")
@@ -284,30 +369,38 @@ def get_workspace_guac_token(
     if not parsed.scheme or not parsed.netloc:
         raise HTTPException(status_code=400, detail="guac_url_invalid")
 
-    token_url = f"{guac_url.rstrip('/')}/api/tokens"
-    try:
-        resp = httpx.post(
-            token_url,
-            data={"username": settings.GUAC_ADMIN_USER, "password": settings.GUAC_ADMIN_PASS},
-            timeout=10.0,
-        )
-    except httpx.HTTPError as exc:
-        logger.error("Guacamole token request failed: %s", exc)
-        raise HTTPException(status_code=502, detail="guac_token_upstream_error") from exc
+    force_refresh = _coerce_bool(payload.get("force_refresh"))
+    cache_key = f"workspace:{current_user.sub}:{ws.id}"
+    cached = _get_cached_entry(_WORKSPACE_TOKEN_CACHE, cache_key, guac_url, force_refresh)
+    if cached:
+        auth_token = cached.auth_token
+        data_source = cached.data_source
+    else:
+        token_url = f"{guac_url.rstrip('/')}/api/tokens"
+        try:
+            resp = httpx.post(
+                token_url,
+                data={"username": settings.GUAC_ADMIN_USER, "password": settings.GUAC_ADMIN_PASS},
+                timeout=10.0,
+            )
+        except httpx.HTTPError as exc:
+            logger.error("Guacamole token request failed: %s", exc)
+            raise HTTPException(status_code=502, detail="guac_token_upstream_error") from exc
 
-    if resp.status_code >= 400:
-        logger.warning(
-            "Guacamole token request rejected status=%s body=%s",
-            resp.status_code,
-            resp.text[:200],
-        )
-        raise HTTPException(status_code=502, detail="guac_token_rejected")
+        if resp.status_code >= 400:
+            logger.warning(
+                "Guacamole token request rejected status=%s body=%s",
+                resp.status_code,
+                resp.text[:200],
+            )
+            raise HTTPException(status_code=502, detail="guac_token_rejected")
 
-    data = resp.json()
-    auth_token = data.get("authToken")
-    if not auth_token:
-        raise HTTPException(status_code=502, detail="guac_token_missing")
-    data_source = data.get("dataSource")
+        data = resp.json()
+        auth_token = data.get("authToken")
+        if not auth_token:
+            raise HTTPException(status_code=502, detail="guac_token_missing")
+        data_source = data.get("dataSource")
+        _store_cached_entry(_WORKSPACE_TOKEN_CACHE, cache_key, guac_url, auth_token, data_source)
 
     connection_id = _normalize_connection_id(payload.get("connection_id"))
     if not connection_id:
