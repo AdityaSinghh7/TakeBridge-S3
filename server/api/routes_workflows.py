@@ -939,9 +939,10 @@ def get_drive_summary(
             "current_get_url": current_get_url,
             "change_get_url": change_get_url,
         }
-        changes.append(change_payload)
         if change_type == "new":
             new_files.append(change_payload)
+        else:
+            changes.append(change_payload)
 
     for row in drive_rows:
         drive_path = row.get("drive_path") or row.get("filename")
