@@ -23,6 +23,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, DisconnectionError, InvalidatePoolError, OperationalError
 
 from shared.db.engine import SessionLocal, DB_URL, engine
+from shared.db import workflow_runs
 from shared.supabase_client import get_service_supabase_client
 
 logger = logging.getLogger(__name__)
@@ -308,7 +309,8 @@ def claim_next_run(claimed_by: str) -> Optional[Dict[str, Any]]:
                         updated_at = NOW()
                     FROM next_run
                     WHERE wr.id = next_run.id
-                    RETURNING wr.id, wr.workflow_id, wr.user_id, wr.created_at
+                    RETURNING wr.id, wr.workflow_id, wr.user_id, wr.created_at,
+                              wr.started_at, wr.last_heartbeat_at, wr.claimed_by
                     """
                 ),
                 {"claimed_by": claimed_by},
@@ -332,23 +334,11 @@ def update_run_status(run_id: str, status: str, summary: Optional[str] = None):
     def _op() -> None:
         db = SessionLocal()
         try:
-            db.execute(
-                text(
-                    """
-                    UPDATE workflow_runs
-                    SET status = :status,
-                        summary = COALESCE(:summary, summary),
-                        ended_at = CASE WHEN :terminal THEN NOW() ELSE ended_at END,
-                        updated_at = NOW()
-                    WHERE id = :run_id
-                    """
-                ),
-                {
-                    "status": status,
-                    "summary": summary,
-                    "run_id": run_id,
-                    "terminal": status in {"success", "error", "attention", "cancelled"},
-                },
+            workflow_runs.update_status(
+                db,
+                run_id=run_id,
+                status=status,
+                summary=summary,
             )
             db.commit()
         except Exception:
@@ -476,6 +466,9 @@ async def run_once(claimed_by: str = "worker") -> bool:
     workflow_id = claim["workflow_id"]
     user_id = claim["user_id"]
     created_at = claim.get("created_at")
+    started_at = claim.get("started_at")
+    last_heartbeat_at = claim.get("last_heartbeat_at")
+    claimed_by = claim.get("claimed_by") or claimed_by
     if created_at is not None:
         logger.info(
             "Claimed run run_id=%s workflow_id=%s user_id=%s created_at=%s claimed_by=%s",
@@ -493,6 +486,25 @@ async def run_once(claimed_by: str = "worker") -> bool:
             user_id,
             claimed_by,
         )
+
+    db = SessionLocal()
+    try:
+        from shared.db.user_metadata import record_run_started
+
+        record_run_started(
+            db,
+            user_id=user_id,
+            run_id=run_id,
+            claimed_by=claimed_by,
+            started_at=started_at,
+            last_heartbeat_at=last_heartbeat_at,
+        )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.warning("Failed to update user metadata for run start run_id=%s: %s", run_id, exc)
+    finally:
+        db.close()
 
     try:
         wf = fetch_workflow(workflow_id)

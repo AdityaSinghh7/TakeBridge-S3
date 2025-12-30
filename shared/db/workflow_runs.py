@@ -396,6 +396,12 @@ def mark_run_attention(
             ),
             {"run_id": run_id, "summary": summary, "now": now},
         )
+        try:
+            from shared.db.user_metadata import record_run_terminal
+
+            record_run_terminal(session, run_id=run_id, status="attention", summary=summary)
+        except Exception as exc:
+            logger.warning("Failed to update user metadata for attention run_id=%s: %s", run_id, exc)
         if owns_session:
             session.commit()
         return result.rowcount or 0
@@ -527,7 +533,7 @@ def update_status(
     updated_at: Optional[datetime] = None,
     terminal_statuses: Optional[set[str]] = None,
 ) -> int:
-    terminal_set = terminal_statuses or {"success", "error", "attention", "cancelled"}
+    terminal_set = terminal_statuses or {"success", "error", "attention", "cancelled", "partial"}
     terminal = status in terminal_set
     if updated_at is None:
         result = execute_text(
@@ -542,6 +548,12 @@ def update_status(
             """,
             {"status": status, "summary": summary, "run_id": run_id, "terminal": terminal},
         )
+        try:
+            from shared.db.user_metadata import record_run_terminal
+
+            record_run_terminal(db, run_id=run_id, status=status, summary=summary)
+        except Exception as exc:
+            logger.warning("Failed to update user metadata for run_id=%s status=%s: %s", run_id, status, exc)
         return result.rowcount or 0
 
     result = execute_text(
@@ -562,6 +574,12 @@ def update_status(
             "updated_at": updated_at,
         },
     )
+    try:
+        from shared.db.user_metadata import record_run_terminal
+
+        record_run_terminal(db, run_id=run_id, status=status, summary=summary)
+    except Exception as exc:
+        logger.warning("Failed to update user metadata for run_id=%s status=%s: %s", run_id, status, exc)
     return result.rowcount or 0
 
 

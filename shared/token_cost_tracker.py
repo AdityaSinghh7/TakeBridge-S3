@@ -14,6 +14,8 @@ try:
 except Exception:  # pragma: no cover
     fcntl = None
 
+from shared.run_context import RUN_LOG_ID
+
 
 class TokenCostTracker:
     RATES_PER_TOKEN = {
@@ -151,6 +153,26 @@ class TokenCostTracker:
                 },
             }
             self._append_jsonl(entry)
+
+        if os.getenv("TOKEN_COST_DB_ENABLED", "1").lower() in {"1", "true", "yes"}:
+            run_id = RUN_LOG_ID.get()
+            if run_id:
+                try:
+                    from shared.db.user_metadata import record_token_usage
+
+                    record_token_usage(
+                        run_id=run_id,
+                        delta_tokens={
+                            "input_cached": cached,
+                            "input_new": new_input,
+                            "output": output,
+                        },
+                        delta_cost_usd=total,
+                        model=model,
+                        source=source,
+                    )
+                except Exception:
+                    pass
 
         line = (
             f"[TOKENS] model={model} src={source} cached={cached} new={new_input} "

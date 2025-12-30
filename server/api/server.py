@@ -108,6 +108,11 @@ PERSISTED_EVENTS = {
     # Human Attention (handback to human)
     "human_attention.required",
     "human_attention.resumed",
+    # Server error signals
+    "response.failed",
+    "error",
+    
+    "workspace.attachments",
 }
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -307,6 +312,14 @@ try:
 except Exception as _e:  # pragma: no cover
     logger.warning("Failed to mount drive routes: %s", _e)
 
+# Mount user metadata routes
+try:
+    from server.api.routes_user_metadata import router as user_metadata_router  # type: ignore
+    app.include_router(user_metadata_router)
+    logger.info("Mounted user metadata routes")
+except Exception as _e:  # pragma: no cover
+    logger.warning("Failed to mount user metadata routes: %s", _e)
+
 # Mount Guacamole auth routes
 try:
     from server.api.routes_guac_auth import router as guac_auth_router  # type: ignore
@@ -361,11 +374,34 @@ def _touch_run_row(run_id: str) -> None:
     db = SessionLocal()
     try:
         workflow_runs.touch_run(db, run_id=run_id)
+        try:
+            from shared.db.user_metadata import record_run_heartbeat
+
+            record_run_heartbeat(db, run_id=run_id)
+        except Exception:
+            pass
         db.commit()
     except Exception:
         db.rollback()
     finally:
         db.close()
+
+
+def _event_indicates_error(kind: str, payload: Optional[Dict[str, Any]]) -> bool:
+    payload = payload or {}
+    if kind in {"mcp.action.failed", "mcp.planner.failed", "response.failed", "error"}:
+        return True
+    if payload.get("error"):
+        return True
+    if payload.get("success") is False:
+        return True
+    status = payload.get("status")
+    if isinstance(status, str) and status.lower() in {"failed", "error", "attention"}:
+        return True
+    completion_reason = payload.get("completion_reason")
+    if isinstance(completion_reason, str) and completion_reason.upper() in {"FAIL", "HANDOFF_TO_HUMAN"}:
+        return True
+    return False
 
 
 def _insert_run_event(
@@ -390,6 +426,24 @@ def _insert_run_event(
     except Exception:
         logger.debug("Failed to insert run_event run_id=%s kind=%s", run_id, kind)
     _touch_run_row(run_id)
+    if run_id and _event_indicates_error(kind, payload):
+        db = SessionLocal()
+        try:
+            from shared.db.user_metadata import record_run_event
+
+            record_run_event(
+                db,
+                run_id=run_id,
+                kind=kind,
+                message=message,
+                payload=payload or {},
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.debug("Failed to update user metadata for run_event run_id=%s kind=%s", run_id, kind)
+        finally:
+            db.close()
 
 
 def _persist_run_event(run_id: Optional[str], event: str, data: Optional[Any]) -> None:
@@ -436,7 +490,7 @@ def _update_run_status(run_id: str, status: str, summary: Optional[str] = None):
             run_id=run_id,
             status=status,
             summary=summary,
-            terminal_statuses={"success", "error", "attention", "cancelled"},
+            terminal_statuses={"success", "error", "attention", "cancelled", "partial"},
         )
         db.commit()
     except Exception:

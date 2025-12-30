@@ -210,6 +210,13 @@ def enqueue_workflow_run(
     if tool_constraints is not None and isinstance(metadata, dict):
         metadata = dict(metadata)
         metadata["tool_constraints"] = tool_constraints
+    if isinstance(metadata, dict):
+        metadata = dict(metadata)
+        tb_metrics = metadata.get("_tb")
+        if not isinstance(tb_metrics, dict):
+            tb_metrics = {}
+        tb_metrics["credits_cost"] = RUN_CREDIT_COST
+        metadata["_tb"] = tb_metrics
     file_ids_raw = payload.get("file_ids")
     if file_ids_raw is not None and not isinstance(file_ids_raw, list):
         raise HTTPException(status_code=400, detail="file_ids_must_be_list")
@@ -382,6 +389,20 @@ def enqueue_workflow_run(
             metadata=metadata if isinstance(metadata, dict) else {},
             environment=environment_payload if isinstance(environment_payload, dict) else {},
         )
+        try:
+            from shared.db.user_metadata import record_run_enqueued
+
+            record_run_enqueued(
+                db,
+                user_id=user_id,
+                run_id=run_id,
+                workflow_id=workflow_id,
+                trigger_source=trigger_source,
+                created_at=None,
+                credits_cost=RUN_CREDIT_COST,
+            )
+        except Exception as exc:
+            logger.warning("Failed to update user metadata for enqueue run_id=%s: %s", run_id, exc)
         logger.info("Enqueue inserted workflow_runs row run_id=%s workflow_id=%s user_id=%s", run_id, workflow_id, user_id)
 
         if run_file_records:

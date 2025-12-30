@@ -42,6 +42,7 @@ class User(Base):
     
     id = Column(String, primary_key=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    metadata_json = Column("metadata", JSONType, nullable=False, server_default="{}")
     
     # Relationships
     accounts = relationship("ConnectedAccount", back_populates="user", cascade="all,delete-orphan")
@@ -108,4 +109,3 @@ class MCPConnection(Base):
     
     # Relationships
     connected_account = relationship("ConnectedAccount", back_populates="mcp_connections")
-

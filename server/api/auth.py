@@ -1,7 +1,8 @@
 # server/api/auth.py
 
 import logging
-from fastapi import Depends, HTTPException, status
+import time
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from jose import jwt, JWTError, ExpiredSignatureError
 from pydantic import BaseModel
@@ -20,10 +21,15 @@ class CurrentUser(BaseModel):
 
 
 def get_current_user(
+    request: Request,
     creds: HTTPAuthorizationCredentials = Depends(security),
 ) -> CurrentUser:
     if creds is None:
-        logger.warning("No authorization credentials provided")
+        logger.warning(
+            "No authorization credentials provided method=%s path=%s",
+            request.method,
+            request.url.path,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Not authenticated - missing Authorization header",
@@ -31,19 +37,30 @@ def get_current_user(
 
     token = creds.credentials
 
-    # Log token prefix for debugging (first 20 chars)
-    logger.debug(f"Received token (prefix): {token[:20]}...")
+    # Log token prefix for debugging (first 12 chars)
+    logger.info(
+        "Authorization header present method=%s path=%s token_prefix=%s",
+        request.method,
+        request.url.path,
+        token[:12],
+    )
 
+    unverified: dict = {}
     try:
         # Decode without verification first to check structure
         unverified = jwt.get_unverified_claims(token)
-        logger.debug(f"Token claims (unverified): {list(unverified.keys())}")
-        logger.debug(f"Token audience (aud): {unverified.get('aud')}")
+        logger.info(
+            "Token claims (unverified) aud=%s exp=%s iat=%s now=%s",
+            unverified.get("aud"),
+            unverified.get("exp"),
+            unverified.get("iat"),
+            int(time.time()),
+        )
 
         # Get the audience from the token for logging
         token_audience = unverified.get("aud")
         token_role = unverified.get("role")
-        logger.debug(f"Token role: {token_role}, audience: {token_audience}")
+        logger.info("Token role: %s, audience: %s", token_role, token_audience)
 
         # Now decode with verification
         # Supabase tokens have 'aud' claim (typically "authenticated" or "anon")
@@ -61,12 +78,19 @@ def get_current_user(
                 "verify_aud": False,  # Disable audience verification - signature check is sufficient
             },
         )
-        logger.debug(
-            f"Token decoded successfully for user: {payload.get('sub')}, role: {payload.get('role')}"
+        logger.info(
+            "Token decoded successfully user=%s role=%s",
+            payload.get("sub"),
+            payload.get("role"),
         )
 
     except ExpiredSignatureError:
-        logger.warning("Token has expired")
+        logger.warning(
+            "Token has expired exp=%s iat=%s now=%s",
+            unverified.get("exp"),
+            unverified.get("iat"),
+            int(time.time()),
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has expired",
@@ -98,5 +122,5 @@ def get_current_user(
             detail="Invalid token payload - missing user ID",
         )
 
-    logger.debug(f"Authenticated user: {sub}")
+    logger.info("Authenticated user: %s", sub)
     return CurrentUser(sub=sub, email=email, token=token)
