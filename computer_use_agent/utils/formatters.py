@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ast
+import re
+from typing import Iterable, Optional, Tuple
 
 from computer_use_agent.utils.common_utils import (
     create_pyautogui_code,
@@ -21,6 +23,105 @@ SINGLE_ACTION_FORMATTER = lambda response: (
     single_action_check(response),
     single_action_error_msg,
 )
+
+_AGENT_ACTION_NAMES = {
+    "call_code_agent",
+    "click",
+    "done",
+    "drag_and_drop",
+    "fail",
+    "handback_to_human",
+    "highlight_text_span",
+    "hold_and_press",
+    "hotkey",
+    "open",
+    "save_to_knowledge",
+    "scroll",
+    "set_cell_values",
+    "switch_applications",
+    "type",
+    "wait",
+}
+
+_CODE_BLOCK_RE = re.compile(r"```(?:\w+\s+)?(.*?)```", re.DOTALL)
+
+
+def _iter_code_blocks(text: str) -> Iterable[str]:
+    for match in _CODE_BLOCK_RE.finditer(text):
+        block = match.group(1).strip()
+        if block:
+            yield block
+
+
+def _strip_partial_code_fence_markers(text: str) -> str:
+    if _CODE_BLOCK_RE.search(text):
+        return text
+    stripped = text.strip()
+    if not stripped:
+        return text
+    stripped = re.sub(r"^\s*`{1,3}(?:\w+)?\s*\n?", "", stripped)
+    stripped = re.sub(r"\n?\s*`{1,3}\s*$", "", stripped)
+    return stripped
+
+
+def _parse_agent_action_call(code: str) -> Optional[Tuple[str, str]]:
+    code = code.strip()
+    if not code:
+        return None
+    try:
+        node = ast.parse(code, mode="eval").body
+    except Exception:
+        return None
+    if not isinstance(node, ast.Call):
+        return None
+    func = node.func
+    if not (
+        isinstance(func, ast.Attribute)
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "agent"
+    ):
+        return None
+    return func.attr, code
+
+
+def parse_agent_action(output: str) -> Optional[Tuple[str, str]]:
+    """Parse the first agent.<action>(...) call from an output or its code blocks."""
+    for block in _iter_code_blocks(output):
+        parsed = _parse_agent_action_call(block)
+        if parsed:
+            return parsed
+    sanitized = _strip_partial_code_fence_markers(output)
+    return _parse_agent_action_call(sanitized)
+
+
+def is_agent_action_spelled_correctly(action_name: Optional[str]) -> bool:
+    return bool(action_name) and action_name in _AGENT_ACTION_NAMES
+
+
+def is_agent_action_wrapped_in_code_block(output: str) -> bool:
+    for block in _iter_code_blocks(output):
+        if _parse_agent_action_call(block):
+            return True
+    return False
+
+
+def auto_wrap_agent_action_output(output: str) -> Tuple[str, bool]:
+    if is_agent_action_wrapped_in_code_block(output):
+        return output, False
+    sanitized = _strip_partial_code_fence_markers(output)
+    parsed = _parse_agent_action_call(sanitized)
+    if not parsed:
+        return output, False
+    action_name, call_text = parsed
+    if not is_agent_action_spelled_correctly(action_name):
+        return output, False
+    wrapped = f"```python\n{call_text}\n```"
+    return wrapped, True
+
+
+def normalize_agent_action_response(output: str) -> Tuple[str, bool]:
+    """Normalize unfenced agent.<action> outputs by adding code fences when safe."""
+    return auto_wrap_agent_action_output(output)
 
 
 def _attempt_code_creation(agent, code, obs):

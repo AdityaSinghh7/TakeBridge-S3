@@ -139,6 +139,15 @@ def call_llm_formatted(
             cost_source=cost_source,
             **kwargs,
         )
+        try:
+            from computer_use_agent.utils.formatters import normalize_agent_action_response
+        except Exception as exc:
+            logger.debug("Agent response normalization unavailable: %s", exc)
+        else:
+            normalized_response, wrapped = normalize_agent_action_response(response)
+            if wrapped:
+                logger.info("Auto-wrapped unfenced agent action response.")
+                response = normalized_response
 
         feedback_msgs = []
         for format_checker in format_checkers:

@@ -17,7 +17,8 @@ You have access to a code agent that can execute Python/Bash code for complex ta
 **Usage Strategy (REQUIRED)**:
 - Always call `agent.call_code_agent("...")` with a **specific, code-executable subtask**.
 - The code agent's capability is **running Python/Bash scripts via the computer/controller**. It is **not** a GUI-clicking/typing agent.
-- Your subtask string must be short and bounded, name the target artifacts (file paths / app files), and say what to print/check for verification.
+- Your subtask string must be detailed and bounded, name the target artifacts (file paths / app files), and say what to print/check for verification.
+- The code agent starts with zero task context; include all necessary context in the subtask string (data, policy text, constraints, expected outputs).
 
 Examples:
 - Good: `agent.call_code_agent("Run a python script to compute the sum of column B in report.csv and print the result.")`
@@ -111,9 +112,9 @@ agent.click("The menu button at the top right of the window", 1, "left")
 ```
 Note for the grounded action:
 1. Only perform one action at a time.
-2. Do not put anything other than python code in the block. You can only use one function call at a time. Do not put more than one function call in the block.
-3. You must use only the available methods provided above to interact with the UI, do not invent new methods.
-4. Only return one code block every time. There must be a single line of code in the code block.
+2. The code block must contain exactly one line: a single `agent.<action>(...)` call and nothing else. If using the code agent, the line must be `agent.call_code_agent("...")` with a non-empty subtask.
+3. Return exactly one fenced code block and no other code fences or inline code anywhere else in the response.
+4. You must use only the available methods provided above to interact with the UI, do not invent new methods.
 5. Do not do anything other than the exact specified task. Return with `agent.done()` immediately after the subtask is completed or `agent.fail()` if it cannot be completed.
 6. Whenever possible, your grounded action should use hot-keys with the agent.hotkey() action instead of clicking or dragging.
 7. My computer's password is 'osworld-public-evaluation', feel free to use it when you need sudo rights.

@@ -163,7 +163,7 @@ class CodeAgent:
                 "budget": self.budget,
             })
 
-        print(f"\n🚀 STARTING CODE EXECUTION")
+        print("\nSTARTING CODE EXECUTION")
         print("=" * 60)
         print(f"Task: {task_instruction}")
         print(f"Budget: {self.budget} steps")
@@ -211,7 +211,7 @@ class CodeAgent:
             )
 
             # Print to terminal for immediate visibility
-            print(f"\n🤖 CODING AGENT RESPONSE - Step {step_count + 1}/{self.budget}")
+            print(f"\nCODING AGENT RESPONSE - Step {step_count + 1}/{self.budget}")
             print("=" * 60)
             print(response)
             print("=" * 60)
@@ -245,7 +245,7 @@ class CodeAgent:
             # Check for completion signals
             action_upper = action.upper().strip()
             if action_upper == "DONE":
-                print(f"\n✅ TASK COMPLETED - Step {step_count + 1}")
+                print(f"\nTASK COMPLETED - Step {step_count + 1}")
                 print("=" * 60)
                 print("Agent signaled task completion")
                 print("=" * 60)
@@ -253,7 +253,7 @@ class CodeAgent:
                 completion_reason = "DONE"
                 break
             elif action_upper == "FAIL":
-                print(f"\n❌ TASK FAILED - Step {step_count + 1}")
+                print(f"\nTASK FAILED - Step {step_count + 1}")
                 print("=" * 60)
                 print("Agent signaled task failure")
                 print("=" * 60)
@@ -285,7 +285,7 @@ class CodeAgent:
                 )
 
                 # Print execution result to terminal for immediate visibility
-                print(f"\n⚡ CODE EXECUTION RESULT - Step {step_count + 1}")
+                print(f"\nCODE EXECUTION RESULT - Step {step_count + 1}")
                 print("-" * 50)
                 print(f"Status: {status}")
                 if output:
@@ -318,7 +318,7 @@ class CodeAgent:
                 formatted_log = "\n".join([line for line in log_lines if line])
                 logger.info(formatted_log)
             else:
-                print(f"\n⚠️  NO CODE BLOCK FOUND - Step {step_count + 1}")
+                print(f"\nNO CODE BLOCK FOUND - Step {step_count + 1}")
                 print("-" * 50)
                 print("Action did not contain executable code")
                 print("-" * 50)
@@ -359,7 +359,7 @@ class CodeAgent:
 
         # Handle budget exhaustion
         if "completion_reason" not in locals():
-            print(f"\n⏰ BUDGET EXHAUSTED - {step_count} steps completed")
+            print(f"\nBUDGET EXHAUSTED - {step_count} steps completed")
             print("=" * 60)
             print(f"Maximum budget of {self.budget} steps reached")
             print("=" * 60)
