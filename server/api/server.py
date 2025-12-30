@@ -49,7 +49,6 @@ from vm_manager.config import settings
 from orchestrator_agent.data_types import OrchestratorRequest
 from shared.run_context import RUN_LOG_ID
 from .auth import get_current_user, CurrentUser
-from .run_attachments import stage_files_for_run as stage_attachment_files_for_run, AttachmentStageError
 from .run_drive import (
     stage_drive_files_for_run,
     DriveStageError,
@@ -109,8 +108,6 @@ PERSISTED_EVENTS = {
     # Human Attention (handback to human)
     "human_attention.required",
     "human_attention.resumed",
-    
-    "workspace.attachments",
 }
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -599,16 +596,11 @@ def _attach_workspace_files(workspace: Dict[str, Any], run_id: Optional[str]) ->
         drive_files = stage_drive_files_for_run(run_id, workspace)
     except DriveStageError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
-    try:
-        attachments = stage_attachment_files_for_run(run_id, workspace)
-    except AttachmentStageError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
     updated = dict(workspace)
     if drive_files:
         updated["drive"] = drive_files
-    if attachments:
-        updated["attachments"] = attachments
     return updated
+
 
 def _create_streaming_response(
     request: OrchestrateRequest,

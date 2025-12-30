@@ -17,7 +17,6 @@ Refactor database access so API route handlers do **zero** direct SQL and instea
   - `server/api/routes_mcp_auth.py` (debug endpoint + helper)
   - `server/api/server.py` (run lifecycle helpers + `/runs/{run_id}/resume`)
 - API helper modules that do DB ops and are called by endpoints:
-  - `server/api/run_attachments.py`
   - `server/api/run_drive.py`
   - `server/api/run_artifacts.py`
 - Existing DB layer:
@@ -88,8 +87,6 @@ Additionally, several *helpers called by endpoint flows* do DB writes/reads dire
 - `_provision_controller_session(...)` inserts into `vm_instances` and updates `workflow_runs.vm_id`
 
 ### 2) API helper modules that do DB ops (not route handlers, but in `server/api/`)
-- `server/api/run_attachments.py`
-  - Reads and updates `workflow_run_files` statuses via raw SQL
 - `server/api/run_drive.py`
   - Reads and updates `workflow_run_files` via raw SQL
   - Deletes from `workflow_run_drive_changes` via raw SQL
@@ -203,20 +200,14 @@ Move run lifecycle DB helpers out of the API module:
   - `workflow_runs.get_resume_snapshot(db, run_id)` (id/user_id/status/agent_states/environment)
   - `workflow_runs.set_status(db, run_id, 'queued', updated_at=now)`
 
-### D) `server/api/run_attachments.py`
-- Replace inline `workflow_run_files` SQL with:
-  - `workflow_run_files.list_pending_non_drive_files(db, run_id)`
-  - `workflow_run_files.mark_failed(db, run_file_id, error, updated_at)`
-  - `workflow_run_files.mark_ready(db, run_file_id, vm_path, updated_at)`
-
-### E) `server/api/run_drive.py`
+### D) `server/api/run_drive.py`
 - Replace inline SQL with:
   - `workflow_run_files.list_drive_files_for_run(db, run_id)`
   - `workflow_run_files.mark_failed(...)` / `mark_ready(...)` (drive-specific fields: `drive_path`, `r2_key`, `checksum`, etc.)
   - `workflow_run_drive_changes.delete_for_run_path(db, run_id, path)`
   - `workflow_run_drive_changes.insert_change(db, ...)`
 
-### F) `server/api/run_artifacts.py`
+### E) `server/api/run_artifacts.py`
 - Move environment helpers into `shared/db/workflow_runs.py`:
   - `get_environment(db, run_id)`
   - `merge_environment(db, run_id, patch)`
@@ -232,7 +223,7 @@ Move run lifecycle DB helpers out of the API module:
 [ ] Refactor `server/api/routes_workflows.py` to call DB functions (no inline SQL / `SessionLocal()` queries beyond session creation).
 [ ] Refactor `server/api/routes_guac_auth.py` to reuse DB helper(s) for run→endpoint lookup.
 [ ] Refactor `server/api/server.py` to import DB helpers for run lifecycle (heartbeat/status/environment/vm binding) and remove raw SQL from helpers.
-[ ] Refactor `server/api/run_attachments.py`, `server/api/run_drive.py`, `server/api/run_artifacts.py` to use DB functions.
+[ ] Refactor `server/api/run_drive.py`, `server/api/run_artifacts.py` to use DB functions.
 [ ] Add SQL-safety guardrails (`shared/db/sql.py` wrapper + `scripts/check_sql_safety.py`).
 [ ] Validate behavior:
   - run existing tests (e.g., `pytest`)
