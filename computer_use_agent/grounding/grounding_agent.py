@@ -17,6 +17,7 @@ from computer_use_agent.memory.procedural_memory import PROCEDURAL_MEMORY
 from computer_use_agent.utils.common_utils import call_llm_safe, compress_image
 from shared.latency_logger import LATENCY_LOGGER
 from shared.streaming import emit_event
+from shared.text_utils import safe_ascii
 from shared.hierarchical_logger import (
     get_hierarchical_logger,
     get_step_id,
@@ -929,7 +930,7 @@ class OSWorldACI(ACI):
         logger.info("=" * 50)
 
         task_to_execute = subtask.strip()
-        logger.info("Executing CODE SUBTASK: %s", task_to_execute)
+        logger.info("Executing CODE SUBTASK: %s", safe_ascii(task_to_execute))
 
         # Log code agent call to hierarchical logger
         if grounding_logger:
@@ -960,7 +961,7 @@ class OSWorldACI(ACI):
         logger.info("Code agent execution completed")
         logger.info("Result - Completion reason: %s", result.get("completion_reason"))
         logger.info("Steps executed: %s", result.get("steps_executed"))
-        logger.info("Summary: %s", result.get("summary"))
+        logger.info("Summary: %s", safe_ascii(result.get("summary")))
 
         logger.info("=" * 50)
         logger.info("GROUNDING AGENT: Code Agent Call Finished")

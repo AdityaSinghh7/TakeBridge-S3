@@ -44,6 +44,7 @@ from shared.streaming import (
     reset_current_emitter,
     set_current_emitter,
 )
+from shared.stdio import ensure_utf8_stdio
 from vm_manager.vm_provider import create_agent_instance_for_user, current_provider, provider_spec
 from vm_manager.config import settings
 from orchestrator_agent.data_types import OrchestratorRequest
@@ -123,6 +124,7 @@ if load_dotenv:
     load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
+ensure_utf8_stdio()
 logger = logging.getLogger(__name__)
 
 # Suppress uvicorn access logs to WARNING level (keep errors, remove routine logs)

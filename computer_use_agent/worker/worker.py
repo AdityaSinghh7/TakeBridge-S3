@@ -26,6 +26,7 @@ from computer_use_agent.utils.formatters import (
     CALL_CODE_AGENT_SUBTASK_REQUIRED_FORMATTER,
 )
 from shared.streaming import emit_event
+from shared.text_utils import safe_ascii
 from shared.hierarchical_logger import (
     get_hierarchical_logger,
     get_step_id,
@@ -640,7 +641,9 @@ class Worker(BaseModule):
                     f"logs/code_agent_result_step_{self.turn_count + 1}_{timestamp}.txt"
                 )
 
-                with open(filename, "w") as f:
+                with open(
+                    filename, "w", encoding="utf-8", errors="backslashreplace"
+                ) as f:
                     f.write(f"CODE AGENT RESULT - Step {self.turn_count + 1}\n")
                     f.write(f"Timestamp: {datetime.now().isoformat()}\n")
                     f.write(
@@ -704,7 +707,9 @@ class Worker(BaseModule):
                         log_message += f"... (truncated {total_steps - 5} steps) ...\n"
 
             logger.info(
-                f"WORKER_CODE_AGENT_RESULT_SECTION - Step {self.turn_count + 1}: Code agent result added to generator message:\n{log_message}"
+                "WORKER_CODE_AGENT_RESULT_SECTION - Step %s: Code agent result added to generator message:\n%s",
+                self.turn_count + 1,
+                safe_ascii(log_message),
             )
 
             # Reset the code agent result after adding it to context

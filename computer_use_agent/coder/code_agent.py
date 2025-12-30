@@ -6,6 +6,7 @@ from computer_use_agent.memory.procedural_memory import PROCEDURAL_MEMORY
 from computer_use_agent.utils.common_utils import call_llm_safe, split_thinking_response
 from computer_use_agent.core.mllm import LMMAgent
 from shared.streaming import emit_event
+from shared.text_utils import safe_ascii
 from shared.hierarchical_logger import (
     get_hierarchical_logger,
     get_step_id,
@@ -165,11 +166,12 @@ class CodeAgent:
 
         print("\nSTARTING CODE EXECUTION")
         print("=" * 60)
-        print(f"Task: {task_instruction}")
+        safe_task = safe_ascii(task_instruction)
+        print(f"Task: {safe_task}")
         print(f"Budget: {self.budget} steps")
         print("=" * 60)
 
-        logger.info(f"Starting code execution for task: {task_instruction}")
+        logger.info("Starting code execution for task: %s", safe_task)
         logger.info(f"Budget: {self.budget} steps")
 
         self.reset()
@@ -213,12 +215,14 @@ class CodeAgent:
             # Print to terminal for immediate visibility
             print(f"\nCODING AGENT RESPONSE - Step {step_count + 1}/{self.budget}")
             print("=" * 60)
-            print(response)
+            print(safe_ascii(response))
             print("=" * 60)
 
             # Log the latest message from the coding agent (untruncated)
             logger.info(
-                f"CODING_AGENT_LATEST_MESSAGE - Step {step_count + 1}:\n{response}"
+                "CODING_AGENT_LATEST_MESSAGE - Step %s:\n%s",
+                step_count + 1,
+                safe_ascii(response),
             )
 
             # Check if response is None or empty
@@ -316,7 +320,7 @@ class CodeAgent:
 
                 # Remove None entries and join
                 formatted_log = "\n".join([line for line in log_lines if line])
-                logger.info(formatted_log)
+                logger.info(safe_ascii(formatted_log))
             else:
                 print(f"\nNO CODE BLOCK FOUND - Step {step_count + 1}")
                 print("-" * 50)

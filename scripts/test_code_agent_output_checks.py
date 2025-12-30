@@ -24,7 +24,7 @@ from computer_use_agent.utils.formatters import (
 )
 
 DEFAULT_OUTPUT = (
-    "`\n"
+    "```\n"
     "agent.call_code_agent(\"Run a Python script to parse the given order JSON and refund policy, "
     "apply the 'damaged' full-refund rule within 30 days, and print the final decision JSON.\")\n"
     "```"
