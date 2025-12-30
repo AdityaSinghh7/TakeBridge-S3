@@ -18,7 +18,7 @@ import os
 import secrets
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from dataclasses import asdict
 from typing import Any, Dict, Optional, Tuple, List
 from urllib.parse import urlparse
@@ -59,6 +59,10 @@ from .run_drive import (
 from shared.supabase_client import get_service_supabase_client
 from shared.db.engine import SessionLocal, DB_URL
 from shared.db import vm_instances, workflow_runs
+from mcp_agent.registry.connected_accounts import (
+    check_connected_account_statuses,
+    resolve_tool_constraint_providers,
+)
 
 # Persisted event whitelist (see docs/latest_frontend_connection_guide.md)
 PERSISTED_EVENTS = {
@@ -1035,14 +1039,74 @@ async def internal_execute_run(
     if not task:
         raise HTTPException(status_code=400, detail="task required")
 
+    tool_constraints = payload.get("tool_constraints")
+    if tool_constraints is None:
+        db = SessionLocal()
+        try:
+            metadata = workflow_runs.get_metadata(db, run_id=run_id)
+        finally:
+            db.close()
+        if isinstance(metadata, dict):
+            tool_constraints = metadata.get("tool_constraints")
+    if tool_constraints is not None and not isinstance(tool_constraints, dict):
+        raise HTTPException(status_code=400, detail="tool_constraints_must_be_object")
+
     logger.info(
         "Internal execute requested run_id=%s workflow_id=%s user_id=%s task_len=%s tool_constraints=%s",
         run_id,
         workflow_id,
         user_id,
         len(task),
-        bool(payload.get("tool_constraints")),
+        bool(tool_constraints),
     )
+
+    providers_to_check = resolve_tool_constraint_providers(tool_constraints)
+    status_check = check_connected_account_statuses(
+        user_id,
+        providers=providers_to_check,
+    )
+    blocked_providers = status_check.get("blocked_providers") or []
+    if blocked_providers:
+        detail = {
+            "error": "oauth_refresh_required",
+            "providers": blocked_providers,
+            "reasons": status_check.get("reasons") or {},
+        }
+        logger.warning(
+            "Internal execute blocked due to oauth refresh required run_id=%s workflow_id=%s user_id=%s providers=%s reasons=%s",
+            run_id,
+            workflow_id,
+            user_id,
+            blocked_providers,
+            detail["reasons"],
+        )
+        db = SessionLocal()
+        try:
+            workflow_runs.merge_metadata(
+                db,
+                run_id=run_id,
+                patch={
+                    "oauth_refresh_required": {
+                        "providers": blocked_providers,
+                        "reasons": detail["reasons"],
+                        "checked_at": datetime.now(timezone.utc).isoformat(),
+                        "source": "pre_execute",
+                    }
+                },
+            )
+            workflow_runs.update_status(
+                db,
+                run_id=run_id,
+                status="attention",
+                summary="oauth_refresh_required",
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+        finally:
+            db.close()
+        raise HTTPException(status_code=409, detail=detail)
 
     controller_override = payload.get("controller")
     try:
@@ -1050,8 +1114,7 @@ async def internal_execute_run(
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
-    payload = {**payload, "controller": controller_data, "task": task}
-    tool_constraints = payload.get("tool_constraints")
+    payload = {**payload, "controller": controller_data, "task": task, "tool_constraints": tool_constraints}
     composed_plan = payload.get("composed_plan")
 
     request = _parse_orchestrate_request(payload)

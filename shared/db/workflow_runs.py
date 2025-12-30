@@ -442,6 +442,42 @@ def get_environment(db: Session, *, run_id: str, user_id: Optional[str] = None) 
     return _parse_json_dict(row)
 
 
+def get_metadata(db: Session, *, run_id: str, user_id: Optional[str] = None) -> Dict[str, Any] | None:
+    """
+    Fetch workflow_runs.metadata as a dict.
+
+    Returns None if the run is not found (or not owned by user_id when provided).
+    """
+    sql = "SELECT metadata FROM workflow_runs WHERE id = :run_id"
+    params: Dict[str, Any] = {"run_id": run_id}
+    if user_id is not None:
+        sql += " AND user_id = :user_id"
+        params["user_id"] = user_id
+    row = execute_text(db, sql, params).scalar_one_or_none()
+    if row is None:
+        return None
+    return _parse_json_dict(row)
+
+
+def merge_metadata(db: Session, *, run_id: str, patch: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Read/merge/write workflow_runs.metadata using a shallow dict update.
+    """
+    metadata = get_metadata(db, run_id=run_id) or {}
+    metadata.update(patch or {})
+    execute_text(
+        db,
+        """
+        UPDATE workflow_runs
+        SET metadata = :metadata,
+            updated_at = NOW()
+        WHERE id = :run_id
+        """,
+        {"metadata": json.dumps(metadata), "run_id": run_id},
+    )
+    return metadata
+
+
 def get_user_id(db: Session, *, run_id: str) -> str | None:
     return execute_text(
         db,

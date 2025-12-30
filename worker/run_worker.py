@@ -45,6 +45,14 @@ DB_RETRY_BACKOFF_JITTER_SECONDS = float(os.getenv("WORKER_DB_RETRY_BACKOFF_JITTE
 T = TypeVar("T")
 
 
+class OAuthRefreshRequiredError(RuntimeError):
+    def __init__(self, detail: Dict[str, Any]):
+        super().__init__("oauth_refresh_required")
+        self.detail = detail or {}
+        self.providers = self.detail.get("providers") or []
+        self.reasons = self.detail.get("reasons") or {}
+
+
 def _token_fingerprint(token: str) -> str:
     if not token:
         return "unset"
@@ -428,10 +436,20 @@ def trigger_execution(run_id: str, workflow_id: str, user_id: str, task: str, co
     ) as resp:
         if resp.status_code >= 300:
             text_body = ""
+            error_detail: Dict[str, Any] = {}
             try:
                 text_body = resp.text
             except Exception:
                 pass
+            try:
+                payload_json = resp.json()
+                if isinstance(payload_json, dict):
+                    detail = payload_json.get("detail")
+                    error_detail = detail if isinstance(detail, dict) else payload_json
+            except Exception:
+                pass
+            if resp.status_code == 409 and error_detail.get("error") == "oauth_refresh_required":
+                raise OAuthRefreshRequiredError(error_detail)
             logger.error(
                 "Executor call failed run_id=%s workflow_id=%s status=%s body_preview=%s internal_token_fp=%s headers=%s",
                 run_id,
@@ -486,6 +504,14 @@ async def run_once(claimed_by: str = "worker") -> bool:
         composed_plan = definition_json
         logger.info("Triggering execution for run %s workflow %s task_prompt=%s", run_id, workflow_id, task_prompt)
         trigger_execution(run_id, workflow_id, user_id, task_prompt, composed_plan)
+    except OAuthRefreshRequiredError as exc:
+        logger.warning(
+            "Run %s blocked by oauth refresh required providers=%s reasons=%s",
+            run_id,
+            exc.providers,
+            exc.reasons,
+        )
+        update_run_status(run_id, "attention", summary="oauth_refresh_required")
     except Exception as exc:
         logger.exception("Run %s failed to trigger execution: %s", run_id, exc)
         update_run_status(run_id, "error", summary=str(exc))

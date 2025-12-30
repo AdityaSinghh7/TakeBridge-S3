@@ -27,6 +27,10 @@ from server.api.auth import CurrentUser, get_current_user
 from server.api.controller_client import VMControllerClient
 from server.api.drive_utils import build_drive_key, normalize_drive_path
 from server.api.run_drive import DOWNLOAD_CHUNK_BYTES, DRIVE_VM_BASE_PATH
+from mcp_agent.registry.connected_accounts import (
+    check_connected_account_statuses,
+    resolve_tool_constraint_providers,
+)
 from shared.db import (
     profiles,
     workflow_files,
@@ -200,6 +204,12 @@ def enqueue_workflow_run(
     trigger_source = payload.get("trigger_source") or "manual"
     metadata = payload.get("metadata") or {}
     environment_payload = payload.get("environment") or {}
+    tool_constraints = payload.get("tool_constraints")
+    if tool_constraints is not None and not isinstance(tool_constraints, dict):
+        raise HTTPException(status_code=400, detail="tool_constraints_must_be_object")
+    if tool_constraints is not None and isinstance(metadata, dict):
+        metadata = dict(metadata)
+        metadata["tool_constraints"] = tool_constraints
     file_ids_raw = payload.get("file_ids")
     if file_ids_raw is not None and not isinstance(file_ids_raw, list):
         raise HTTPException(status_code=400, detail="file_ids_must_be_list")
@@ -316,6 +326,31 @@ def enqueue_workflow_run(
             metadata_keys,
             sorted(environment_payload.keys()) if isinstance(environment_payload, dict) else [f"<{type(environment_payload).__name__}>"],
         )
+
+        providers_to_check = resolve_tool_constraint_providers(tool_constraints)
+        status_check = check_connected_account_statuses(
+            user_id,
+            providers=providers_to_check,
+            db_session=db,
+        )
+        blocked_providers = status_check.get("blocked_providers") or []
+        if blocked_providers:
+            logger.warning(
+                "Enqueue blocked due to oauth refresh required run_id=%s workflow_id=%s user_id=%s providers=%s reasons=%s",
+                run_id,
+                workflow_id,
+                user_id,
+                blocked_providers,
+                status_check.get("reasons") or {},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "oauth_refresh_required",
+                    "providers": blocked_providers,
+                    "reasons": status_check.get("reasons") or {},
+                },
+            )
 
         # Debit credits atomically
         credits_remaining = profiles.debit_credits(db, user_id=user_id, cost=RUN_CREDIT_COST)

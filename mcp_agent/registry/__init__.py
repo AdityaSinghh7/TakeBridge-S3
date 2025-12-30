@@ -18,6 +18,13 @@ from .crud import (
     get_mcp_client,
     is_provider_available,
 )
+from .connected_accounts import (
+    resolve_tool_constraint_providers,
+    list_active_connected_accounts,
+    fetch_connected_accounts_for_user,
+    build_connected_account_index,
+    check_connected_account_statuses,
+)
 
 __all__ = [
     # OAuth
@@ -41,4 +48,9 @@ __all__ = [
     "check_availability",
     "get_mcp_client",
     "is_provider_available",
+    "resolve_tool_constraint_providers",
+    "list_active_connected_accounts",
+    "fetch_connected_accounts_for_user",
+    "build_connected_account_index",
+    "check_connected_account_statuses",
 ]
