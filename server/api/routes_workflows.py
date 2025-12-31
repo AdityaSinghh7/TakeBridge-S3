@@ -672,6 +672,56 @@ def get_workflow(
 
 
 
+
+@router.delete("/workflows/{workflow_id}")
+def delete_workflow(
+    workflow_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Delete a workflow and any uploaded workflow files for the current user.
+    """
+    client = get_supabase_client(current_user.token)
+    _get_supabase_workflow(client, workflow_id)
+
+    db = SessionLocal()
+    try:
+        records = workflow_files.list_for_workflow(
+            db,
+            workflow_id=workflow_id,
+            user_id=current_user.sub,
+        )
+        try:
+            storage = get_attachment_storage()
+        except AttachmentStorageError as exc:
+            storage = None
+            logger.error("Attachment storage misconfigured during delete: %s", exc)
+
+        for record in records:
+            if storage:
+                try:
+                    storage.delete_object(record.storage_key)
+                except Exception as exc:  # pragma: no cover - log but do not block deletion
+                    logger.warning(
+                        "Failed to delete attachment object %s: %s",
+                        record.storage_key,
+                        exc,
+                    )
+            workflow_files.delete(db, record)
+        db.commit()
+    finally:
+        db.close()
+
+    try:
+        client.table("workflows").delete().eq("id", workflow_id).execute()
+    except APIError as exc:
+        if getattr(exc, "code", "") == "PGRST116":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="workflow_not_found") from exc
+        raise
+
+    return {"deleted": True}
+
+
 @router.get("/runs/{run_id}/vm")
 def get_run_vm(
     run_id: str,
