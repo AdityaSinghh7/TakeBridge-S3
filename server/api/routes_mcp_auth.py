@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse
 from urllib.parse import quote_plus, urlencode, urlparse, parse_qsl
 
 import os
+import inspect
 import requests
 from sqlalchemy import select
 from shared.db.engine import session_scope
@@ -18,7 +19,7 @@ from mcp_agent.registry.oauth import (
 from mcp_agent.user_identity import normalize_user_id
 from mcp_agent.knowledge.introspection import get_manifest as get_toolbox_manifest
 from mcp_agent.knowledge.search import search_tools as toolbox_search_tools, list_providers as toolbox_list_providers
-from mcp_agent.knowledge.utils import safe_filename
+from mcp_agent.knowledge.utils import safe_filename, parse_action_docstring, short_description
 from mcp_agent.registry.connected_accounts import check_connected_account_statuses
 from shared.settings import build_redirect, OAUTH_REDIRECT_BASE
 from mcp_agent.mcp_client import MCPClient
@@ -284,6 +285,29 @@ def list_providers(request: Request, current_user: CurrentUser = Depends(get_cur
                 "reason": refresh_reasons.get(prov),
             }
     
+    action_details_by_provider: dict[str, list[dict[str, Any]]] = {}
+    for prov, funcs in action_map.items():
+        details = []
+        for func in funcs:
+            doc = inspect.getdoc(func) or ""
+            description, _ = parse_action_docstring(doc)
+            short_desc = short_description(
+                description or doc,
+                fallback=f"{prov}.{func.__name__}",
+            )
+            details.append(
+                {
+                    "name": func.__name__,
+                    "provider": prov,
+                    "description": description or doc.strip() or short_desc,
+                    "short_description": short_desc,
+                    "doc": doc,
+                    "available": bool(provider_statuses.get(prov, {}).get("authorized")),
+                    "path": f"providers/{prov}/tools/{safe_filename(func.__name__)}.json",
+                }
+            )
+        action_details_by_provider[prov] = details
+
     providers: list[dict[str, Any]] = []
     for prov in SUPPORTED_PROVIDERS:
         entry = summaries.get(prov, {})
@@ -318,6 +342,7 @@ def list_providers(request: Request, current_user: CurrentUser = Depends(get_cur
                 "mcp_url": status.get("mcp_url") or entry.get("mcp_url"),
                 "tool_count": entry.get("tool_count") or len(actions),
                 "actions": entry.get("all_actions") or actions,
+                "actions_detail": action_details_by_provider.get(prov, []),
                 "available_tools": entry.get("available_tools") or actions,
                 "manifest_path": entry.get("path") or f"providers/{prov}/provider.json",
             }
