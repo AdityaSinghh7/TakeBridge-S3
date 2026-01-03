@@ -314,9 +314,12 @@ def shopify_graph_ql_query(
 
     Notes:
         - The response envelope is still {"successful": bool, "data": {...}, "error": str | null}.
-        - For GraphQL operations, `data` is normalized to the GraphQL data root (the inner `data` object).
+        - For GraphQL operations, `data` is normalized to the GraphQL data root (the inner `data` object),
+          so do not access resp["data"]["data"] in sandbox code.
         - Any GraphQL errors/extensions are surfaced on the envelope as `graphql_errors` and
           `graphql_extensions` (when present in the raw response).
+        - For schema-safe access in sandbox code, the same details are also injected under
+          resp["data"]["_tb_graphql"]["errors"] and resp["data"]["_tb_graphql"]["extensions"] when present.
     """
     provider = "shopify"
     tool_name = "SHOPIFY_GRAPH_QL_QUERY"
@@ -345,7 +348,7 @@ def _normalize_graphql_result(result: ToolInvocationResult) -> ToolInvocationRes
 
     if graphql_data is not None:
         result["data"] = graphql_data
-    elif graphql_errors is not None:
+    elif graphql_errors is not None or graphql_extensions is not None:
         result["data"] = {}
 
     if graphql_errors is not None:
@@ -357,5 +360,15 @@ def _normalize_graphql_result(result: ToolInvocationResult) -> ToolInvocationRes
 
     if graphql_extensions is not None:
         result["graphql_extensions"] = graphql_extensions
+
+    if graphql_errors is not None or graphql_extensions is not None:
+        data_root = result.get("data")
+        if isinstance(data_root, dict) and "_tb_graphql" not in data_root:
+            meta: dict[str, object] = {}
+            if graphql_errors is not None:
+                meta["errors"] = graphql_errors
+            if graphql_extensions is not None:
+                meta["extensions"] = graphql_extensions
+            data_root["_tb_graphql"] = meta
 
     return result

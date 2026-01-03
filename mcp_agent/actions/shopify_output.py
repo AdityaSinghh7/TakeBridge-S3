@@ -9681,6 +9681,19 @@ SHOPIFY_GRAPH_QL_QUERY_OUTPUT_SCHEMA = {
   "type": "object"
 }
 
+# Expose GraphQL errors/extensions under the data payload for schema-safe access.
+_tb_graphql_schema = {
+  "additionalProperties": False,
+  "description": "Internal metadata for GraphQL errors and extensions surfaced by the wrapper.",
+  "properties": {
+    "errors": SHOPIFY_GRAPH_QL_QUERY_OUTPUT_SCHEMA["properties"]["graphql_errors"],
+    "extensions": SHOPIFY_GRAPH_QL_QUERY_OUTPUT_SCHEMA["properties"]["graphql_extensions"]
+  },
+  "title": "Tb Graphql Metadata",
+  "type": "object"
+}
+SHOPIFY_GRAPH_QL_QUERY_OUTPUT_SCHEMA["properties"]["data"].setdefault("properties", {})["_tb_graphql"] = _tb_graphql_schema
+
 shopify_get_order_list_output_schema = SHOPIFY_GET_ORDER_LIST_OUTPUT_SCHEMA
 shopify_get_ordersby_id_output_schema = SHOPIFY_GET_ORDERSBY_ID_OUTPUT_SCHEMA
 shopify_update_order_output_schema = SHOPIFY_UPDATE_ORDER_OUTPUT_SCHEMA

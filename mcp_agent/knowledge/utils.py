@@ -425,12 +425,17 @@ def summarize_schema_for_llm(
         return_truncation=True,
     )
 
+    tier2_lines = _root_structural_lines(data_schema)
+
     # Fast-path: small schemas (keep previous behavior: no fold markers)
     if not candidate_truncated and len(candidate_leaves) <= max_fields:
-        # Preserve ordering from traversal.
-        return candidate_leaves, False
-
-    tier2_lines = _root_structural_lines(data_schema)
+        if candidate_leaves:
+            # Preserve ordering from traversal.
+            return candidate_leaves, False
+        if tier2_lines:
+            # Fall back to root structural lines when no leaves are visible.
+            return tier2_lines, True
+        return [], False
 
     # Tier-1: greedy scan (bounded for safety) only when we are summarizing.
     tier1_pattern = re.compile(TIER_1_REGEX)
