@@ -21,6 +21,7 @@ Use a simple supervisor so each runs as its own process but starts with a single
 ### Procfile (honcho/foreman)
 ```
 web: uvicorn server.api.server:app --host 0.0.0.0 --port 8000
+runtime: uvicorn runtime.api.server:app --host 0.0.0.0 --port 8001
 worker: python -m worker.run_worker
 ```
 Run: `honcho start` (or `foreman start`). To scale, e.g. `honcho start -c web=2,worker=4`. In Docker, set `CMD ["honcho", "start"]`.
@@ -29,6 +30,11 @@ Run: `honcho start` (or `foreman start`). To scale, e.g. `honcho start -c web=2,
 ```
 [program:web]
 command=uvicorn server.api.server:app --host 0.0.0.0 --port 8000
+autostart=true
+autorestart=true
+
+[program:runtime]
+command=uvicorn runtime.api.server:app --host 0.0.0.0 --port 8001
 autostart=true
 autorestart=true
 

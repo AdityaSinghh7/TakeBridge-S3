@@ -9,7 +9,6 @@ import posixpath
 import re
 import time
 import uuid
-from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 from uuid import UUID
@@ -17,16 +16,15 @@ from uuid import UUID
 import httpcore
 import httpx
 from botocore.exceptions import ClientError
-from fastapi import APIRouter, Body, Depends, HTTPException, status
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from fastapi.responses import StreamingResponse, Response
 from postgrest.exceptions import APIError
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from server.api.auth import CurrentUser, get_current_user
-from server.api.controller_client import VMControllerClient
 from server.api.drive_utils import build_drive_key, normalize_drive_path
-from server.api.run_drive import DOWNLOAD_CHUNK_BYTES, DRIVE_VM_BASE_PATH
+from server.api.runtime_proxy import proxy_request_sync
 from mcp_agent.registry.connected_accounts import (
     check_connected_account_statuses,
     resolve_tool_constraint_providers,
@@ -832,76 +830,17 @@ def commit_drive_changes(
 @router.post("/runs/{run_id}/commit-drive-file")
 def commit_drive_file(
     run_id: str,
+    request: Request,
     payload: Dict[str, Any] = Body(default_factory=dict),
     current_user: CurrentUser = Depends(get_current_user),
-) -> Dict[str, Any]:
-    path_raw = payload.get("path") or payload.get("drive_path")
-    if not path_raw:
-        raise HTTPException(status_code=400, detail="drive_path_required")
-    try:
-        drive_path = normalize_drive_path(str(path_raw))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-    db = SessionLocal()
-    try:
-        if not workflow_runs.is_owned(db, run_id=run_id, user_id=current_user.sub):
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run_not_found")
-
-        rows = workflow_run_drive_changes.list_for_run_user(
-            db,
-            run_id=run_id,
-            user_id=current_user.sub,
-        )
-        change_row = next((row for row in rows if row.path == drive_path), None)
-        if not change_row:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="drive_change_not_found")
-
-        drive_row = workflow_run_files.get_drive_file_row(
-            db,
-            run_id=run_id,
-            user_id=current_user.sub,
-            drive_path=drive_path,
-        )
-        if not drive_row:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="drive_file_not_found")
-
-        controller_base_url = _get_run_controller_base_url(db, run_id, current_user.sub)
-    finally:
-        db.close()
-
-    try:
-        storage = get_attachment_storage()
-    except AttachmentStorageError as exc:
-        logger.error("Attachment storage misconfigured: %s", exc)
-        raise HTTPException(status_code=500, detail="attachments_not_configured")
-
-    content_type = change_row.content_type or mimetypes.guess_type(drive_path)[0] or DEFAULT_ATTACHMENT_CONTENT_TYPE
-    presigned_put_url = storage.generate_presigned_put(change_row.r2_key, content_type=content_type)
-
-    controller = VMControllerClient(base_url=controller_base_url)
-    controller.wait_for_health()
-    windows = ":" in DRIVE_VM_BASE_PATH or "\\" in DRIVE_VM_BASE_PATH
-    vm_path = drive_row.get("vm_path")
-    if not vm_path:
-        if windows:
-            vm_path = str(PureWindowsPath(DRIVE_VM_BASE_PATH, *drive_path.split("/")))
-        else:
-            vm_path = str(PurePosixPath(DRIVE_VM_BASE_PATH, *drive_path.split("/")))
-
-    try:
-        controller.upload_file_to_url(vm_path, presigned_put_url, content_type=content_type)
-    except Exception as exc:
-        logger.error("[drive] failed to upload %s to R2: %s", vm_path, exc)
-        raise HTTPException(status_code=500, detail="drive_upload_failed")
-
-    return {
-        "path": drive_path,
-        "r2_key": change_row.r2_key,
-        "content_type": content_type,
-        "size": change_row.size_bytes,
-        "status": "uploaded",
-    }
+) -> Response:
+    return proxy_request_sync(
+        "POST",
+        f"/api/runs/{run_id}/commit-drive-file",
+        headers=dict(request.headers),
+        json_body=payload,
+        stream=False,
+    )
 
 
 @router.post("/runs/{run_id}/apply-drive-changes")
@@ -1078,45 +1017,16 @@ def get_drive_summary(
 def download_drive_file(
     run_id: str,
     path: str,
+    request: Request,
     current_user: CurrentUser = Depends(get_current_user),
 ) -> StreamingResponse:
-    try:
-        drive_path = normalize_drive_path(path)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-    db = SessionLocal()
-    try:
-        row = workflow_run_files.get_drive_file_row(
-            db,
-            run_id=run_id,
-            user_id=current_user.sub,
-            drive_path=drive_path,
-        )
-        if not row:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="drive_file_not_found")
-        controller_base_url = _get_run_controller_base_url(db, run_id, current_user.sub)
-    finally:
-        db.close()
-
-    controller = VMControllerClient(base_url=controller_base_url)
-    controller.wait_for_health()
-    windows = ":" in DRIVE_VM_BASE_PATH or "\\" in DRIVE_VM_BASE_PATH
-    vm_path = row.get("vm_path")
-    if not vm_path:
-        if windows:
-            vm_path = str(PureWindowsPath(DRIVE_VM_BASE_PATH, *drive_path.split("/")))
-        else:
-            vm_path = str(PurePosixPath(DRIVE_VM_BASE_PATH, *drive_path.split("/")))
-    content_type = row.get("content_type") or mimetypes.guess_type(drive_path)[0] or DEFAULT_ATTACHMENT_CONTENT_TYPE
-
-    def _iter_stream():
-        with controller.stream_file(vm_path) as resp:
-            for chunk in resp.iter_content(chunk_size=DOWNLOAD_CHUNK_BYTES):
-                if chunk:
-                    yield chunk
-
-    return StreamingResponse(_iter_stream(), media_type=content_type)
+    return proxy_request_sync(
+        "GET",
+        f"/api/runs/{run_id}/drive-file",
+        headers=dict(request.headers),
+        params=dict(request.query_params),
+        stream=True,
+    )
 
 
 @router.patch("/workflows/{workflow_id}")
