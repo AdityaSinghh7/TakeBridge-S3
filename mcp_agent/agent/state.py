@@ -24,6 +24,8 @@ import uuid
 from shared.token_cost_tracker import TokenCostTracker
 from shared.streaming import emit_event
 
+from mcp_agent.utils.event_logger import log_mcp_event
+
 from .budget import Budget, BudgetTracker, BudgetSnapshot
 from .prompts import PLANNER_PROMPT
 from .history import ExecutionHistory, AgentStep, StepType
@@ -279,6 +281,7 @@ class AgentState:
         log_entry = {"event": event, **enriched}
         self.logs.append(log_entry)
         emit_event(event, enriched)
+        log_mcp_event(event, enriched, source="state")
 
     # --- Tool discovery cache (delegates to ToolCache) ---
 

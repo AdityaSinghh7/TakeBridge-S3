@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Iterable, Optional
 
-from shared.oai_client import OAIClient, extract_assistant_text
+from shared.llm_client import LLMClient, extract_assistant_text
 from shared.latency_logger import LATENCY_LOGGER
 from shared.token_cost_tracker import TOKEN_TRACKER
 
@@ -21,7 +21,7 @@ class LMMEngine:
 
 
 class LMMEngineOpenAI(LMMEngine):
-    """Thin wrapper around the OpenAI Responses API via `OAIClient`."""
+    """Thin wrapper around the LLM facade via `LLMClient`."""
 
     def __init__(
         self,
@@ -47,9 +47,6 @@ class LMMEngineOpenAI(LMMEngine):
         self.reasoning_summary = reasoning_summary
         self.max_output_tokens = max_output_tokens
         self.default_tools = default_tools
-        self._supports_temperature = not (
-            isinstance(model, str) and model.lower().startswith("o4-")
-        )
 
         client_kwargs: Dict[str, Any] = {
             "api_key": api_key,
@@ -69,7 +66,11 @@ class LMMEngineOpenAI(LMMEngine):
         if retry_backoff_jitter is not None:
             client_kwargs["retry_backoff_jitter"] = retry_backoff_jitter
 
-        self.client = OAIClient(**client_kwargs)
+        self.client = LLMClient(**client_kwargs)
+        self.model = self.client.default_model
+        self._supports_temperature = not (
+            isinstance(self.model, str) and self.model.lower().startswith("o4-")
+        )
 
     def generate(
         self,
@@ -130,5 +131,6 @@ class LMMEngineOpenAI(LMMEngine):
             else:
                 response = self.client.create_response(**request_kwargs)
 
-        TOKEN_TRACKER.record_response(self.model, source_name, response)
+        model_name = getattr(response, "model", None) or self.model
+        TOKEN_TRACKER.record_response(model_name, source_name, response)
         return extract_assistant_text(response) or ""

@@ -26,10 +26,27 @@ Cross-cutting utilities used across the system:
 
 - **`shared/token_cost_tracker.py`** - LLM token cost tracking with budget enforcement
 - **`shared/logger.py`** - Unified logging infrastructure
-- **`shared/oai_client.py`** - Single OpenAI client for all LLM calls
+- **`shared/llm_client.py`** - Provider-agnostic LLM facade (OpenAI/DeepSeek/OpenRouter routing)
+- **`shared/oai_client.py`** - OpenAI Responses API client
+- **`shared/deepseek_client.py`** - DeepSeek Chat Completions client
+- **`shared/openrouter_client.py`** - OpenRouter Chat Completions client
 - **`shared/streaming.py`** - Event emission for streaming updates
 
 All LLM invocations and telemetry go through these shared modules.
+
+**LLM routing knobs (env):**
+- `LLM_PROVIDER=openai|deepseek|openrouter` (default: `openai`)
+- `LLM_MODEL=o4-mini` (optional default OpenAI model)
+- `DEEPSEEK_API_KEY=...` (required for DeepSeek)
+- `DEEPSEEK_BASE_URL=https://api.deepseek.com` (optional override)
+- `DEEPSEEK_MODEL=deepseek-reasoner` (optional override)
+- `OPENROUTER_API_KEY=...` (required for OpenRouter)
+- `OPENROUTER_BASE_URL=https://openrouter.ai/api/v1` (optional override)
+- `OPENROUTER_MODEL=qwen/qwen3-vl-235b-a22b-instruct` (optional override)
+- `OPENROUTER_HTTP_REFERER=...` (optional header for OpenRouter ranking)
+- `OPENROUTER_TITLE=...` (optional header for OpenRouter ranking)
+- `LLM_IMAGE_PROVIDER=openrouter` (optional; route image content from DeepSeek to a multimodal provider)
+- `LLM_FALLBACK_PROVIDER=openai` (optional; use when DeepSeek hits unsupported Responses API features)
 
 ### Layer 1: MCP Core
 
@@ -331,7 +348,9 @@ mcp_agent/
 shared/                   # Cross-cutting (Layer 0)
 ├── token_cost_tracker.py
 ├── logger.py
+├── llm_client.py
 ├── oai_client.py
+├── deepseek_client.py
 └── streaming.py
 
 docs/                     # Documentation

@@ -65,6 +65,18 @@ def analyze_sandbox(code: str) -> tuple[Set[str], Dict[str, Set[str]], Dict[str,
     return used_servers, calls_by_server, call_details
 
 
+_RECOVERABLE_SANDBOX_ERRORS = {"KeyError", "IndexError", "AttributeError", "TypeError"}
+
+
+def _extract_missing_key(error: Any) -> str | None:
+    if not isinstance(error, str):
+        return None
+    stripped = error.strip()
+    if len(stripped) >= 2 and stripped[0] == stripped[-1] and stripped[0] in {"'", '"'}:
+        return stripped[1:-1]
+    return None
+
+
 class ActionExecutor:
     """Routes actions to appropriate handlers and returns observations."""
 
@@ -919,13 +931,40 @@ class ActionExecutor:
                 "result": normalized_result,
                 "timed_out": False,
             }
+            error_type = None
+            missing_key = None
+            if isinstance(normalized_result, dict):
+                error_type = normalized_result.get("error_type")
+                if error_type == "KeyError":
+                    missing_key = _extract_missing_key(normalized_result.get("error"))
+
+            recoverable = error_type in _RECOVERABLE_SANDBOX_ERRORS
+            error_code = "sandbox_logic_error" if recoverable else "sandbox_runtime_error"
+            if error_type:
+                error_payload["error_type"] = error_type
+            if missing_key:
+                error_payload["missing_key"] = missing_key
+            if recoverable:
+                prior_errors = 0
+                for step in self.agent_state.history:
+                    if (
+                        step.action_type == "sandbox"
+                        and step.error == error_code
+                        and (step.action_input.get("label") or "").strip() == label
+                    ):
+                        prior_errors += 1
+                error_payload["prior_errors"] = prior_errors
+                error_payload["recoverable"] = True
+                error_payload["hint"] = (
+                    "Sandbox code accessed missing/invalid data; check response keys before indexing."
+                )
             return StepResult(
                 type="sandbox",
                 success=False,
                 observation=error_payload,
                 preview=preview,
                 error=runtime_error,
-                error_code="sandbox_runtime_error",
+                error_code=error_code,
                 raw_output_key=result_key,
             )
 

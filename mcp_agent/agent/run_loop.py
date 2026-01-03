@@ -11,6 +11,7 @@ from mcp_agent.env_sync import ensure_env_for_provider
 from mcp_agent.registry.crud import get_available_providers
 from mcp_agent.user_identity import normalize_user_id
 from mcp_agent.sandbox.ephemeral import generate_ephemeral_toolbox
+from mcp_agent.utils.event_logger import log_mcp_event
 from shared import agent_signal
 from shared.run_context import RUN_LOG_ID
 
@@ -390,6 +391,16 @@ class AgentOrchestrator:
                             recorded_step=True,
                         )
                     return None
+                if error_code == "sandbox_logic_error":
+                    prior_errors = observation.get("prior_errors", 0)
+                    if prior_errors >= 2:
+                        return self._failure(
+                            error_code,
+                            error_message,
+                            preview=error_message,
+                            recorded_step=True,
+                        )
+                    return None
                 return self._failure(
                     error_code or "sandbox_runtime_error",
                     error_message,
@@ -605,12 +616,14 @@ def execute_mcp_task(
         mcp_logger = h_logger.get_agent_logger("mcp", step_id)
 
         # Emit SSE event: task started
-        emit_event("mcp.task.started", {
-            "task": task[:100],
+        started_payload = {
+            "task": task,
             "user_id": normalized_user,
             "step_id": step_id,
             "tool_constraints": tool_constraints,
-        })
+        }
+        emit_event("mcp.task.started", started_payload)
+        log_mcp_event("mcp.task.started", started_payload, source="run_loop")
 
         # Log to hierarchical logger
         mcp_logger.log_event("task.started", {
@@ -682,10 +695,12 @@ def execute_mcp_task(
             result = runtime.run()
 
             # Emit SSE event: task completed
-            emit_event("mcp.task.completed", {
+            completed_payload = {
                 "success": result.get("success", False),
                 "step_id": step_id,
-            })
+            }
+            emit_event("mcp.task.completed", completed_payload)
+            log_mcp_event("mcp.task.completed", completed_payload, source="run_loop")
 
             # Log to hierarchical logger
             mcp_logger.log_event("task.completed", {

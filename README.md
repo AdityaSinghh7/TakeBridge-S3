@@ -11,6 +11,22 @@ The repository now exposes a Python-only planner entrypoint at
 - Initial provider coverage is limited to Composio-backed **Slack** and **Gmail** wrappers defined in `mcp_agent.actions`.
 - Toolbox generation is now Python-only; TypeScript manifests have been removed to avoid stale dual stacks.
 
+### LLM provider configuration
+
+Use these environment variables to route all LLM calls:
+
+- `LLM_PROVIDER=openai|deepseek|openrouter` (default: `openai`)
+- `LLM_MODEL=o4-mini` (optional default model for OpenAI provider)
+- `DEEPSEEK_API_KEY=...` (required when `LLM_PROVIDER=deepseek`)
+- `DEEPSEEK_BASE_URL=https://api.deepseek.com` (optional override)
+- `DEEPSEEK_MODEL=deepseek-reasoner` (optional override)
+- `OPENROUTER_API_KEY=...` (required when `LLM_PROVIDER=openrouter` or when `LLM_IMAGE_PROVIDER=openrouter`)
+- `OPENROUTER_BASE_URL=https://openrouter.ai/api/v1` (optional override)
+- `OPENROUTER_MODEL=qwen/qwen3-vl-235b-a22b-instruct` (optional override)
+- `OPENROUTER_HTTP_REFERER=...` / `OPENROUTER_TITLE=...` (optional OpenRouter headers)
+- `LLM_IMAGE_PROVIDER=openrouter` (optional; route image-content calls to a multimodal provider)
+- `LLM_FALLBACK_PROVIDER=openai` (optional; recommended fallback for DeepSeek when Responses API features are used)
+
 ### Provider onboarding
 
 To add another provider in this architecture:

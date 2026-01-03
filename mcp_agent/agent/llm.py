@@ -7,7 +7,7 @@ import json
 import sys
 from typing import Any, Dict, List, TYPE_CHECKING
 
-from shared.oai_client import OAIClient, extract_assistant_text
+from shared.llm_client import LLMClient, extract_assistant_text
 from .prompts import PLANNER_PROMPT
 
 if TYPE_CHECKING:
@@ -16,12 +16,12 @@ if TYPE_CHECKING:
 
 
 class PlannerLLM:
-    """Helper that formats planner context and issues LLM calls via `shared.oai_client`."""
+    """Helper that formats planner context and issues LLM calls via `shared.llm_client`."""
 
     def __init__(
         self,
         *,
-        client: OAIClient | None = None,
+        client: LLMClient | None = None,
         model: str = "o4-mini",
         enabled: bool | None = None,
     ) -> None:
@@ -60,7 +60,8 @@ class PlannerLLM:
             )
             json_mode_kwargs.pop("text", None)
             response = client.create_response(**json_mode_kwargs)
-        context.token_tracker.record_response(self.model, "planner.llm", response)
+        model_name = getattr(response, "model", None) or self.model
+        context.token_tracker.record_response(model_name, "planner.llm", response)
         total_cost = getattr(context.token_tracker, "total_cost_usd", None)
         if isinstance(total_cost, (int, float)):
             context.budget_tracker.update_llm_cost(float(total_cost))
@@ -84,9 +85,9 @@ class PlannerLLM:
         flag = os.getenv("MCP_PLANNER_LLM_ENABLED", "")
         return flag.lower() in {"1", "true", "yes", "on"}
 
-    def _get_client(self) -> OAIClient:
+    def _get_client(self) -> LLMClient:
         if self._client is None:
-            self._client = OAIClient(default_model=self.model)
+            self._client = LLMClient(default_model=self.model)
         return self._client
 
     def _build_messages(

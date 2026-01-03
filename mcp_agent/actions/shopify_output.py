@@ -9479,7 +9479,7 @@ SHOPIFY_GRAPH_QL_QUERY_OUTPUT_SCHEMA = {
     "data": {
       "additionalProperties": True,
       "default": None,
-      "description": "Contains the result of the executed GraphQL operation. The structure within this object mirrors the structure of the corresponding GraphQL request. At least one of 'data' or 'errors' will be present. May contain partial data if field-level errors occurred during execution.",
+      "description": "Contains the GraphQL data root (the inner 'data' object). This payload is already unwrapped from the standard GraphQL response shape; see graphql_errors/graphql_extensions for GraphQL errors and extensions when present.",
       "nullable": True,
       "title": "Data",
       "type": "object"
@@ -9491,9 +9491,9 @@ SHOPIFY_GRAPH_QL_QUERY_OUTPUT_SCHEMA = {
       "title": "Error",
       "type": "string"
     },
-    "errors": {
+    "graphql_errors": {
       "default": None,
-      "description": "Array of error objects containing information about errors that occurred during request processing or execution. At least one of 'data' or 'errors' will be present. Request errors (syntax/validation) will only include 'errors' without 'data'.",
+      "description": "Array of GraphQL error objects returned by Shopify. Present when the GraphQL response included errors.",
       "items": {
         "description": "Represents an error that occurred during GraphQL request processing or execution.",
         "properties": {
@@ -9601,13 +9601,13 @@ SHOPIFY_GRAPH_QL_QUERY_OUTPUT_SCHEMA = {
         "type": "object"
       },
       "nullable": True,
-      "title": "Errors",
+      "title": "Graphql Errors",
       "type": "array"
     },
-    "extensions": {
+    "graphql_extensions": {
       "additionalProperties": False,
       "default": None,
-      "description": "Implementation-specific metadata about the response, including query cost and rate limit status.",
+      "description": "GraphQL response extensions returned by Shopify, including query cost and rate limit status.",
       "nullable": True,
       "properties": {
         "cost": {
@@ -9665,7 +9665,7 @@ SHOPIFY_GRAPH_QL_QUERY_OUTPUT_SCHEMA = {
           "type": "object"
         }
       },
-      "title": "ResponseExtensions",
+      "title": "Graphql Extensions",
       "type": "object"
     },
     "successful": {

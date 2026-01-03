@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, Mapping
 
 from mcp_agent.execution.response_ops import MCPResponseOps
+from mcp_agent.utils.event_logger import log_mcp_event
 from shared.streaming import emit_event
 
 # Manually curated high-signal paths per provider/tool.
@@ -256,15 +257,14 @@ def emit_high_signal(provider: str, tool: str, result: Mapping[str, Any]) -> Non
 
     # Emit error-only payload on failure
     if not success:
-        emit_event(
-            "mcp.high_signal",
-            {
-                "provider": provider,
-                "tool": tool,
-                "success": False,
-                "error": ops.get_error(),
-            },
-        )
+        payload = {
+            "provider": provider,
+            "tool": tool,
+            "success": False,
+            "error": ops.get_error(),
+        }
+        emit_event("mcp.high_signal", payload)
+        log_mcp_event("mcp.high_signal", payload, source="high_signal")
         return
 
     paths = HIGH_SIGNAL_KEYS.get(provider, {}).get(tool, [])
@@ -276,15 +276,14 @@ def emit_high_signal(provider: str, tool: str, result: Mapping[str, Any]) -> Non
     if not signals:
         return
 
-    emit_event(
-        "mcp.high_signal",
-        {
-            "provider": provider,
-            "tool": tool,
-            "success": True,
-            "signals": signals,
-        },
-    )
+    payload = {
+        "provider": provider,
+        "tool": tool,
+        "success": True,
+        "signals": signals,
+    }
+    emit_event("mcp.high_signal", payload)
+    log_mcp_event("mcp.high_signal", payload, source="high_signal")
 
 
 __all__ = ["emit_high_signal", "HIGH_SIGNAL_KEYS"]

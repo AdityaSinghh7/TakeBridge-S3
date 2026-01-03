@@ -11,6 +11,7 @@ from mcp_agent.registry import get_mcp_client, is_provider_available
 from mcp_agent.high_signal import emit_high_signal, HIGH_SIGNAL_KEYS
 from mcp_agent.types import ToolInvocationResult
 from mcp_agent.user_identity import normalize_user_id
+from mcp_agent.utils.event_logger import log_mcp_event
 from shared.streaming import emit_event
 
 if TYPE_CHECKING:
@@ -123,45 +124,51 @@ def _invoke_mcp_tool(
     use_execute_api = False
     # use_execute_api = os.getenv("COMPOSIO_TOOL_EXECUTE_ENABLED", "0").strip() not in {"0", "false", "False"}
 
-    emit_event(
-        "mcp.action.started",
-        {
-            "server": provider,
-            "tool": tool,
-            "payload_keys": payload_keys,
-            "user_id": user_id,
-        },
-    )
+    started_payload = {
+        "server": provider,
+        "tool": tool,
+        "payload_keys": payload_keys,
+        "user_id": user_id,
+    }
+    emit_event("mcp.action.started", started_payload)
+    log_mcp_event("mcp.action.started", started_payload, source="wrapper")
 
     try:
         if use_execute_api:
             logger.info("Invoking via Composio execute API provider=%s tool=%s user=%s", provider, tool, user_id)
-            emit_event(
-                "mcp.action.transport",
-                {"server": provider, "tool": tool, "transport": "composio_execute_api", "user_id": user_id},
-            )
+            transport_payload = {
+                "server": provider,
+                "tool": tool,
+                "transport": "composio_execute_api",
+                "user_id": user_id,
+            }
+            emit_event("mcp.action.transport", transport_payload)
+            log_mcp_event("mcp.action.transport", transport_payload, source="wrapper")
             response = _invoke_via_composio_api(context, provider, tool, payload)
         else:
             logger.info("Invoking via MCP stream client provider=%s tool=%s user=%s", provider, tool, user_id)
-            emit_event(
-                "mcp.action.transport",
-                {"server": provider, "tool": tool, "transport": "mcp_stream", "user_id": user_id},
-            )
+            transport_payload = {
+                "server": provider,
+                "tool": tool,
+                "transport": "mcp_stream",
+                "user_id": user_id,
+            }
+            emit_event("mcp.action.transport", transport_payload)
+            log_mcp_event("mcp.action.transport", transport_payload, source="wrapper")
             client = get_mcp_client(context, provider)
             if not client:
                 raise RuntimeError(f"MCP client not available for provider: {provider}")
             response = client.call(tool, payload)
     except Exception as exc:  # pragma: no cover - passthrough to caller
         error_message = str(exc)
-        emit_event(
-            "mcp.action.failed",
-            {
-                "server": provider,
-                "tool": tool,
-                "error": error_message,
-                "user_id": user_id,
-            },
-        )
+        failed_payload = {
+            "server": provider,
+            "tool": tool,
+            "error": error_message,
+            "user_id": user_id,
+        }
+        emit_event("mcp.action.failed", failed_payload)
+        log_mcp_event("mcp.action.failed", failed_payload, source="wrapper")
         result = _structured_result(
             provider,
             tool,
@@ -171,14 +178,13 @@ def _invoke_mcp_tool(
         emit_high_signal(provider, tool, result)
         return result
 
-    emit_event(
-        "mcp.action.completed",
-        {
-            "server": provider,
-            "tool": tool,
-            "user_id": user_id,
-        },
-    )
+    completed_payload = {
+        "server": provider,
+        "tool": tool,
+        "user_id": user_id,
+    }
+    emit_event("mcp.action.completed", completed_payload)
+    log_mcp_event("mcp.action.completed", completed_payload, source="wrapper")
     normalized = _normalize_tool_response(provider, tool, payload_keys, response)
     emit_high_signal(provider, tool, normalized)
     return normalized
@@ -241,16 +247,15 @@ def _invoke_via_composio_api(
     # Log full headers/body (no redaction) to surface exact request; use cautiously
     logger.info("POST %s provider=%s tool=%s user=%s headers(full)=%s body=%s", url, provider, tool, user_id, headers, safe_body)
     print(f"[composio_execute] POST {url} provider={provider} tool={tool} user={user_id} headers={headers} body={safe_body}")
-    emit_event(
-        "mcp.action.request",
-        {
-            "server": provider,
-            "tool": tool,
-            "transport": "composio_execute_api",
-            "url": url,
-            "user_id": user_id,
-        },
-    )
+    request_payload = {
+        "server": provider,
+        "tool": tool,
+        "transport": "composio_execute_api",
+        "url": url,
+        "user_id": user_id,
+    }
+    emit_event("mcp.action.request", request_payload)
+    log_mcp_event("mcp.action.request", request_payload, source="wrapper")
     resp = requests.post(url, json=body, headers=headers, timeout=30)
     if 200 <= resp.status_code < 300:
         try:

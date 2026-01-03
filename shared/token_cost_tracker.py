@@ -24,6 +24,11 @@ class TokenCostTracker:
             "input_cached": 0.275 / 1_000_000.0,
             "output": 4.40 / 1_000_000.0,
         },
+        "deepseek-reasoner": {
+            "input_new": 0.28 / 1_000_000.0,
+            "input_cached": 0.028 / 1_000_000.0,
+            "output": 0.42 / 1_000_000.0,
+        },
         "gpt-5-nano-2025-08-07": {
             "input_new": 0.05 / 1_000_000.0,
             "input_cached": 0.005 / 1_000_000.0,

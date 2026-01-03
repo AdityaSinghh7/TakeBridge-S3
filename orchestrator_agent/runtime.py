@@ -526,7 +526,7 @@ class OrchestratorRuntime:
         self, system_prompt: str, request: OrchestratorRequest
     ) -> Dict:
         """
-        Call LLM to decide the next step using OAIClient Responses API.
+        Call LLM to decide the next step using the shared LLM client.
 
         Args:
             system_prompt: The dynamic system prompt with capabilities and context
@@ -538,7 +538,7 @@ class OrchestratorRuntime:
         Raises:
             Exception if LLM call fails after retry
         """
-        from shared.oai_client import OAIClient, extract_assistant_text
+        from shared.llm_client import LLMClient, extract_assistant_text
 
         # Simple user message - just the task
         user_message = f"What should be the next step to accomplish this goal?"
@@ -548,8 +548,8 @@ class OrchestratorRuntime:
             {"role": "user", "content": user_message},
         ]
 
-        # Use OAIClient wrapper with Responses API for better retry logic
-        client = OAIClient(
+        # Use LLMClient wrapper for better retry logic
+        client = LLMClient(
             default_model="o4-mini",
             default_reasoning_effort="medium",
             max_retries=1,  # We'll retry once internally

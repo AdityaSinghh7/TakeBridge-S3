@@ -11,7 +11,7 @@ import json
 import logging
 from typing import Any, Dict
 
-from shared.oai_client import OAIClient, extract_assistant_text
+from shared.llm_client import LLMClient, extract_assistant_text
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ def infer_human_action(
             - confidence: str - "high", "medium", or "low"
             - details: str - additional context
     """
-    client = OAIClient(
+    client = LLMClient(
         default_model="o4-mini",
         default_reasoning_effort="medium",
         max_retries=2,
@@ -209,4 +209,3 @@ def format_inference_for_context(
 
 
 __all__ = ["infer_human_action", "format_inference_for_context"]
-

@@ -18,9 +18,9 @@ from typing import Any, Dict, Optional
 from orchestrator_agent.data_types import AgentTarget
 
 try:  # Optional dependency
-    from shared.oai_client import OAIClient, extract_assistant_text
+    from shared.llm_client import LLMClient, extract_assistant_text
 except Exception:  # pragma: no cover
-    OAIClient = None  # type: ignore
+    LLMClient = None  # type: ignore
     extract_assistant_text = None  # type: ignore
 
 logger = logging.getLogger(__name__)
@@ -476,9 +476,9 @@ def translate_step_output(
     )
 
     client = llm_client
-    if client is None and OAIClient is not None:
+    if client is None and LLMClient is not None:
         try:
-            client = OAIClient()
+            client = LLMClient()
             logger.info("translator.llm_client_ready target=%s", target)
         except Exception:
             logger.info("translator.llm_client_unavailable target=%s", target)

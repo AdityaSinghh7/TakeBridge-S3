@@ -11,7 +11,7 @@ from computer_use_agent.core.engine import LMMEngineOpenAI
 
 
 class LMMAgent:
-    """Minimal multimodal agent wrapper built on top of the OpenAI Responses API."""
+    """Minimal multimodal agent wrapper built on top of the shared LLM facade."""
 
     def __init__(
         self,
@@ -23,7 +23,7 @@ class LMMAgent:
             if engine_params is None:
                 raise ValueError("engine_params must be provided when engine is None")
             engine_type = engine_params.get("engine_type", "openai")
-            if engine_type != "openai":
+            if engine_type not in {"openai", "deepseek", "openrouter"}:
                 raise ValueError(f"engine_type '{engine_type}' is not supported")
             self.engine = LMMEngineOpenAI(**engine_params)
         else:

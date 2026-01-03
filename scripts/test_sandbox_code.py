@@ -5,6 +5,8 @@ Run a sandbox code snippet for a given user id using the existing sandbox engine
 Example:
   python scripts/test_sandbox_code.py --user-id dev-local --code-file ./snippet.py
   python scripts/test_sandbox_code.py --user-id dev-local --code "result = 1+1\nreturn {'x': result}"
+  python scripts/test_sandbox_code.py --user-id dev-local --code-file ./snippet.py --mode run-loop
+  python scripts/test_sandbox_code.py --user-id dev-local --code-file ./snippet.py --allow-tool shopify.shopify_get_ordersby_id
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ import sys
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from mcp_agent.core.context import AgentContext
 from mcp_agent.execution.runner import run_python_plan
@@ -24,6 +26,7 @@ from mcp_agent.sandbox.ephemeral import generate_ephemeral_toolbox
 from mcp_agent.agent.state import AgentState
 from mcp_agent.agent.budget import Budget
 from mcp_agent.agent.executor import ActionExecutor
+from mcp_agent.agent.run_loop import AgentOrchestrator
 
 
 def _read_code(args: argparse.Namespace) -> str:
@@ -60,21 +63,122 @@ def _build_args() -> argparse.Namespace:
     parser.add_argument("--python-exec", help="Python executable to run the sandbox (defaults to current).")
     parser.add_argument("--json", dest="json_out", action="store_true", help="Emit JSON only.")
     parser.add_argument(
+        "--mode",
+        choices=("run-loop", "executor", "runner"),
+        default="run-loop",
+        help="Execution path: run-loop (AgentOrchestrator) | executor (ActionExecutor) | runner (direct).",
+    )
+    parser.add_argument(
         "--debug-plan-dir",
         help="If set, sandbox will copy the rendered plan.py to this directory for inspection.",
     )
     parser.add_argument(
         "--via-executor",
         action="store_true",
-        help="Run through ActionExecutor._execute_sandbox to see the agent-visible StepResult.",
+        help="Deprecated: use --mode executor. Run through ActionExecutor._execute_sandbox.",
+    )
+    parser.add_argument(
+        "--via-run-loop",
+        action="store_true",
+        help="Deprecated: use --mode run-loop. Run through AgentOrchestrator.",
+    )
+    parser.add_argument(
+        "--allow-tool",
+        action="append",
+        default=[],
+        help="Whitelist a tool for sandbox guardrails (provider.tool). Repeatable or comma-separated.",
     )
     return parser.parse_args()
+
+
+def _parse_allow_tools(raw_values: List[str]) -> List[Dict[str, Any]]:
+    results: List[Dict[str, Any]] = []
+    for raw in raw_values or []:
+        for entry in (raw or "").split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            if "." not in entry:
+                raise SystemExit(f"--allow-tool must be provider.tool (got '{entry}')")
+            provider, tool = entry.split(".", 1)
+            provider = provider.strip()
+            tool = tool.strip()
+            if not provider or not tool:
+                raise SystemExit(f"--allow-tool must be provider.tool (got '{entry}')")
+            results.append(
+                {
+                    "server": provider,
+                    "provider": provider,
+                    "tool": tool,
+                    "tool_id": f"{provider}.{tool}",
+                }
+            )
+    return results
+
+
+def _resolve_mode(args: argparse.Namespace) -> str:
+    if args.via_executor:
+        return "executor"
+    if args.via_run_loop:
+        return "run-loop"
+    return args.mode
+
+
+def _seed_search_results(agent_state: AgentState, allow_tools: List[Dict[str, Any]]) -> None:
+    if not allow_tools:
+        return
+    agent_state.merge_search_results(allow_tools)
+
+
+class _SandboxPlanner:
+    def __init__(self, code_body: str, *, label: str = "test") -> None:
+        self._code_body = code_body
+        self._label = label
+        self.model = "sandbox-test"
+
+    def is_enabled(self) -> bool:
+        return True
+
+    def generate_plan(self, context: AgentState) -> Dict[str, Any]:
+        last_step = context.history[-1] if context.history else None
+        if last_step and last_step.action_type == "sandbox":
+            if last_step.success:
+                command = {
+                    "type": "finish",
+                    "reasoning": "sandbox test complete",
+                    "summary": "sandbox test complete",
+                }
+            else:
+                command = {
+                    "type": "fail",
+                    "reasoning": "sandbox test failed",
+                    "reason": last_step.error or "sandbox failed",
+                }
+            return {"text": json.dumps(command)}
+
+        command = {
+            "type": "sandbox",
+            "reasoning": "sandbox test run",
+            "code": self._code_body,
+            "label": self._label,
+        }
+        return {"text": json.dumps(command)}
+
+
+def _extract_sandbox_step(result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    steps = result.get("steps") or []
+    for step in reversed(steps):
+        if step.get("action_type") == "sandbox":
+            return step
+    return None
 
 
 def main() -> int:
     args = _build_args()
     code_body = _read_code(args).rstrip()
     request_id = args.request_id or uuid.uuid4().hex
+    mode = _resolve_mode(args)
+    allow_tools = _parse_allow_tools(args.allow_tool)
 
     # Optional plan debug snapshot
     if args.debug_plan_dir:
@@ -88,7 +192,7 @@ def main() -> int:
         generate_ephemeral_toolbox(context, toolbox_root)
 
         # Option 1: direct sandbox runner (legacy behavior)
-        if not args.via_executor:
+        if mode == "runner":
             result = run_python_plan(
                 context,
                 code_body,
@@ -112,7 +216,54 @@ def main() -> int:
 
             return 0 if (result.success and not result.timed_out) else 1
 
-        # Option 2: run through ActionExecutor to see StepResult as the agent would
+        if mode == "executor":
+            # Option 2: run through ActionExecutor to see StepResult as the agent would
+            agent_state = AgentState(
+                task="sandbox-test",
+                user_id=args.user_id,
+                request_id=request_id,
+                budget=Budget(),
+                extra_context={},
+            )
+            _seed_search_results(agent_state, allow_tools)
+
+            executor = ActionExecutor(context, agent_state)
+            step_result = executor.execute_step(
+                {
+                    "type": "sandbox",
+                    "code": code_body,
+                    "label": "test",
+                    "reasoning": "test run",
+                }
+            )
+
+            payload = {
+                "success": step_result.success,
+                "error_code": step_result.error_code,
+                "error": step_result.error,
+                "timed_out": bool(getattr(step_result, "timed_out", False)),
+                "preview": step_result.preview,
+                "observation": step_result.observation,
+                "is_smart_summary": step_result.is_smart_summary,
+                "raw_output_key": step_result.raw_output_key,
+            }
+
+            if args.json_out:
+                print(json.dumps(payload, indent=2, ensure_ascii=False))
+            else:
+                print(f"Mode        : executor")
+                print(f"Success     : {payload['success']}")
+                print(f"Error code  : {payload['error_code']}")
+                print(f"Error       : {payload['error']}")
+                print(f"Preview     : {payload['preview']}")
+                print("Observation :")
+                print(json.dumps(payload.get("observation"), indent=2, ensure_ascii=False))
+
+            return 0 if step_result.success else 1
+
+        # Option 3: run through AgentOrchestrator (run_loop -> executor -> runner)
+        if args.timeout != 30 or args.python_exec:
+            print("Note: --timeout/--python-exec are ignored in run-loop mode.")
         agent_state = AgentState(
             task="sandbox-test",
             user_id=args.user_id,
@@ -120,49 +271,39 @@ def main() -> int:
             budget=Budget(),
             extra_context={},
         )
-        # Allow the sandbox to use googledocs server (minimal search result entry)
-        agent_state.merge_search_results(
-            [
-                {
-                    "server": "googledocs",
-                    "tool": "googledocs_search_documents",
-                    "tool_id": "googledocs.googledocs_search_documents",
-                }
-            ]
-        )
+        _seed_search_results(agent_state, allow_tools)
 
-        executor = ActionExecutor(context, agent_state)
-        step_result = executor.execute_step(
-            {
-                "type": "sandbox",
-                "code": code_body,
-                "label": "test",
-                "reasoning": "test run",
-            }
-        )
+        llm = _SandboxPlanner(code_body, label="test")
+        runtime = AgentOrchestrator(context, agent_state, llm=llm)
+        result = runtime.run()
 
-        payload: Dict[str, Any] = {
-            "success": step_result.success,
-            "error_code": step_result.error_code,
-            "error": step_result.error,
-            "timed_out": bool(getattr(step_result, "timed_out", False)),
-            "preview": step_result.preview,
-            "observation": step_result.observation,
-            "is_smart_summary": step_result.is_smart_summary,
-            "raw_output_key": step_result.raw_output_key,
+        sandbox_step = _extract_sandbox_step(result or {})
+        payload = {
+            "mode": "run-loop",
+            "success": result.get("success"),
+            "error_code": result.get("error_code"),
+            "error": result.get("error_message") or result.get("error"),
+            "final_summary": result.get("final_summary"),
+            "run_id": result.get("run_id"),
+            "steps": len(result.get("steps") or []),
+            "sandbox_step": sandbox_step,
         }
 
         if args.json_out:
             print(json.dumps(payload, indent=2, ensure_ascii=False))
         else:
+            print(f"Mode        : run-loop")
             print(f"Success     : {payload['success']}")
             print(f"Error code  : {payload['error_code']}")
             print(f"Error       : {payload['error']}")
-            print(f"Preview     : {payload['preview']}")
-            print("Observation :")
-            print(json.dumps(payload.get("observation"), indent=2, ensure_ascii=False))
+            print(f"Summary     : {payload['final_summary']}")
+            print(f"Run ID      : {payload['run_id']}")
+            print(f"Steps       : {payload['steps']}")
+            if sandbox_step:
+                print("Sandbox step:")
+                print(json.dumps(sandbox_step, indent=2, ensure_ascii=False))
 
-        return 0 if step_result.success else 1
+        return 0 if result.get("success") else 1
 
 
 if __name__ == "__main__":

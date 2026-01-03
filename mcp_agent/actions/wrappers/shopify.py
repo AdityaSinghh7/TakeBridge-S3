@@ -306,17 +306,56 @@ def shopify_graph_ql_query(
     variables: dict | None = None,
 ) -> ToolInvocationResult:
     """
-    Execute a GraphQL operation against the Shopify Admin API.
+    Execute a GraphQL operation against the Shopify Admin API (response["data"] is the GraphQL data root; GraphQL errors/extensions are exposed on graphql_errors/graphql_extensions).
 
     Args:
         query: The GraphQL query string to execute against the Shopify Admin API.
         variables: Optional variables to supply to the query (dictionary).
+
+    Notes:
+        - The response envelope is still {"successful": bool, "data": {...}, "error": str | null}.
+        - For GraphQL operations, `data` is normalized to the GraphQL data root (the inner `data` object).
+        - Any GraphQL errors/extensions are surfaced on the envelope as `graphql_errors` and
+          `graphql_extensions` (when present in the raw response).
     """
     provider = "shopify"
     tool_name = "SHOPIFY_GRAPH_QL_QUERY"
     ensure_authorized(context, provider)
     payload = _clean_payload({"query": query, "variables": variables})
-    return _invoke_mcp_tool(context, provider, tool_name, payload)
+    result = _invoke_mcp_tool(context, provider, tool_name, payload)
+    return _normalize_graphql_result(result)
 
 
 shopify_graph_ql_query.__tb_output_schema__ = shopify_graph_ql_query_output_schema
+
+
+def _normalize_graphql_result(result: ToolInvocationResult) -> ToolInvocationResult:
+    """Normalize GraphQL responses to keep `data` at the GraphQL data root."""
+    if not isinstance(result, dict):
+        return result
+    data = result.get("data")
+    if not isinstance(data, dict):
+        return result
+    if not any(key in data for key in ("data", "errors", "extensions")):
+        return result
+
+    graphql_data = data.get("data")
+    graphql_errors = data.get("errors")
+    graphql_extensions = data.get("extensions")
+
+    if graphql_data is not None:
+        result["data"] = graphql_data
+    elif graphql_errors is not None:
+        result["data"] = {}
+
+    if graphql_errors is not None:
+        result["graphql_errors"] = graphql_errors
+        if graphql_errors and not result.get("error"):
+            if graphql_data in (None, {}):
+                result["error"] = "graphql_errors"
+                result["successful"] = False
+
+    if graphql_extensions is not None:
+        result["graphql_extensions"] = graphql_extensions
+
+    return result

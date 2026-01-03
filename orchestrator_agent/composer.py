@@ -13,7 +13,7 @@ import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from orchestrator_agent.composed_plan import ComposedPlan, ComposedStep
-from shared.oai_client import respond_once, extract_assistant_text
+from shared.llm_client import respond_once, extract_assistant_text
 
 logger = logging.getLogger(__name__)
 

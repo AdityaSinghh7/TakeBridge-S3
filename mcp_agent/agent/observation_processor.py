@@ -7,7 +7,7 @@ using LLM compression. No legacy truncation fallback - we fail fast if LLM is un
 import json
 from typing import Any, TYPE_CHECKING
 
-from shared.oai_client import OAIClient, extract_assistant_text
+from shared.llm_client import LLMClient, extract_assistant_text
 from mcp_agent.utils.token_counter import count_json_tokens
 
 if TYPE_CHECKING:
@@ -108,7 +108,7 @@ def summarize_observation(
     ]
 
     # Create client and call LLM
-    client = OAIClient(default_model="o4-mini")
+    client = LLMClient(default_model="o4-mini")
 
     try:
         response = client.create_response(
@@ -120,8 +120,9 @@ def summarize_observation(
         )
 
         # Track tokens for this summarization call
+        model_name = getattr(response, "model", None) or "o4-mini"
         context.token_tracker.record_response(
-            "o4-mini",
+            model_name,
             f"observation.processor.{payload_type}",
             response
         )

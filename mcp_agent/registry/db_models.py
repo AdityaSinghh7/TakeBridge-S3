@@ -28,8 +28,10 @@ IS_PG = os.getenv("DB_URL", "").startswith("postgres")
 
 if IS_PG:
     from sqlalchemy.dialects.postgresql import JSONB as JSONType
+    from sqlalchemy.dialects.postgresql import UUID as UUIDType
 else:
     JSONType = JSON
+    UUIDType = String
 
 
 class User(Base):
@@ -40,7 +42,7 @@ class User(Base):
     """
     __tablename__ = "users"
     
-    id = Column(String, primary_key=True)
+    id = Column(UUIDType(as_uuid=True) if IS_PG else UUIDType, primary_key=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     metadata_json = Column("metadata", JSONType, nullable=False, server_default="{}")
     
@@ -74,7 +76,7 @@ class ConnectedAccount(Base):
     __tablename__ = "connected_accounts"
     
     id = Column(String, primary_key=True)  # ca_...
-    user_id = Column(String, ForeignKey("users.id", ondelete="cascade"), nullable=False)
+    user_id = Column(UUIDType(as_uuid=True) if IS_PG else UUIDType, ForeignKey("users.id", ondelete="cascade"), nullable=False)
     auth_config_id = Column(String, ForeignKey("auth_configs.id"), nullable=False)
     provider = Column(String, nullable=False)  # "gmail" | "slack"
     status = Column(String, nullable=False)  # "ACTIVE" | "INITIATED" | "DISCONNECTED"
