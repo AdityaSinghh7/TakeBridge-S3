@@ -10,6 +10,7 @@ performs lightweight validation/normalization.
 
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from orchestrator_agent.composed_plan import ComposedPlan, ComposedStep
@@ -132,12 +133,15 @@ def _safe_parse_json(text: str) -> Optional[Dict[str, Any]]:
     if not text:
         return None
     # Some models may wrap JSON in markdown fences; strip them if present.
-    if text.startswith("```"):
-        # Remove first and last fenced code block markers
-        parts = text.split("```")
-        if len(parts) >= 3:
-            text = parts[1 if parts[0] == "" else 2]
-            text = text.strip()
+    fence_match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    if fence_match:
+        text = fence_match.group(1).strip()
+
+    # If the content starts with a "json" language tag on its own line, drop it.
+    if text.lower().startswith("json"):
+        first_line, _, remainder = text.partition("\n")
+        if first_line.strip().lower() == "json" and remainder.lstrip().startswith(("{", "[")):
+            text = remainder.lstrip()
     try:
         return json.loads(text)
     except Exception as exc:

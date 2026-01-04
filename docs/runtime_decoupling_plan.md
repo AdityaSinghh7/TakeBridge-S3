@@ -82,6 +82,9 @@ Implemented contract (all require internal auth token):
   - Returns: `run_id`, `workflow_id`, `user_id`, `metadata`, `environment`, `tool_constraints`, `endpoint`.
 - `GET /internal/runs/{run_id}/resume-context`
   - Returns: `user_id`, `status`, `agent_states`, `environment`.
+- `GET /internal/runs/{run_id}/agent-states`
+  - Returns: `{ agent_states }` (decoded snapshot used for orchestrator rehydration).
+  - Resume precedence: `agents.orchestrator.last_resume_step`, then `agents.computer_use.resume.step_result`, then `agents.computer_use.resume.translated`.
 - `POST /internal/runs/{run_id}/events`
   - Body: `{ event, message, payload }` (persist into `run_events` + touch heartbeat).
 - `POST /internal/runs/{run_id}/status`
@@ -129,6 +132,7 @@ Implemented contract (all require internal auth token):
   - `_persist_run_event`, `_update_run_status`, `_touch_run_row`, `_merge_run_environment`.
   - VM provisioning writes (`vm_instances.insert_vm_instance`, `workflow_runs.set_vm_id`).
   - Handback resume writes (agent_states merge + status updates).
+  - Orchestrator rehydration reads (agent_states fetch used for resume/continuation).
 - Result: runtime does not import `shared.db` or call Supabase directly.
 
 ### Phase 3: Split run-drive responsibilities cleanly

@@ -73,6 +73,17 @@ class MCPClient:
             payload = {"data": payload}
 
         # Derive success flag
+        data_field = payload.get("data")
+        nested_success = None
+        nested_error = None
+        if isinstance(data_field, dict):
+            nested_error = data_field.get("error")
+            nested_success = data_field.get("successful")
+            if nested_success is None:
+                nested_success = data_field.get("successfull")
+            if nested_success is None and "error" in data_field:
+                nested_success = nested_error in (None, "", False)
+
         success = payload.get("successful")
         if success is None:
             success = payload.get("successfull")
@@ -80,10 +91,18 @@ class MCPClient:
             status = payload.get("status")
             if isinstance(status, str):
                 success = status.lower() == "success"
+        if success is None and nested_success is not None:
+            success = nested_success
         if success is None and "error" in payload:
             success = payload["error"] in (None, "", False)
         if success is None:
             success = True
+
+        if success is True:
+            if nested_success is False:
+                success = False
+            elif nested_error not in (None, "", False):
+                success = False
 
         data = payload.get("data")
         if data is None:
@@ -91,11 +110,15 @@ class MCPClient:
         if data is None:
             data = {k: v for k, v in payload.items() if k not in {"error", "successful", "successfull"}}
 
+        error = payload.get("error")
+        if error in (None, "") and nested_error not in (None, ""):
+            error = nested_error
+
         normalized = {
             "success": bool(success),
             "successful": bool(success),
             "successfull": bool(success),
-            "error": payload.get("error"),
+            "error": error,
             "data": data or {},
             "logs": payload.get("logs"),
             "version": payload.get("version"),

@@ -72,6 +72,12 @@ class ControlPlaneClient:
     def get_resume_context(self, run_id: str) -> Dict[str, Any]:
         return self._request("GET", f"/internal/runs/{run_id}/resume-context")
 
+    def get_agent_states(self, run_id: str) -> Dict[str, Any]:
+        payload = self._request("GET", f"/internal/runs/{run_id}/agent-states")
+        if isinstance(payload, dict):
+            return payload.get("agent_states") or {}
+        return {}
+
     def persist_run_event(self, run_id: str, event: str, payload: Optional[Dict[str, Any]] = None, message: str | None = None) -> None:
         body = {"event": event, "payload": payload or {}}
         if message is not None:

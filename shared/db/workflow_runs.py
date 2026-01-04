@@ -548,13 +548,21 @@ def update_status(
             """,
             {"status": status, "summary": summary, "run_id": run_id, "terminal": terminal},
         )
+        rowcount = result.rowcount or 0
         try:
             from shared.db.user_metadata import record_run_terminal
 
             record_run_terminal(db, run_id=run_id, status=status, summary=summary)
         except Exception as exc:
             logger.warning("Failed to update user metadata for run_id=%s status=%s: %s", run_id, status, exc)
-        return result.rowcount or 0
+        if status == "queued" and rowcount and DB_URL.startswith("postgres"):
+            try:
+                user_id = get_user_id(db, run_id=run_id)
+                if user_id:
+                    notify_run_queued(db, run_id=run_id, user_id=user_id)
+            except Exception as exc:
+                logger.warning("Failed to notify queued run run_id=%s: %s", run_id, exc)
+        return rowcount
 
     result = execute_text(
         db,
@@ -574,13 +582,21 @@ def update_status(
             "updated_at": updated_at,
         },
     )
+    rowcount = result.rowcount or 0
     try:
         from shared.db.user_metadata import record_run_terminal
 
         record_run_terminal(db, run_id=run_id, status=status, summary=summary)
     except Exception as exc:
         logger.warning("Failed to update user metadata for run_id=%s status=%s: %s", run_id, status, exc)
-    return result.rowcount or 0
+    if status == "queued" and rowcount and DB_URL.startswith("postgres"):
+        try:
+            user_id = get_user_id(db, run_id=run_id)
+            if user_id:
+                notify_run_queued(db, run_id=run_id, user_id=user_id)
+        except Exception as exc:
+            logger.warning("Failed to notify queued run run_id=%s: %s", run_id, exc)
+    return rowcount
 
 
 def set_vm_id(db: Session, *, run_id: str, vm_id: str) -> int:

@@ -77,6 +77,54 @@ def _extract_missing_key(error: Any) -> str | None:
     return None
 
 
+def _is_dunder_main_guard(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Compare):
+        return False
+    left = node.left
+    if not isinstance(left, ast.Name) or left.id != "__name__":
+        return False
+    if not any(isinstance(op, ast.Eq) for op in node.ops):
+        return False
+    for comparator in node.comparators:
+        if isinstance(comparator, ast.Constant) and comparator.value == "__main__":
+            return True
+    return False
+
+
+def _is_asyncio_run_call(node: ast.Call) -> bool:
+    func = node.func
+    return (
+        isinstance(func, ast.Attribute)
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "asyncio"
+        and func.attr == "run"
+    )
+
+
+def _find_forbidden_sandbox_patterns(code: str) -> List[str]:
+    patterns: List[str] = []
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return patterns
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "main":
+            patterns.append("async def main()")
+            continue
+        if isinstance(node, ast.FunctionDef) and node.name == "main":
+            patterns.append("def main()")
+            continue
+        if isinstance(node, ast.If) and _is_dunder_main_guard(node.test):
+            patterns.append("if __name__ == '__main__'")
+            continue
+        if isinstance(node, ast.Call) and _is_asyncio_run_call(node):
+            patterns.append("asyncio.run(...)")
+            continue
+
+    return patterns
+
+
 class ActionExecutor:
     """Routes actions to appropriate handlers and returns observations."""
 
@@ -633,23 +681,30 @@ class ActionExecutor:
 
         found_any_tool_response = False
         all_envelopes_succeeded = True
+        found_error = False
 
         def check_dict(obj: Any) -> bool:
             """Recursively check if all tool responses in obj are successful."""
-            nonlocal found_any_tool_response, all_envelopes_succeeded
+            nonlocal found_any_tool_response, all_envelopes_succeeded, found_error
 
             if not isinstance(obj, dict):
                 return True
 
             # Check if this looks like a canonical MCP tool response envelope
-            # All three fields must be present: successful, data, error
-            if all(key in obj for key in ["successful", "data", "error"]):
+            # Require a data field plus a success indicator.
+            has_success_key = any(key in obj for key in ("successful", "successfull", "success"))
+            if has_success_key and "data" in obj:
                 found_any_tool_response = True
-                # Check the 'successful' field (try different spellings for robustness)
-                is_successful = obj.get("successful") or obj.get("successfull")
-                if not is_successful:
+                # Check tool success using the canonical response ops logic
+                from mcp_agent.execution.response_ops import MCPResponseOps
+
+                if not MCPResponseOps(obj).is_success():
                     all_envelopes_succeeded = False
                     return False
+            elif "error" in obj and obj.get("error") not in (None, "", False):
+                found_error = True
+                all_envelopes_succeeded = False
+                return False
 
             # Recursively check nested dicts and lists
             for value in obj.values():
@@ -665,6 +720,9 @@ class ActionExecutor:
             return True
 
         check_dict(result)
+
+        if found_error:
+            return False
 
         # Strategy:
         # 1. If we found tool envelopes, use those to determine success
@@ -738,6 +796,50 @@ class ActionExecutor:
                 error_code="sandbox_syntax_error",
                 raw_output_key=f"sandbox.{label}",
             )
+
+        forbidden_patterns = _find_forbidden_sandbox_patterns(code_body)
+        if forbidden_patterns:
+            prior_errors = 0
+            for step in self.agent_state.history:
+                if (
+                    step.action_type == "sandbox"
+                    and step.error == "sandbox_invalid_body"
+                    and (step.action_input.get("label") or "").strip() == label
+                ):
+                    prior_errors += 1
+            hint = (
+                "Sandbox code must be ONLY the body of the pre-defined async def main(); "
+                "remove wrappers like async def main(), def main(), if __name__ == '__main__', "
+                "and asyncio.run(...). Return a JSON-serializable dict."
+            )
+            message = "Sandbox code contains forbidden wrapper patterns: " + ", ".join(forbidden_patterns)
+            self.agent_state.record_event(
+                "mcp.sandbox.invalid_body",
+                {
+                    "label": label,
+                    "patterns": forbidden_patterns,
+                    "code_preview": code_body[:4000],
+                },
+            )
+            observation = {
+                "error": message,
+                "label": label,
+                "patterns": forbidden_patterns,
+                "prior_errors": prior_errors,
+                "recoverable": True,
+                "hint": hint,
+            }
+            return StepResult(
+                type="sandbox",
+                success=False,
+                observation=observation,
+                preview=message,
+                error="sandbox_invalid_body",
+                error_code="sandbox_invalid_body",
+                raw_output_key=f"sandbox.{label}",
+            )
+
+        has_tool_calls = any(calls_by_server.values())
 
         def _extract_func_name(entry: Dict[str, Any]) -> str | None:
             signature = entry.get("signature")
@@ -965,6 +1067,43 @@ class ActionExecutor:
                 preview=preview,
                 error=runtime_error,
                 error_code=error_code,
+                raw_output_key=result_key,
+            )
+
+        if (
+            sandbox_result.success
+            and not sandbox_result.timed_out
+            and has_tool_calls
+            and (normalized_result is None or normalized_result == {})
+        ):
+            prior_errors = 0
+            for step in self.agent_state.history:
+                if (
+                    step.action_type == "sandbox"
+                    and step.error == "sandbox_empty_result"
+                    and (step.action_input.get("label") or "").strip() == label
+                ):
+                    prior_errors += 1
+            hint = (
+                "Sandbox returned an empty result after tool calls. Return a JSON-serializable dict from main() "
+                "and do NOT wrap it in your own async def main() or asyncio.run(...)."
+            )
+            error_payload = {
+                "error": "sandbox returned empty result",
+                "label": label,
+                "result": normalized_result,
+                "prior_errors": prior_errors,
+                "recoverable": True,
+                "hint": hint,
+            }
+            preview = command.get("reasoning") or "Sandbox returned empty result"
+            return StepResult(
+                type="sandbox",
+                success=False,
+                observation=error_payload,
+                preview=preview,
+                error="sandbox_empty_result",
+                error_code="sandbox_empty_result",
                 raw_output_key=result_key,
             )
 

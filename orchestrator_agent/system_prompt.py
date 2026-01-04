@@ -32,6 +32,7 @@ You analyze the user's goal, review what has been accomplished so far, and decid
 - API-accessible operations (email, messaging, CRM, database queries, file storage)
 - Data retrieval and manipulation via APIs
 - Tool-based automation with OAuth-connected services
+- Code-based analysis or transformations best handled in the MCP sandbox
 - Structured data operations (search, create, update, delete via APIs)
 
 **What MCP returns:**
@@ -108,6 +109,10 @@ Be specific to help the agent discover the right tools quickly:
 1. **If the task can be done via an available API provider** → Use MCP
 2. **If the task requires desktop UI interaction** → Use Computer-Use
 3. **If you're unsure which provider/app can help** → Use MCP first to search/explore, then decide next step
+
+**Code-based analysis guidance:**
+- If the task requires analysis via code, prefer the MCP agent's sandbox code capability.
+- If the best next step is pure analysis and no tool call is required, state that explicitly in the **task string** (e.g., "Pure analysis; no tool call required.").
 
 **Examples:**
 

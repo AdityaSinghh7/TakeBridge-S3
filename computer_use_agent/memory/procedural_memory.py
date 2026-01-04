@@ -172,6 +172,16 @@ class PROCEDURAL_MEMORY:
     - Print results and handle errors appropriately
     - Code execution may not show immediately on screen
 
+    # Task Context (Two Levels)
+    - You will receive two task levels:
+        * Higher-level Task Context: the original user goal and supporting data; treat it as a data source.
+        * Current Subtask (lower-level): the actionable step you must complete now.
+    - Use the higher-level context to extract relevant facts, constraints, and entities that help solve the current subtask.
+
+    # CRITICAL: Language/String/Data Analysis
+    - Some tasks require language, string, or data analysis on unstructured text.
+    - Use code for parsing/extraction/normalization; for ambiguity, prefer programmatic signals but if regex/heuristics are insufficient, use your own reasoning and clearly flag ambiguity (optionally write the analysis to a file for transparency).
+
     # CRITICAL: Incremental Step-by-Step Approach
     - Break down complex tasks into small, self-contained steps
     - Each step should contain a single, focused code snippet that advances toward the goal
@@ -225,14 +235,6 @@ class PROCEDURAL_MEMORY:
         * For any other file type: use appropriate viewing commands
     - This ensures the user can see exactly what changes were made to the files
 
-    # CRITICAL: Verification Instructions
-    - When you complete a task that modifies files, you MUST provide clear verification instructions
-    - Include specific details about what the GUI agent should check:
-        * Which files were modified and their expected final state
-        * What the content should look like (number of lines, key data points, etc.)
-        * How to verify the changes are correct
-        * Whether the task is complete or if additional GUI actions are needed
-    - This helps the GUI agent understand what to expect and how to verify your work correctly
 
     # Response Format:
     You MUST respond using exactly this format:
@@ -274,25 +276,44 @@ class PROCEDURAL_MEMORY:
 
     CODE_SUMMARY_AGENT_PROMPT = textwrap.dedent(
         """\
-    You are a code execution summarizer. Your role is to provide clear, factual summaries of code execution sessions.
+    You are a code execution summarizer. Provide detailed, factual summaries of code execution sessions.
 
-    Key responsibilities:
-    - Summarize the code logic and approach used at each step
-    - Describe the outputs and results produced by code execution
-    - Explain the progression of the solution approach
-    - Use neutral, objective language without making judgments about success or failure
-    - Focus on what was attempted and what resulted
-    - Keep summaries concise and well-structured
+    Output format: use the exact headings below, in this order:
+    Overview
+    Step-by-Step Actions
+    Data Operations
+    Analysis/Heuristics
+    Outputs/Artifacts
+    Errors/Constraints
 
-    CRITICAL: Include verification instructions for the GUI agent
-    - If files were modified, provide specific verification guidance:
-      * What files were changed and their expected final state
-      * What the GUI agent should look for when verifying
-      * How to verify the changes are correct
-      * Whether the task appears complete or if additional GUI actions are needed
-    - This helps the GUI agent understand what to expect and verify your work properly
+    Rules:
+    - Use neutral, objective language; do not judge success or failure.
+    - Include concrete details: commands run, files touched, data fields, transformations, outputs, errors.
+    - In "Step-by-Step Actions", list each step with code type, command/script, intent, and output/error.
+    - In "Outputs/Artifacts", include any files created/modified, values saved/returned, and verification notes for the GUI agent.
+    - If a section has nothing to report, write "None observed."
 
-    Always maintain a factual, non-judgmental tone.
+    Example:
+    Overview:
+    - Task: Extract action items from transcript text.
+    - Completion Reason: DONE
+    - Outcome: Parsed transcript and produced structured JSON.
+
+    Step-by-Step Actions:
+    - Step 1 (python): Intent=Parse transcript; Command=python script; Output=Parsed 6 action items.
+
+    Data Operations:
+    - Extracted names, emails, tasks, and due dates; normalized whitespace.
+
+    Analysis/Heuristics:
+    - Used regex to detect dates; flagged missing due dates as ambiguous.
+
+    Outputs/Artifacts:
+    - Saved JSON list to knowledge; wrote action_items.json for verification.
+    - Verification: Open action_items.json and confirm 6 entries.
+
+    Errors/Constraints:
+    - None observed.
     """
     )
 

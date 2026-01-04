@@ -73,7 +73,19 @@ def _is_tool_available(context: AgentContext, provider: str, tool: str) -> bool:
 
 
 def _write_base_init(base: Path) -> None:
-    content = """from . import client, servers, helpers\nfrom .helpers import safe_error_text, safe_timestamp_sort_key\n\n__all__ = [\"client\", \"servers\", \"helpers\", \"safe_error_text\", \"safe_timestamp_sort_key\"]\n"""
+    content = (
+        "from . import client, servers, helpers\n"
+        "from .helpers import safe_error_text, safe_timestamp_sort_key, is_tool_successful\n"
+        "\n"
+        "__all__ = [\n"
+        "    \"client\",\n"
+        "    \"servers\",\n"
+        "    \"helpers\",\n"
+        "    \"safe_error_text\",\n"
+        "    \"safe_timestamp_sort_key\",\n"
+        "    \"is_tool_successful\",\n"
+        "]\n"
+    )
     (base / "__init__.py").write_text(content, encoding="utf-8")
 
 
@@ -99,6 +111,45 @@ def safe_error_text(value):
     if not value:
         return ""
     return value if isinstance(value, str) else str(value)
+
+
+def is_tool_successful(payload):
+    \"\"\"Return True if a tool payload indicates success.\"\"\"
+    if not isinstance(payload, dict):
+        return False
+
+    top_success = None
+    if "successful" in payload:
+        top_success = bool(payload.get("successful"))
+    elif "successfull" in payload:
+        top_success = bool(payload.get("successfull"))
+
+    data = payload.get("data")
+    nested_success = None
+    nested_error = None
+    if isinstance(data, dict):
+        if "successful" in data:
+            nested_success = bool(data.get("successful"))
+        elif "successfull" in data:
+            nested_success = bool(data.get("successfull"))
+        if "error" in data:
+            nested_error = data.get("error")
+
+    # Nested failure should override any optimistic top-level flag.
+    if nested_success is False:
+        return False
+    if nested_error not in (None, "", False) and nested_error is not None:
+        return False
+
+    top_error = payload.get("error")
+    if top_error not in (None, "", False):
+        return False
+
+    if nested_success is True:
+        return True
+    if top_success is not None:
+        return top_success
+    return False
 
 
 def safe_timestamp_sort_key(value):

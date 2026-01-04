@@ -1477,7 +1477,7 @@ google_docs_get_document_by_id_output_schema = {
                               "title": "Start Index",
                               "type": "integer"
                             },
-                            "text_run": {
+                            "textRun": {
                               "additionalProperties": False,
                               "default": None,
                               "description": "Styled text segment.",
@@ -3876,7 +3876,7 @@ google_docs_get_document_by_id_output_schema = {
                                             "description": "UTF-16 start position.",
                                             "title": "Start Index"
                                           },
-                                          "text_run": {
+                                          "textRun": {
                                             "anyOf": [
                                               {
                                                 "properties": {
@@ -6799,7 +6799,7 @@ google_docs_get_document_by_id_output_schema = {
                                             "description": "UTF-16 start position.",
                                             "title": "Start Index"
                                           },
-                                          "text_run": {
+                                          "textRun": {
                                             "anyOf": [
                                               {
                                                 "properties": {
@@ -9722,7 +9722,7 @@ google_docs_get_document_by_id_output_schema = {
                                             "description": "UTF-16 start position.",
                                             "title": "Start Index"
                                           },
-                                          "text_run": {
+                                          "textRun": {
                                             "anyOf": [
                                               {
                                                 "properties": {
@@ -16127,7 +16127,7 @@ google_docs_get_document_by_id_output_schema = {
                                         "title": "Start Index",
                                         "type": "integer"
                                       },
-                                      "text_run": {
+                                      "textRun": {
                                         "additionalProperties": False,
                                         "default": None,
                                         "description": "Styled text segment.",
@@ -18519,7 +18519,7 @@ google_docs_get_document_by_id_output_schema = {
                                                       "description": "UTF-16 start position.",
                                                       "title": "Start Index"
                                                     },
-                                                    "text_run": {
+                                                    "textRun": {
                                                       "anyOf": [
                                                         {
                                                           "properties": {
@@ -21442,7 +21442,7 @@ google_docs_get_document_by_id_output_schema = {
                                                       "description": "UTF-16 start position.",
                                                       "title": "Start Index"
                                                     },
-                                                    "text_run": {
+                                                    "textRun": {
                                                       "anyOf": [
                                                         {
                                                           "properties": {
@@ -24365,7 +24365,7 @@ google_docs_get_document_by_id_output_schema = {
                                                       "description": "UTF-16 start position.",
                                                       "title": "Start Index"
                                                     },
-                                                    "text_run": {
+                                                    "textRun": {
                                                       "anyOf": [
                                                         {
                                                           "properties": {

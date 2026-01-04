@@ -81,20 +81,45 @@ class MCPResponseOps:
     def is_success(self) -> bool:
         """Determine success using common MCP/Composio fields and error flags."""
         source = self.raw
-        success = source.get("successful")
-        if success is None:
-            success = source.get("success")
-        if success is None:
-            success = source.get("successfull")
-        if success is None and "error" in source:
-            success = source["error"] in (None, "", False)
-        if success is None:
-            success = True
+        top_success = source.get("successful")
+        if top_success is None:
+            top_success = source.get("success")
+        if top_success is None:
+            top_success = source.get("successfull")
+
+        top_error = source.get("error")
+
+        nested_success = None
+        nested_error = None
+        data_field = source.get("data")
+        if isinstance(data_field, dict):
+            if "successful" in data_field:
+                nested_success = data_field.get("successful")
+            elif "successfull" in data_field:
+                nested_success = data_field.get("successfull")
+            if "error" in data_field:
+                nested_error = data_field.get("error")
 
         # Composio explicit error flag overrides optimistic defaults
         if source.get("isError") is True:
             return False
-        return bool(success)
+        if top_success is False:
+            return False
+        if nested_success is False:
+            return False
+        if nested_error not in (None, "", False) and nested_error is not None:
+            return False
+        if top_error not in (None, "", False):
+            return False
+
+        if nested_success is True:
+            return True
+        if top_success is True:
+            return True
+
+        if top_success is None and nested_success is None:
+            return True
+        return bool(top_success)
 
     def get_error(self) -> str | None:
         """Extract best-effort error message from known locations."""

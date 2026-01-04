@@ -348,6 +348,258 @@ def test_7_orchestrator_request_construction():
     return True
 
 
+def test_8_agent_state_provider_injection():
+    """Test agent_state provider injection and resume step_result fallback."""
+    print("\n" + "="*60)
+    print("TEST 8: Agent State Provider Injection")
+    print("="*60)
+
+    from orchestrator_agent.runtime import OrchestratorRuntime
+    from orchestrator_agent.data_types import OrchestratorRequest, TenantContext, Budget
+
+    run_id = "run-123"
+    called: Dict[str, Any] = {}
+
+    agent_states = {
+        "orchestrator": {
+            "plan": [],
+            "results": [],
+            "intermediate": {},
+            "cost_baseline": 0.0,
+        },
+        "agents": {
+            "computer_use": {
+                "resume": {
+                    "step_result": {
+                        "step_id": "resume-run-123",
+                        "target": "computer_use",
+                        "next_task": "Resume task",
+                        "verification": "resume",
+                        "status": "completed",
+                        "success": True,
+                        "output": {"translated": {"task": "Resume task", "overall_success": True}},
+                    }
+                }
+            }
+        },
+    }
+
+    def provider(run_id_value: str) -> Dict[str, Any]:
+        called["run_id"] = run_id_value
+        return agent_states
+
+    tenant = TenantContext(tenant_id="test-tenant", request_id=run_id, user_id="test-user")
+    request = OrchestratorRequest(
+        task="Parent task",
+        max_steps=5,
+        tenant=tenant,
+        budget=Budget(max_steps=5),
+        request_id=run_id,
+        user_id="test-user",
+    )
+
+    runtime = OrchestratorRuntime(agent_states_provider=provider)
+    state = runtime._rehydrate_state_if_available(request)
+
+    assert called.get("run_id") == run_id
+    assert state is not None
+    assert len(state.results) == 1
+    assert state.results[0].step_id == "resume-run-123"
+    assert state.results[0].next_task == "Resume task"
+
+    print("✓ Agent state provider invoked and resume step_result appended")
+    return True
+
+
+def test_9_resume_translated_fallback():
+    """Test fallback to resume.translated when step_result is missing."""
+    print("\n" + "="*60)
+    print("TEST 9: Resume Translated Fallback")
+    print("="*60)
+
+    from orchestrator_agent.runtime import OrchestratorRuntime
+    from orchestrator_agent.data_types import OrchestratorRequest, TenantContext, Budget
+
+    run_id = "run-456"
+    agent_states = {
+        "orchestrator": {
+            "plan": [],
+            "results": [],
+            "intermediate": {},
+            "cost_baseline": 0.0,
+        },
+        "agents": {
+            "computer_use": {
+                "resume": {
+                    "translated": {
+                        "task": "Resume translated task",
+                        "overall_success": True,
+                        "summary": "Resume translated summary",
+                    }
+                }
+            }
+        },
+    }
+
+    def provider(_: str) -> Dict[str, Any]:
+        return agent_states
+
+    tenant = TenantContext(tenant_id="test-tenant", request_id=run_id, user_id="test-user")
+    request = OrchestratorRequest(
+        task="Parent task",
+        max_steps=5,
+        tenant=tenant,
+        budget=Budget(max_steps=5),
+        request_id=run_id,
+        user_id="test-user",
+    )
+
+    runtime = OrchestratorRuntime(agent_states_provider=provider)
+    state = runtime._rehydrate_state_if_available(request)
+
+    assert state is not None
+    assert len(state.results) == 1
+    assert state.results[0].step_id == "resume-run-456"
+    assert state.results[0].next_task == "Resume translated task"
+    assert state.results[0].status == "completed"
+
+    print("✓ Resume translated fallback appended minimal StepResult")
+    return True
+
+
+def test_10_sandbox_invalid_body_guardrail():
+    """Test sandbox invalid-body guardrail for forbidden wrappers."""
+    print("\n" + "="*60)
+    print("TEST 10: Sandbox Invalid Body Guardrail")
+    print("="*60)
+
+    from mcp_agent.agent.executor import ActionExecutor
+    from mcp_agent.agent.state import AgentState
+    from mcp_agent.agent.budget import Budget
+    from mcp_agent.core.context import AgentContext
+    import mcp_agent.agent.executor as executor_module
+
+    state = AgentState(
+        task="Test sandbox guardrail",
+        user_id="test-user",
+        request_id="test-request",
+        budget=Budget(max_steps=3),
+    )
+    context = AgentContext.create("test-user", request_id="test-request")
+    executor = ActionExecutor(context, state)
+
+    command = {
+        "type": "sandbox",
+        "label": "bad_wrapper",
+        "code": "async def main():\n    return {'ok': True}",
+        "reasoning": "Trigger invalid body guardrail.",
+    }
+
+    original_run = executor_module.run_python_plan
+    def _fail_run(*_args, **_kwargs):
+        raise RuntimeError("run_python_plan should not be called for invalid body.")
+    executor_module.run_python_plan = _fail_run
+
+    try:
+        result = executor.execute_step(command)
+    finally:
+        executor_module.run_python_plan = original_run
+
+    assert not result.success
+    assert result.error_code == "sandbox_invalid_body"
+    assert isinstance(result.observation, dict)
+    assert "async def main()" in result.observation.get("patterns", [])
+    assert "hint" in result.observation
+
+    print("✓ Forbidden wrapper detected with sandbox_invalid_body")
+    return True
+
+
+def test_11_sandbox_empty_result_guardrail():
+    """Test sandbox empty-result guardrail when tool calls are detected."""
+    print("\n" + "="*60)
+    print("TEST 11: Sandbox Empty Result Guardrail")
+    print("="*60)
+
+    from mcp_agent.agent.executor import ActionExecutor
+    from mcp_agent.agent.state import AgentState
+    from mcp_agent.agent.budget import Budget
+    from mcp_agent.core.context import AgentContext
+    from mcp_agent.execution.runner import SandboxResult
+    import mcp_agent.agent.executor as executor_module
+
+    state = AgentState(
+        task="Test sandbox empty result",
+        user_id="test-user",
+        request_id="test-request",
+        budget=Budget(max_steps=3),
+    )
+    state.merge_search_results(
+        [{"server": "gmail", "tool_id": "gmail.gmail_search", "signature": "gmail.gmail_search(query)"}],
+        replace=True,
+    )
+    context = AgentContext.create("test-user", request_id="test-request")
+    executor = ActionExecutor(context, state)
+
+    command = {
+        "type": "sandbox",
+        "label": "empty_result",
+        "code": "from sandbox_py.servers import gmail\nasync def noop():\n    await gmail.gmail_search()\nreturn {}",
+        "reasoning": "Trigger empty result guardrail.",
+    }
+
+    original_run = executor_module.run_python_plan
+    def _stub_run(*_args, **_kwargs):
+        return SandboxResult(success=True, result={}, logs=[], error=None, timed_out=False)
+    executor_module.run_python_plan = _stub_run
+
+    try:
+        result = executor.execute_step(command)
+    finally:
+        executor_module.run_python_plan = original_run
+
+    assert not result.success
+    assert result.error_code == "sandbox_empty_result"
+    assert isinstance(result.observation, dict)
+    assert "hint" in result.observation
+
+    print("✓ Empty sandbox result detected with sandbox_empty_result")
+    return True
+
+
+def test_12_planner_prompt_json_examples():
+    """Test that sandbox JSON examples in the prompt remain valid JSON."""
+    print("\n" + "="*60)
+    print("TEST 12: Planner Prompt JSON Examples")
+    print("="*60)
+
+    from mcp_agent.agent.prompts import PLANNER_PROMPT
+
+    lines = [line.rstrip() for line in PLANNER_PROMPT.splitlines()]
+
+    def _extract_example(marker: str) -> str:
+        for idx, line in enumerate(lines):
+            if marker in line:
+                for next_line in lines[idx + 1:]:
+                    if next_line.strip():
+                        return next_line.strip()
+        raise AssertionError(f"Missing JSON example for marker: {marker}")
+
+    correct_line = _extract_example("Correct sandbox JSON example (valid JSON on one line):")
+    incorrect_line = _extract_example("Incorrect sandbox JSON example (valid JSON but forbidden wrapper):")
+
+    correct = json.loads(correct_line)
+    incorrect = json.loads(incorrect_line)
+
+    assert correct.get("type") == "sandbox"
+    assert "\n" in correct.get("code", "")
+    assert incorrect.get("type") == "sandbox"
+    assert "main()" in incorrect.get("code", "")
+
+    print("✓ Prompt JSON examples parse correctly")
+    return True
+
+
 def run_all_tests():
     """Run all integration tests."""
     print("\n" + "="*70)
@@ -362,6 +614,11 @@ def run_all_tests():
         ("SSE Event Emission", test_5_sse_event_emission),
         ("Feature Flag Routing", test_6_feature_flag_routing),
         ("OrchestratorRequest Construction", test_7_orchestrator_request_construction),
+        ("Agent State Provider Injection", test_8_agent_state_provider_injection),
+        ("Resume Translated Fallback", test_9_resume_translated_fallback),
+        ("Sandbox Invalid Body Guardrail", test_10_sandbox_invalid_body_guardrail),
+        ("Sandbox Empty Result Guardrail", test_11_sandbox_empty_result_guardrail),
+        ("Planner Prompt JSON Examples", test_12_planner_prompt_json_examples),
     ]
 
     results = []

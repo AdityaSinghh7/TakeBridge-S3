@@ -58,7 +58,7 @@ def _sanitize_run_id(value: Optional[str]) -> str:
 
 
 def _llm_log_path(run_id: Optional[str]) -> Path:
-    log_dir = Path(os.getenv("LLM_LOG_DIR", "logs")).expanduser()
+    log_dir = Path(os.getenv("LLM_LOG_DIR", "logs/llm")).expanduser()
     safe_run_id = _sanitize_run_id(run_id)
     return log_dir / f"llm-{safe_run_id}.jsonl"
 
@@ -191,10 +191,6 @@ def _write_llm_log_pretty(path: Path, entry: Dict[str, Any]) -> None:
                 else:
                     handle.write("<no_text>\n")
 
-            handle.write("\nREQUEST_MESSAGES_RAW:\n")
-            handle.write(json.dumps(messages, ensure_ascii=True, indent=2))
-            handle.write("\n")
-
         if input_payload is not None:
             handle.write("\nREQUEST_INPUT_RAW:\n")
             handle.write(json.dumps(input_payload, ensure_ascii=True, indent=2))
@@ -210,11 +206,6 @@ def _write_llm_log_pretty(path: Path, entry: Dict[str, Any]) -> None:
             handle.write(response_text + "\n")
         else:
             handle.write("<empty>\n")
-
-        if response_payload is not None:
-            handle.write("\nRESPONSE_RAW:\n")
-            handle.write(json.dumps(response_payload, ensure_ascii=True, indent=2))
-            handle.write("\n")
 
         if error:
             handle.write("\nERROR:\n")

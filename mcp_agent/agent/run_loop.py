@@ -381,18 +381,14 @@ class AgentOrchestrator:
                     },
                     error=error_code,
                 )
-                if error_code == "sandbox_syntax_error":
-                    prior_errors = observation.get("prior_errors", 0)
-                    if prior_errors >= 2:
-                        return self._failure(
-                            error_code,
-                            error_message,
-                            preview=error_message,
-                            recorded_step=True,
-                        )
-                    return None
-                if error_code == "sandbox_logic_error":
-                    prior_errors = observation.get("prior_errors", 0)
+                recoverable_codes = {
+                    "sandbox_syntax_error",
+                    "sandbox_logic_error",
+                    "sandbox_invalid_body",
+                    "sandbox_empty_result",
+                }
+                if error_code in recoverable_codes:
+                    prior_errors = observation.get("prior_errors", 0) if isinstance(observation, dict) else 0
                     if prior_errors >= 2:
                         return self._failure(
                             error_code,
@@ -409,6 +405,14 @@ class AgentOrchestrator:
                 )
 
             reasoning = command.get("reasoning") or result.preview
+            all_tools_succeeded = bool(
+                isinstance(observation, dict) and observation.get("_all_tools_succeeded")
+            )
+            action_outcome_success = (
+                all_tools_succeeded
+                if isinstance(observation, dict) and "_all_tools_succeeded" in observation
+                else True
+            )
             self.agent_state.record_step(
                 action_type="sandbox",
                 success=True,
@@ -418,11 +422,8 @@ class AgentOrchestrator:
                     "label": command.get("label"),
                 },
                 action_outcome={
-                    "success": True,
-                    "all_tools_successfully_returned": bool(
-                        isinstance(observation, dict)
-                        and observation.get("_all_tools_succeeded")
-                    ),
+                    "success": action_outcome_success,
+                    "all_tools_successfully_returned": all_tools_succeeded,
                 },
                 observation=result.observation,
                 observation_metadata={

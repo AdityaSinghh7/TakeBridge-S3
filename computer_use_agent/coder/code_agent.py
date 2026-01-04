@@ -147,7 +147,13 @@ class CodeAgent:
             system_prompt=_load_code_agent_prompt(),
         )
 
-    def execute(self, task_instruction: str, screenshot: str, env_controller) -> Dict:
+    def execute(
+        self,
+        task_instruction: str,
+        screenshot: str,
+        env_controller,
+        task_context: Optional[str] = None,
+    ) -> Dict:
         """Execute code for the given task with a budget of steps."""
         if env_controller is None:
             raise ValueError("env_controller is required for code execution")
@@ -161,33 +167,51 @@ class CodeAgent:
             code_logger = cu_logger.get_sub_logger("code_agent")
             code_logger.log_event("session.started", {
                 "task": task_instruction,
+                "task_context": task_context,
                 "budget": self.budget,
             })
 
         print("\nSTARTING CODE EXECUTION")
         print("=" * 60)
         safe_task = safe_ascii(task_instruction)
+        safe_context = safe_ascii(task_context) if task_context else "(none provided)"
         print(f"Task: {safe_task}")
+        print(f"Higher-level Task Context: {safe_context}")
         print(f"Budget: {self.budget} steps")
         print("=" * 60)
 
         logger.info("Starting code execution for task: %s", safe_task)
+        logger.info("Higher-level task context: %s", safe_context)
         logger.info(f"Budget: {self.budget} steps")
 
         self.reset()
 
         # Add initial task instruction and screenshot context as user message
+        context_block = task_context.strip() if isinstance(task_context, str) and task_context.strip() else "(none provided)"
         context = (
-            f"Task: {task_instruction}\n\nCurrent screenshot is provided for context."
+            f"Higher-level Task Context: {context_block}\n"
+            f"Current Subtask (lower-level): {task_instruction}\n\n"
+            "Current screenshot is provided for context."
         )
         self.agent.add_message(context, image_content=screenshot, role="user")
 
         step_count = 0
         execution_history = []
+
+        def _truncate(value: str, limit: int = 2000) -> str:
+            if value is None:
+                return ""
+            if not isinstance(value, str):
+                value = str(value)
+            if len(value) <= limit:
+                return value
+            return value[:limit] + "... (truncated)"
+
         emit_event(
             "code_agent.session.started",
             {
                 "task": task_instruction,
+                "task_context": task_context,
                 "budget": self.budget,
             },
         )
@@ -233,10 +257,7 @@ class CodeAgent:
 
             # Parse the response to extract action
             action, thoughts = split_thinking_response(response)
-
-            execution_history.append(
-                {"step": step_count + 1, "action": action, "thoughts": thoughts}
-            )
+            step_entry = {"step": step_count + 1, "action": action, "thoughts": thoughts}
             emit_event(
                 "code_agent.step.response",
                 {
@@ -254,6 +275,7 @@ class CodeAgent:
                 print("Agent signaled task completion")
                 print("=" * 60)
                 logger.info(f"Step {step_count + 1}: Task completed successfully")
+                execution_history.append(step_entry)
                 completion_reason = "DONE"
                 break
             elif action_upper == "FAIL":
@@ -262,6 +284,7 @@ class CodeAgent:
                 print("Agent signaled task failure")
                 print("=" * 60)
                 logger.info(f"Step {step_count + 1}: Task failed by agent request")
+                execution_history.append(step_entry)
                 completion_reason = "FAIL"
                 break
 
@@ -270,6 +293,15 @@ class CodeAgent:
 
             if code:
                 result = execute_code(code_type, code, env_controller)
+                step_entry["code_type"] = code_type
+                step_entry["code"] = code
+                step_entry["execution_result"] = {
+                    "status": result.get("status"),
+                    "return_code": result.get("returncode", result.get("return_code")),
+                    "output": _truncate(result.get("output", "")),
+                    "error": _truncate(result.get("error", "")),
+                    "message": _truncate(result.get("message", "")),
+                }
                 # Prepare formatted output and error for logging
                 output = result.get("output", "")
                 error = result.get("error", "")
@@ -329,6 +361,15 @@ class CodeAgent:
 
                 logger.warning(f"Step {step_count + 1}: No code block found in action")
                 result = {"status": "skipped", "message": "No code block found"}
+                step_entry["code_type"] = code_type
+                step_entry["code"] = code
+                step_entry["execution_result"] = {
+                    "status": result.get("status"),
+                    "return_code": result.get("returncode", result.get("return_code")),
+                    "output": "",
+                    "error": "",
+                    "message": _truncate(result.get("message", "")),
+                }
                 emit_event(
                     "code_agent.step.execution",
                     {
@@ -359,6 +400,7 @@ class CodeAgent:
                 },
             )
 
+            execution_history.append(step_entry)
             step_count += 1
 
         # Handle budget exhaustion
@@ -372,10 +414,16 @@ class CodeAgent:
 
         # Generate final summary
         logger.info("Generating execution summary")
-        summary = self._generate_summary(execution_history, task_instruction)
+        summary = self._generate_summary(
+            execution_history,
+            task_instruction,
+            completion_reason=completion_reason,
+            task_context=task_context,
+        )
 
         result = {
             "task_instruction": task_instruction,
+            "task_context": task_context,
             "completion_reason": completion_reason,
             "summary": summary,
             "execution_history": execution_history,
@@ -392,6 +440,7 @@ class CodeAgent:
                 "steps_executed": step_count,
                 "budget": self.budget,
                 "summary": summary,
+                "task_context": task_context,
             })
 
         emit_event(
@@ -401,12 +450,18 @@ class CodeAgent:
                 "steps_executed": step_count,
                 "budget": self.budget,
                 "summary": summary,
+                "task_context": task_context,
             },
         )
         return result
 
     def _generate_summary(
-        self, execution_history: List[Dict], task_instruction: str
+        self,
+        execution_history: List[Dict],
+        task_instruction: str,
+        *,
+        completion_reason: Optional[str] = None,
+        task_context: Optional[str] = None,
     ) -> str:
         """Generate summary of code execution session."""
         if not execution_history:
@@ -416,31 +471,65 @@ class CodeAgent:
         logger.info(f"Generated summary for {len(execution_history)} steps")
 
         # Build detailed execution context for summary agent
-        execution_context = f"Task: {task_instruction}\n\nExecution Steps:\n"
+        execution_context = (
+            f"Task: {task_instruction}\n"
+            f"Completion Reason: {completion_reason or 'unknown'}\n"
+        )
+        if task_context:
+            execution_context += f"Higher-level Task Context: {task_context}\n"
+        execution_context += "\nExecution Steps:\n"
 
         for step in execution_history:
             step_num = step["step"]
             thoughts = step.get("thoughts", "")
             action = step.get("action", "")
+            code_type = step.get("code_type")
+            code = step.get("code")
+            exec_result = step.get("execution_result") or {}
 
             execution_context += f"\nStep {step_num}:\n"
             if thoughts:
-                execution_context += f"Thoughts: {thoughts}\n"
-            execution_context += f"Code: {action}\n"
+                execution_context += f"Intent: {thoughts}\n"
+            if action:
+                execution_context += f"Action: {action}\n"
+            if code_type:
+                execution_context += f"Code Type: {code_type}\n"
+            if code:
+                execution_context += f"Code:\n{code}\n"
+            if exec_result:
+                status = exec_result.get("status")
+                return_code = exec_result.get("return_code")
+                output = exec_result.get("output") or ""
+                error = exec_result.get("error") or ""
+                message = exec_result.get("message") or ""
+                if status:
+                    execution_context += f"Execution Status: {status}\n"
+                if return_code is not None:
+                    execution_context += f"Return Code: {return_code}\n"
+                if output:
+                    execution_context += f"Output: {output}\n"
+                if error:
+                    execution_context += f"Error: {error}\n"
+                if message:
+                    execution_context += f"Message: {message}\n"
 
         # Create summary prompt with same context as coding agent
+        # NOTE: Keep section headings aligned with PROCEDURAL_MEMORY.CODE_SUMMARY_AGENT_PROMPT.
         summary_prompt = f"""
 {execution_context}
 
-Please provide a concise summary of the code execution session. Focus on:
+Produce a structured summary using the exact headings below, in this order:
+Overview
+Step-by-Step Actions
+Data Operations
+Analysis/Heuristics
+Outputs/Artifacts
+Errors/Constraints
 
-1. The code logic implemented at each step
-2. The outputs and results produced by each code execution
-3. The progression of the solution approach
-
-Do not make judgments about success or failure. Simply describe what was attempted and what resulted.
-
-Keep the summary under 150 words and use clear, factual language.
+Requirements:
+- Use factual, non-judgmental language.
+- Include concrete details from the execution context (commands, data operations, outputs, errors).
+- If a section has nothing to report, write "None observed."
 """
 
         # Generate summary using LLM with dedicated summary system prompt

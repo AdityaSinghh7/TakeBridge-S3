@@ -951,8 +951,16 @@ class OSWorldACI(ACI):
                 "task_context": self.current_task_context,
             },
         )
+        task_context = self.current_task_context
+        if task_context:
+            logger.info("Higher-level task context provided to code agent.")
+        else:
+            logger.info("No higher-level task context provided to code agent.")
         result = self.code_agent.execute(
-            task_to_execute, screenshot, self.env.controller
+            task_to_execute,
+            screenshot,
+            self.env.controller,
+            task_context=task_context,
         )
 
         # Store the result for the worker to access

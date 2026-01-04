@@ -14,7 +14,7 @@ import contextvars
 import json
 import logging
 from datetime import datetime
-from typing import Iterable, List, Optional, Tuple, Dict, Any
+from typing import Iterable, List, Optional, Tuple, Dict, Any, Callable
 
 from orchestrator_agent.data_types import (
     AgentTarget,
@@ -41,7 +41,6 @@ from shared.hierarchical_logger import (
 )
 from shared.run_context import RUN_LOG_ID
 from shared.db.workflow_runs import get_agent_states
-from shared.db.workflow_runs import get_agent_states
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +48,17 @@ logger = logging.getLogger(__name__)
 class OrchestratorRuntime:
     """Entry point for coordinating work between agents."""
 
-    def __init__(self, *, max_concurrency: int = 4) -> None:
+    def __init__(
+        self,
+        *,
+        max_concurrency: int = 4,
+        agent_states_provider: Optional[Callable[[str], Dict[str, Any]]] = None,
+    ) -> None:
         self.logger = StructuredLogger("orchestrator")
         self.cost_tracker = TOKEN_TRACKER
         self._semaphore = asyncio.Semaphore(max_concurrency)
         self.hierarchical_logger: Optional[HierarchicalLogger] = None
+        self._agent_states_provider = agent_states_provider or get_agent_states
         # Pending handback inference context to inject into computer-use agent
         self._pending_inference_context: Optional[str] = None
         # Continuation context for orchestrator's own planning (includes full history)
@@ -62,6 +67,13 @@ class OrchestratorRuntime:
         self._rehydrated_state: Optional[RunState] = None
         # Rehydrated state for continuation
         self._rehydrated_state: Optional[RunState] = None
+
+    def _fetch_agent_states(self, run_id: str) -> Dict[str, Any]:
+        try:
+            return self._agent_states_provider(run_id) or {}
+        except Exception as exc:
+            logger.warning("Failed to read agent_states for run_id=%s: %s", run_id, exc)
+            return {}
 
     async def run_task(self, request: OrchestratorRequest) -> RunState:
         """Process a single request with single-step planning."""
@@ -262,10 +274,8 @@ class OrchestratorRuntime:
         if not run_id:
             return None
 
-        try:
-            agent_states = get_agent_states(run_id)
-        except Exception as exc:
-            logger.warning("Failed to read agent_states for run_id=%s: %s", run_id, exc)
+        agent_states = self._fetch_agent_states(run_id)
+        if not agent_states:
             return None
 
         orch_state = agent_states.get("orchestrator") if isinstance(agent_states, dict) else None
@@ -331,6 +341,27 @@ class OrchestratorRuntime:
             except Exception as exc:
                 logger.warning("Failed to hydrate StepResult: %s", exc)
 
+        def _append_resume_result(resume_dict: Dict[str, Any], source: str) -> bool:
+            try:
+                existing_ids = {r.step_id for r in results if getattr(r, "step_id", None)}
+                hydrated = _hydrate_result(resume_dict)
+                if hydrated.step_id not in existing_ids:
+                    results.append(hydrated)
+                    logger.info("Appended %s for run_id=%s", source, run_id)
+                else:
+                    logger.info(
+                        "Skipped appending duplicate %s (step_id=%s) for run_id=%s",
+                        source,
+                        hydrated.step_id,
+                        run_id,
+                    )
+                return True
+            except Exception as exc:
+                logger.warning("Failed to hydrate %s: %s", source, exc)
+                return False
+
+        appended_resume = False
+
         # Append last_resume_step if stored under agents.orchestrator
         last_resume = (
             agent_states.get("agents", {})
@@ -338,20 +369,59 @@ class OrchestratorRuntime:
             .get("last_resume_step")
         )
         if isinstance(last_resume, dict):
-            try:
-                existing_ids = {r.step_id for r in results if getattr(r, "step_id", None)}
-                hydrated_last_resume = _hydrate_result(last_resume)
-                if hydrated_last_resume.step_id not in existing_ids:
-                    results.append(hydrated_last_resume)
-                    logger.info("Appended last_resume_step for run_id=%s", run_id)
-                else:
-                    logger.info(
-                        "Skipped appending duplicate last_resume_step (step_id=%s) for run_id=%s",
-                        hydrated_last_resume.step_id,
-                        run_id,
+            appended_resume = _append_resume_result(last_resume, "last_resume_step")
+
+        if not appended_resume:
+            resume_payload = (
+                agent_states.get("agents", {})
+                .get("computer_use", {})
+                .get("resume")
+            )
+            if isinstance(resume_payload, dict):
+                resume_step_result = resume_payload.get("step_result")
+                if isinstance(resume_step_result, dict):
+                    appended_resume = _append_resume_result(
+                        resume_step_result,
+                        "computer_use.resume.step_result",
                     )
-            except Exception as exc:
-                logger.warning("Failed to hydrate last_resume_step: %s", exc)
+                elif isinstance(resume_payload.get("translated"), dict):
+                    translated = resume_payload.get("translated") or {}
+                    resume_task = translated.get("task") or request.task
+                    resume_success = bool(
+                        translated.get("overall_success", translated.get("success", True))
+                    )
+                    status: StepStatus = "completed" if resume_success else "failed"
+                    step_id = f"resume-{run_id}" if run_id else generate_step_id("resume")
+                    output = {
+                        "target": "computer_use",
+                        "translated": translated,
+                        "raw_ref": f"{step_id}:raw",
+                        "usage": {},
+                    }
+                    minimal_result = StepResult(
+                        step_id=step_id,
+                        target="computer_use",
+                        next_task=resume_task,
+                        verification="resume",
+                        status=status,
+                        success=resume_success,
+                        output=output,
+                        error=translated.get("error"),
+                    )
+                    existing_ids = {r.step_id for r in results if getattr(r, "step_id", None)}
+                    if minimal_result.step_id not in existing_ids:
+                        results.append(minimal_result)
+                        logger.info(
+                            "Appended resume translated fallback for run_id=%s",
+                            run_id,
+                        )
+                    else:
+                        logger.info(
+                            "Skipped appending duplicate resume translated fallback (step_id=%s) for run_id=%s",
+                            minimal_result.step_id,
+                            run_id,
+                        )
+                    appended_resume = True
 
         cost_baseline = orch_state.get("cost_baseline", self.cost_tracker.total_cost_usd)
         intermediate = orch_state.get("intermediate") or {}
@@ -656,9 +726,7 @@ class OrchestratorRuntime:
         2. The same context is used by the orchestrator for planning decisions
         """
         try:
-            from shared.db.workflow_runs import get_agent_states
-            
-            agent_states = get_agent_states(run_id)
+            agent_states = self._fetch_agent_states(run_id)
             if not agent_states:
                 return
             

@@ -415,6 +415,12 @@ for msg in messages:
     print(msg["messageId"], msg["subject"])
 ```
 
+**Sandbox wrapper contract:**
+- Sandbox snippets are injected into a pre-defined `async def main()` in `mcp_agent/execution/runner.py`; write only the body.
+- Top-level `await` is valid in the snippet; place imports at the top of the snippet (inside main).
+- Do not define `async def main`, `def main`, `if __name__ == "__main__"`, or call `asyncio.run(...)`.
+- Violations return `sandbox_invalid_body`. Returning an empty result after tool calls returns `sandbox_empty_result`.
+
 ---
 
 ## Tool Search API

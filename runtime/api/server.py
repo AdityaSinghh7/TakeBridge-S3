@@ -268,7 +268,26 @@ async def _execute_orchestrator(
 
     try:
         with LATENCY_LOGGER.measure("runtime", "orchestrate"):
-            runtime = OrchestratorRuntime()
+            control_plane = ControlPlaneClient()
+
+            def agent_states_provider(run_id: str) -> Dict[str, Any]:
+                try:
+                    return control_plane.get_agent_states(run_id)
+                except ControlPlaneError as exc:
+                    logger.warning(
+                        "Failed to fetch agent_states from control plane for run_id=%s: %s",
+                        run_id,
+                        exc,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to fetch agent_states from control plane for run_id=%s: %s",
+                        run_id,
+                        exc,
+                    )
+                return {}
+
+            runtime = OrchestratorRuntime(agent_states_provider=agent_states_provider)
             return await runtime.run_task(request)
     except BaseException as exc:  # pragma: no cover - runtime guard
         logger.exception("Orchestration failed: %s", exc)

@@ -307,6 +307,24 @@ def get_resume_context(
         db.close()
 
 
+@router.get("/runs/{run_id}/agent-states")
+def get_agent_states(
+    run_id: str,
+    request: Request,
+    x_internal_token: Optional[str] = Header(default=None, alias="X-Internal-Token"),
+    authorization: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    token_value, token_source = _extract_token(x_internal_token, authorization)
+    _require_internal_token(token_value, run_id=run_id, token_source=token_source, user_agent=request.headers.get("user-agent"))
+
+    db = SessionLocal()
+    try:
+        agent_states = workflow_runs.get_agent_states(run_id, db=db)
+        return {"agent_states": agent_states}
+    finally:
+        db.close()
+
+
 @router.post("/runs/{run_id}/events")
 def persist_run_event(
     run_id: str,

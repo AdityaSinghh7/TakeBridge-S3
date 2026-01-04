@@ -15,6 +15,7 @@ import platform
 import random
 import sys
 import time
+from select import select
 from typing import Any, Callable, Dict, Optional, TypeVar
 from urllib.parse import urlparse
 
@@ -34,14 +35,20 @@ EXECUTOR_BASE_URL = os.getenv("EXECUTOR_BASE_URL", "https://127.0.0.1:8000")
 INTERNAL_VERIFY_SSL = os.getenv("INTERNAL_VERIFY_SSL", "false").lower() in {"1", "true", "yes"}
 NOTIFY_CHANNEL = "workflow_run_queued"
 IS_POSTGRES = DB_URL.startswith("postgres")
-POLL_INTERVAL_SECONDS = float(os.getenv("WORKER_POLL_INTERVAL_SECONDS", "2"))
+# Poll interval is only used for the non-Postgres fallback.
+POLL_INTERVAL_SECONDS = float(os.getenv("WORKER_POLL_INTERVAL_SECONDS", "10"))
 IDLE_LOG_EVERY_SECONDS = float(os.getenv("WORKER_IDLE_LOG_EVERY_SECONDS", "30"))
+RECONCILE_EVERY_SECONDS = float(os.getenv("WORKER_RECONCILE_EVERY_SECONDS", "600"))
+IDLE_SNAPSHOT_EVERY_SECONDS = float(os.getenv("WORKER_IDLE_SNAPSHOT_EVERY_SECONDS", "600"))
 WORKER_CLAIMED_BY = os.getenv("WORKER_CLAIMED_BY") or f"worker@{platform.node()}:{os.getpid()}"
 
 DB_RETRY_MAX_ATTEMPTS = int(os.getenv("WORKER_DB_RETRY_MAX_ATTEMPTS", "5"))
 DB_RETRY_BACKOFF_BASE_SECONDS = float(os.getenv("WORKER_DB_RETRY_BACKOFF_BASE_SECONDS", "0.5"))
 DB_RETRY_BACKOFF_MAX_SECONDS = float(os.getenv("WORKER_DB_RETRY_BACKOFF_MAX_SECONDS", "10"))
 DB_RETRY_BACKOFF_JITTER_SECONDS = float(os.getenv("WORKER_DB_RETRY_BACKOFF_JITTER_SECONDS", "0.25"))
+LISTEN_RETRY_BACKOFF_BASE_SECONDS = float(os.getenv("WORKER_LISTEN_RETRY_BACKOFF_BASE_SECONDS", "1"))
+LISTEN_RETRY_BACKOFF_MAX_SECONDS = float(os.getenv("WORKER_LISTEN_RETRY_BACKOFF_MAX_SECONDS", "30"))
+LISTEN_RETRY_BACKOFF_JITTER_SECONDS = float(os.getenv("WORKER_LISTEN_RETRY_BACKOFF_JITTER_SECONDS", "0.5"))
 
 T = TypeVar("T")
 
@@ -75,6 +82,16 @@ def _summarize_db_url(db_url: str) -> str:
     user = f"{parsed.username}@" if parsed.username else ""
     path = parsed.path or ""
     return f"{parsed.scheme}://{user}{host}{port}{path}"
+
+
+def _normalize_postgres_url(db_url: str) -> str:
+    if "://" not in db_url:
+        return db_url
+    if db_url.startswith("postgresql+"):
+        return "postgresql://" + db_url.split("://", 1)[1]
+    if db_url.startswith("postgres+"):
+        return "postgres://" + db_url.split("://", 1)[1]
+    return db_url
 
 
 def _get_db_identity() -> Dict[str, str]:
@@ -137,6 +154,16 @@ def _db_backoff_seconds(attempt: int) -> float:
     return delay
 
 
+def _listen_backoff_seconds(attempt: int) -> float:
+    base = max(0.0, LISTEN_RETRY_BACKOFF_BASE_SECONDS)
+    cap = max(base, LISTEN_RETRY_BACKOFF_MAX_SECONDS)
+    delay = min(cap, base * (2 ** max(0, attempt - 1)))
+    jitter = max(0.0, LISTEN_RETRY_BACKOFF_JITTER_SECONDS)
+    if jitter:
+        delay += random.uniform(0.0, jitter)
+    return delay
+
+
 def _reset_db_pool(reason: str, exc: Optional[Exception] = None) -> None:
     try:
         engine.dispose()
@@ -148,6 +175,35 @@ def _reset_db_pool(reason: str, exc: Optional[Exception] = None) -> None:
             dispose_exc,
             exc,
         )
+
+
+def _connect_listen_connection() -> Any:
+    try:
+        import psycopg2
+        from psycopg2 import sql as pg_sql
+        from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+    except Exception as exc:
+        raise RuntimeError("psycopg2 is required for Postgres LISTEN/NOTIFY") from exc
+
+    conn = psycopg2.connect(_normalize_postgres_url(DB_URL))
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    with conn.cursor() as cur:
+        cur.execute(pg_sql.SQL("LISTEN {}").format(pg_sql.Identifier(NOTIFY_CHANNEL)))
+    return conn
+
+
+def _wait_for_notifications(conn: Any, timeout: Optional[float]) -> list[Any]:
+    if conn is None or getattr(conn, "closed", 1):
+        raise RuntimeError("listen_connection_closed")
+    timeout_val = None if timeout is None else max(0.0, float(timeout))
+    ready = select([conn], [], [], timeout_val)
+    if not ready[0]:
+        return []
+    conn.poll()
+    notifies = []
+    while conn.notifies:
+        notifies.append(conn.notifies.pop(0))
+    return notifies
 
 
 def _with_db_retry(op_name: str, fn: Callable[[], T]) -> T:
@@ -240,10 +296,12 @@ def _log_worker_startup() -> None:
         os.getcwd(),
     )
     logger.info(
-        "Worker config claimed_by=%s poll_interval_s=%.2f idle_log_every_s=%.2f db=%s executor_base_url=%s verify_ssl=%s notify_channel=%s",
+        "Worker config claimed_by=%s poll_interval_s=%.2f idle_log_every_s=%.2f reconcile_every_s=%.2f idle_snapshot_every_s=%.2f db=%s executor_base_url=%s verify_ssl=%s notify_channel=%s",
         WORKER_CLAIMED_BY,
         POLL_INTERVAL_SECONDS,
         IDLE_LOG_EVERY_SECONDS,
+        RECONCILE_EVERY_SECONDS,
+        IDLE_SNAPSHOT_EVERY_SECONDS,
         _summarize_db_url(DB_URL),
         EXECUTOR_BASE_URL,
         INTERNAL_VERIFY_SSL,
@@ -267,7 +325,15 @@ def _log_worker_startup() -> None:
             identity.get("schema"),
         )
     if IS_POSTGRES:
-        logger.info("Worker DB is Postgres; run pickup is currently via polling (pg_notify wakeups not implemented in worker).")
+        logger.info(
+            "Worker DB is Postgres; run pickup uses LISTEN/NOTIFY with reconciliation every %.2fs.",
+            RECONCILE_EVERY_SECONDS,
+        )
+    else:
+        logger.info(
+            "Worker DB is not Postgres; using polling fallback every %.2fs.",
+            POLL_INTERVAL_SECONDS,
+        )
 
 
 def _json_safe(val: Any) -> Any:
@@ -283,6 +349,26 @@ def _json_safe(val: Any) -> Any:
         if isinstance(val, (list, tuple)):
             return [_json_safe(v) for v in val]
         return str(val)
+
+
+def _summarize_notify_payload(payload: Optional[str]) -> str:
+    if not payload:
+        return ""
+    try:
+        parsed = json.loads(payload)
+        if isinstance(parsed, dict):
+            run_id = parsed.get("run_id")
+            user_id = parsed.get("user_id")
+            parts = []
+            if run_id:
+                parts.append(f"run_id={run_id}")
+            if user_id:
+                parts.append(f"user_id={user_id}")
+            if parts:
+                return " ".join(parts)
+    except Exception:
+        pass
+    return str(payload)[:200]
 
 
 def claim_next_run(claimed_by: str) -> Optional[Dict[str, Any]]:
@@ -530,20 +616,136 @@ async def run_once(claimed_by: str = "worker") -> bool:
     return True
 
 
-async def worker_loop():
-    """
-    Simple loop to process queued runs.
-    """
-    last_idle_log = 0.0
-    idle_checks = 0
-    last_other_claimed_by: Optional[str] = None
+async def _drain_queue(claimed_by: str) -> bool:
+    processed_any = False
     while True:
         try:
-            processed = await run_once(claimed_by=WORKER_CLAIMED_BY)
+            processed = await run_once(claimed_by=claimed_by)
         except Exception as exc:
             logger.exception("Unhandled worker loop error: %s", exc)
             processed = False
         if not processed:
+            break
+        processed_any = True
+    return processed_any
+
+
+async def _worker_loop_postgres() -> None:
+    last_idle_log = 0.0
+    last_snapshot_log = 0.0
+    idle_checks = 0
+    last_other_claimed_by: Optional[str] = None
+    last_notify_payload: Optional[str] = None
+    reconnect_attempt = 0
+    next_reconcile = None
+    if RECONCILE_EVERY_SECONDS > 0:
+        next_reconcile = time.monotonic() + RECONCILE_EVERY_SECONDS
+
+    await _drain_queue(claimed_by=WORKER_CLAIMED_BY)
+
+    while True:
+        listen_conn = None
+        try:
+            listen_conn = _connect_listen_connection()
+            reconnect_attempt = 0
+            logger.info("Listening for queued runs channel=%s", NOTIFY_CHANNEL)
+            processed_any = await _drain_queue(claimed_by=WORKER_CLAIMED_BY)
+            if processed_any:
+                idle_checks = 0
+            while True:
+                now = time.monotonic()
+                timeouts = []
+                if IDLE_LOG_EVERY_SECONDS > 0:
+                    timeouts.append(last_idle_log + IDLE_LOG_EVERY_SECONDS)
+                if next_reconcile is not None:
+                    timeouts.append(next_reconcile)
+                timeout = None
+                if timeouts:
+                    timeout = max(0.0, min(timeouts) - now)
+
+                notifies = await asyncio.to_thread(_wait_for_notifications, listen_conn, timeout)
+                if notifies:
+                    last_notify_payload = _summarize_notify_payload(notifies[-1].payload)
+                    logger.info(
+                        "Received run queue notification count=%s last_payload=%s",
+                        len(notifies),
+                        last_notify_payload or "none",
+                    )
+                    processed_any = await _drain_queue(claimed_by=WORKER_CLAIMED_BY)
+                    if processed_any:
+                        idle_checks = 0
+                    else:
+                        idle_checks += 1
+
+                now = time.monotonic()
+                if next_reconcile is not None and now >= next_reconcile:
+                    logger.info("Reconciliation sweep triggered; draining queue.")
+                    processed_any = await _drain_queue(claimed_by=WORKER_CLAIMED_BY)
+                    if processed_any:
+                        idle_checks = 0
+                    else:
+                        idle_checks += 1
+                    next_reconcile = now + RECONCILE_EVERY_SECONDS
+
+                if IDLE_LOG_EVERY_SECONDS > 0 and now - last_idle_log >= IDLE_LOG_EVERY_SECONDS:
+                    snapshot = None
+                    if IDLE_SNAPSHOT_EVERY_SECONDS > 0 and now - last_snapshot_log >= IDLE_SNAPSHOT_EVERY_SECONDS:
+                        snapshot = _get_queue_snapshot()
+                        last_snapshot_log = now
+                    if snapshot:
+                        newest = snapshot.get("newest") or {}
+                        oldest_queued = snapshot.get("oldest_queued") or {}
+                        newest_summary = newest.get("summary") or ""
+                        newest_summary_preview = str(newest_summary)[:160] if newest_summary else ""
+                        newest_claimed_by = newest.get("claimed_by")
+                        if newest_claimed_by and newest_claimed_by != WORKER_CLAIMED_BY:
+                            if newest_claimed_by != last_other_claimed_by:
+                                logger.warning(
+                                    "Newest run appears claimed by a different worker newest_id=%s newest_status=%s claimed_by=%s this_worker=%s",
+                                    newest.get("id"),
+                                    newest.get("status"),
+                                    newest_claimed_by,
+                                    WORKER_CLAIMED_BY,
+                                )
+                                last_other_claimed_by = str(newest_claimed_by)
+                        logger.info(
+                            "Idle: no queued runs (checks=%s); waiting for notifications queued_count=%s newest_id=%s newest_status=%s newest_claimed_by=%s newest_summary=%s oldest_queued_id=%s last_notify=%s",
+                            idle_checks,
+                            snapshot.get("queued_count"),
+                            newest.get("id"),
+                            newest.get("status"),
+                            newest_claimed_by,
+                            newest_summary_preview,
+                            oldest_queued.get("id"),
+                            last_notify_payload or "none",
+                        )
+                    else:
+                        logger.info(
+                            "Idle: no queued runs (checks=%s); waiting for notifications last_notify=%s",
+                            idle_checks,
+                            last_notify_payload or "none",
+                        )
+                    last_idle_log = now
+        except Exception as exc:
+            logger.exception("Worker LISTEN loop error: %s", exc)
+            if listen_conn is not None:
+                try:
+                    listen_conn.close()
+                except Exception:
+                    pass
+            reconnect_attempt += 1
+            backoff = _listen_backoff_seconds(reconnect_attempt)
+            logger.warning("Reconnecting LISTEN in %.2fs", backoff)
+            await asyncio.sleep(backoff)
+
+
+async def _worker_loop_polling() -> None:
+    last_idle_log = 0.0
+    idle_checks = 0
+    last_other_claimed_by: Optional[str] = None
+    while True:
+        processed_any = await _drain_queue(claimed_by=WORKER_CLAIMED_BY)
+        if not processed_any:
             idle_checks += 1
             now = time.monotonic()
             if now - last_idle_log >= IDLE_LOG_EVERY_SECONDS:
@@ -585,6 +787,16 @@ async def worker_loop():
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
         else:
             idle_checks = 0
+
+
+async def worker_loop():
+    """
+    Process queued runs with LISTEN/NOTIFY on Postgres and polling fallback elsewhere.
+    """
+    if IS_POSTGRES:
+        await _worker_loop_postgres()
+    else:
+        await _worker_loop_polling()
 
 
 if __name__ == "__main__":  # pragma: no cover
