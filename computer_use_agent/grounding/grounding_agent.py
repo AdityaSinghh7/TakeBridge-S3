@@ -29,22 +29,34 @@ logger = logging.getLogger("desktopenv.agent")
 _TEXT_SPAN_PROMPT_PATH = Path(__file__).with_name("text_span_prompt.txt")
 
 GROUNDING_CLICK_REGEXES = [
-    re.compile(r"click\s*\(\s*x\s*=\s*(\d+)\s*,\s*y\s*=\s*(\d+)\s*\)", re.IGNORECASE),
-    re.compile(r"click\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)", re.IGNORECASE),
+    re.compile(
+        r"click\s*\(\s*x\s*=\s*([-+]?\d*\.?\d+)\s*,\s*y\s*=\s*([-+]?\d*\.?\d+)\s*\)",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"click\s*\(\s*([-+]?\d*\.?\d+)\s*,\s*([-+]?\d*\.?\d+)\s*\)",
+        re.IGNORECASE,
+    ),
 ]
 
 
-def _parse_xy_from_text(text: str) -> Optional[Tuple[int, int]]:
-    if not text or "click" not in text.lower():
+def _parse_xy_from_text(text: str) -> Optional[Tuple[float, float]]:
+    if not text:
         return None
     for pattern in GROUNDING_CLICK_REGEXES:
         match = pattern.search(text)
         if match:
             try:
-                return int(match.group(1)), int(match.group(2))
+                return float(match.group(1)), float(match.group(2))
             except Exception:
                 continue
-    return None
+    numericals = re.findall(r"[-+]?\d*\.?\d+", text)
+    if len(numericals) < 2:
+        return None
+    try:
+        return float(numericals[0]), float(numericals[1])
+    except Exception:
+        return None
 
 
 def _load_text_span_prompt() -> str:
@@ -246,6 +258,8 @@ class OSWorldACI(ACI):
         # Configure scaling
         self.width = width
         self.height = height
+        self.grounding_width = engine_params_for_grounding.get("grounding_width", width)
+        self.grounding_height = engine_params_for_grounding.get("grounding_height", height)
 
         # Maintain state for save_to_knowledge
         self.knowledge = []
@@ -297,11 +311,137 @@ class OSWorldACI(ACI):
                 "No grounding_base_url configured; falling back to LLM-based coordinates."
             )
 
+    def _decode_screenshot(self, screenshot_data: Any) -> bytes:
+        if isinstance(screenshot_data, str):
+            decoded = base64.b64decode(screenshot_data)
+            logger.info(
+                "grounding.decode_screenshot: decoded string input into %s bytes (base64 source).",
+                len(decoded),
+            )
+            return decoded
+        if isinstance(screenshot_data, bytes):
+            logger.info(
+                "grounding.decode_screenshot: received %s raw bytes (already decoded).",
+                len(screenshot_data),
+            )
+            return screenshot_data
+        logger.error(
+            "grounding.decode_screenshot: received unsupported screenshot type %s, failing.",
+            type(screenshot_data).__name__,
+        )
+        raise ValueError(
+            f"Unsupported screenshot type for grounding inference: {type(screenshot_data)}"
+        )
+
+    def _get_image_size(self, image_bytes: bytes) -> Optional[Tuple[int, int]]:
+        try:
+            with Image.open(BytesIO(image_bytes)) as img:
+                size = img.size
+                logger.info(
+                    "grounding.image_size: screenshot natural dimensions detected %sx%s.",
+                    size[0],
+                    size[1],
+                )
+                return size
+        except Exception as exc:
+            logger.warning("Failed to read screenshot size: %s", exc)
+            return None
+
+    def _coerce_raw_coords(
+        self,
+        x_val: float,
+        y_val: float,
+        image_w: Optional[int],
+        image_h: Optional[int],
+    ) -> Tuple[float, float]:
+        cfg_w = int(self.engine_params_for_grounding.get("grounding_width") or 0)
+        cfg_h = int(self.engine_params_for_grounding.get("grounding_height") or 0)
+        logger.info(
+            "grounding.coerce_raw_coords: received coords=(%r,%r) with image_size=(%s,%s) config_dims=(%s,%s).",
+            x_val,
+            y_val,
+            image_w,
+            image_h,
+            cfg_w,
+            cfg_h,
+        )
+        if 0.0 <= x_val <= 1.0 and 0.0 <= y_val <= 1.0:
+            if image_w and image_h:
+                raw_x, raw_y = x_val * image_w, y_val * image_h
+                logger.info(
+                    "grounding.coerce_raw_coords: normalized coords interpreted against actual image produce=(%r,%r).",
+                    raw_x,
+                    raw_y,
+                )
+                return raw_x, raw_y
+            if cfg_w > 0 and cfg_h > 0:
+                raw_x, raw_y = x_val * cfg_w, y_val * cfg_h
+                logger.info(
+                    "grounding.coerce_raw_coords: normalized coords interpreted against configured grounding space produce=(%r,%r).",
+                    raw_x,
+                    raw_y,
+                )
+                return raw_x, raw_y
+        logger.info(
+            "grounding.coerce_raw_coords: coords treated as absolute pixel values -> (%r,%r).",
+            x_val,
+            y_val,
+        )
+        return x_val, y_val
+
+    def _resolve_grounding_space(
+        self,
+        x_val: float,
+        y_val: float,
+        image_w: Optional[int],
+        image_h: Optional[int],
+    ) -> Tuple[int, int]:
+        cfg_w = int(self.engine_params_for_grounding.get("grounding_width") or 0)
+        cfg_h = int(self.engine_params_for_grounding.get("grounding_height") or 0)
+        source_w = image_w
+        source_h = image_h
+        reason = "image"
+        if image_w and image_h:
+            if x_val > image_w or y_val > image_h:
+                if cfg_w > 0 and cfg_h > 0 and x_val <= cfg_w and y_val <= cfg_h:
+                    source_w, source_h = cfg_w, cfg_h
+                    reason = "config"
+        elif cfg_w > 0 and cfg_h > 0:
+            source_w, source_h = cfg_w, cfg_h
+            reason = "config"
+        else:
+            source_w, source_h = self.width, self.height
+            reason = "screen"
+        self.grounding_width = int(source_w)
+        self.grounding_height = int(source_h)
+        logger.info(
+            "grounding.resolve_space input=(%r,%r) image=(%s,%s) cfg=(%s,%s) chosen=(%s,%s) reason=%s",
+            x_val,
+            y_val,
+            image_w,
+            image_h,
+            cfg_w,
+            cfg_h,
+            self.grounding_width,
+            self.grounding_height,
+            reason,
+        )
+        return self.grounding_width, self.grounding_height
+
     # Given the state and worker's referring expression, use the grounding model to generate (x,y)
     def generate_coords(self, ref_expr: str, obs: Dict) -> List[int]:
         screenshot_data = obs.get("screenshot")
         if screenshot_data is None:
             raise ValueError("Observation missing 'screenshot' for grounding call")
+        screenshot_len = None
+        if isinstance(screenshot_data, (bytes, str)):
+            screenshot_len = len(screenshot_data)
+            logger.info(
+                    "grounding.generate_coords.start: ref_expr=%s (ascii-safe), received %s of length %s bytes.",
+                    safe_ascii(ref_expr),
+                    type(screenshot_data).__name__,
+                    screenshot_len,
+                )
 
         # Get hierarchical logger if available
         h_logger = get_hierarchical_logger()
@@ -321,29 +461,61 @@ class OSWorldACI(ACI):
             },
         )
 
-        if isinstance(screenshot_data, str):
-            image_bytes = base64.b64decode(screenshot_data)
-        elif isinstance(screenshot_data, bytes):
-            image_bytes = screenshot_data
-        else:
-            raise ValueError(
-                f"Unsupported screenshot type for grounding inference: {type(screenshot_data)}"
-            )
+        image_bytes = self._decode_screenshot(screenshot_data)
+        image_size = self._get_image_size(image_bytes)
+        image_w, image_h = (image_size or (None, None))
+        logger.info(
+            "grounding.generate_coords: screenshot bytes=%s, resolved size=%sx%s for grounding.",
+            len(image_bytes),
+            image_w,
+            image_h,
+        )
 
         source = "fallback"
         coords: Optional[List[int]] = None
 
         if self.grounding_inference_fn is not None:
+            logger.info("grounding.generate_coords: invoking custom inference callable.")
             x_norm, y_norm = self.grounding_inference_fn(image_bytes, ref_expr)
-            x = round(x_norm * self.width)
-            y = round(y_norm * self.height)
-            coords = [x, y]
+            logger.info(
+                "grounding.generate_coords: custom inference returned normalized coords=(%r,%r).",
+                x_norm,
+                y_norm,
+            )
+            raw_x, raw_y = self._coerce_raw_coords(x_norm, y_norm, image_w, image_h)
+            coords = [int(round(raw_x)), int(round(raw_y))]
+            logger.info(
+                "grounding.generate_coords: custom inference mapped to raw=(%r,%r) rounded=(%s,%s).",
+                raw_x,
+                raw_y,
+                coords[0],
+                coords[1],
+            )
             source = "custom_inference"
+            logger.info(
+                "grounding.generate_coords.route chosen=custom_inference reason=custom_fn coords=%s",
+                coords,
+            )
         else:
             if self.grounding_base_url:
-                coords = self._grounding_service_coords(image_bytes, ref_expr)
+                logger.info(
+                    "grounding.generate_coords.service.start ref_expr=%s",
+                    safe_ascii(ref_expr),
+                )
+                coords = self._grounding_service_coords(
+                    image_bytes, ref_expr, image_w=image_w, image_h=image_h
+                )
                 if coords:
+                    logger.info(
+                        "grounding.generate_coords.service.coords=(%s,%s)",
+                        coords[0],
+                        coords[1],
+                    )
                     source = "service"
+                    logger.info(
+                        "grounding.generate_coords: service route succeeded; reason=service_success coords=%s.",
+                        coords,
+                    )
                 else:
                     logger.warning(
                         "Grounding service call failed; falling back to model inference for coordinates."
@@ -358,6 +530,10 @@ class OSWorldACI(ACI):
 
                 # Configure the context, UI-TARS demo does not use system prompt
                 prompt = f"Query:{ref_expr}\nOutput only the coordinate of one point in your response.\n"
+                logger.info(
+                    "grounding.generate_coords: falling back to LLM inference, prompt length=%s characters.",
+                    len(prompt),
+                )
                 self.grounding_model.add_message(
                     text_content=prompt, image_content=obs["screenshot"], put_text_last=True
                 )
@@ -367,11 +543,45 @@ class OSWorldACI(ACI):
                     self.grounding_model,
                     cost_source="grounding.fallback_coords",
                 )
-                print("RAW GROUNDING MODEL RESPONSE:", response)
-                numericals = re.findall(r"\d+", response)
-                assert len(numericals) >= 2
-                coords = [int(numericals[0]), int(numericals[1])]
+                logger.info(
+                    "grounding.generate_coords: LLM fallback produced %s characters of text.",
+                    len(response or ""),
+                )
+                parsed = _parse_xy_from_text(response)
+                if not parsed:
+                    numericals = re.findall(r"[-+]?\d*\.?\d+", response)
+                    if len(numericals) < 2:
+                        raise RuntimeError(
+                            "Failed to parse grounding coordinates from response"
+                        )
+                    parsed = (float(numericals[0]), float(numericals[1]))
+                    logger.info(
+                        "grounding.generate_coords: regex-based parsing of LLM text yielded coords=(%r,%r).",
+                        parsed[0],
+                        parsed[1],
+                    )
+                else:
+                    logger.info(
+                        "grounding.generate_coords: regex pattern parsing of LLM text yielded coords=(%r,%r).",
+                        parsed[0],
+                        parsed[1],
+                    )
+                raw_x, raw_y = self._coerce_raw_coords(
+                    parsed[0], parsed[1], image_w, image_h
+                )
+                coords = [int(round(raw_x)), int(round(raw_y))]
+                logger.info(
+                    "grounding.generate_coords: LLM fallback normalized to raw=(%r,%r) rounded=(%s,%s).",
+                    raw_x,
+                    raw_y,
+                    coords[0],
+                    coords[1],
+                )
                 source = "llm"
+                logger.info(
+                    "grounding.generate_coords: selected llm fallback route; reason=custom_fallback coords=%s.",
+                    coords,
+                )
 
         if coords is None:
             raise RuntimeError("Failed to generate grounding coordinates")
@@ -392,11 +602,33 @@ class OSWorldACI(ACI):
                 "source": source,
             },
         )
+        grounding_w, grounding_h = self._resolve_grounding_space(
+            coords[0], coords[1], image_w, image_h
+        )
+        logger.info(
+            "grounding.generate_coords.done coords=(%s,%s) source=%s grounding_space=%sx%s",
+            coords[0],
+            coords[1],
+            source,
+            grounding_w,
+            grounding_h,
+        )
         return coords
 
     def _grounding_service_coords(
-        self, image_bytes: bytes, prompt: str
+        self,
+        image_bytes: bytes,
+        prompt: str,
+        *,
+        image_w: Optional[int] = None,
+        image_h: Optional[int] = None,
     ) -> Optional[List[int]]:
+        logger.info(
+            "grounding.service_coords.start: preparing to call external grounding service with prompt length=%s and provided image dimensions %s×%s.",
+            len(prompt),
+            image_w,
+            image_h,
+        )
         if not self.grounding_base_url:
             if not self._logged_grounding_absence:
                 logger.warning(
@@ -405,13 +637,21 @@ class OSWorldACI(ACI):
                 self._logged_grounding_absence = True
             return None
 
-        try:
-            with Image.open(BytesIO(image_bytes)) as img:
-                width, height = img.size
-        except Exception as exc:
-            logger.error("Failed to read screenshot for grounding service: %s", exc)
-            logger.warning("Falling back to LLM grounding due to image read failure.")
-            return None
+        width = image_w
+        height = image_h
+        if not width or not height:
+            try:
+                with Image.open(BytesIO(image_bytes)) as img:
+                    width, height = img.size
+                logger.info(
+                    "grounding.service_coords: derived image dimensions for service call %sx%s.",
+                    width,
+                    height,
+                )
+            except Exception as exc:
+                logger.error("Failed to read screenshot for grounding service: %s", exc)
+                logger.warning("Falling back to LLM grounding due to image read failure.")
+                return None
 
         return self._invoke_grounding_service(image_bytes, prompt, width, height)
 
@@ -420,6 +660,15 @@ class OSWorldACI(ACI):
     ) -> Optional[List[int]]:
         with LATENCY_LOGGER.measure("grounding", "compress_image"):
             compressed_image = compress_image(image_bytes=image_bytes)
+        url = f"{self.grounding_base_url.rstrip('/')}/call_llm"
+        logger.info(
+            "grounding.service_request: posting %s-byte compressed screenshot to %s with bounding dims %sx%s and prompt_len=%s.",
+            len(compressed_image),
+            url,
+            width,
+            height,
+            len(prompt),
+        )
         image_base64 = base64.b64encode(compressed_image).decode("utf-8")
 
         messages: List[Dict[str, Any]] = []
@@ -449,8 +698,6 @@ class OSWorldACI(ACI):
             "temperature": 0.0,
             "top_p": 0.9,
         }
-
-        url = f"{self.grounding_base_url.rstrip('/')}/call_llm"
 
         headers = {}
         if self.grounding_api_key:
@@ -487,13 +734,24 @@ class OSWorldACI(ACI):
                 if 0 <= x_val <= 1 and 0 <= y_val <= 1:
                     raw_x = x_val * width
                     raw_y = y_val * height
+                    normalized = True
                 else:
                     raw_x = x_val
                     raw_y = y_val
-                coords_payload = [
-                    round(raw_x * self.width / width),
-                    round(raw_y * self.height / height),
-                ]
+                    normalized = False
+                coords_payload = [round(raw_x), round(raw_y)]
+                logger.info(
+                    "grounding.service_response: attempt=%s parsed=(%r,%r) raw=(%r,%r) rounded=(%s,%s) normalized=%s based on %s chars from service.",
+                    attempt + 1,
+                    x_val,
+                    y_val,
+                    raw_x,
+                    raw_y,
+                    coords_payload[0],
+                    coords_payload[1],
+                    normalized,
+                    len(text),
+                )
                 emit_event(
                     "grounding.generate_coords.service_success",
                     {
@@ -577,7 +835,12 @@ class OSWorldACI(ACI):
             },
         )
 
-        ocr_table, ocr_elements = self.get_ocr_elements(obs["screenshot"])
+        screenshot_bytes = self._decode_screenshot(obs["screenshot"])
+        image_size = self._get_image_size(screenshot_bytes)
+        image_w, image_h = (image_size or (None, None))
+        self._resolve_grounding_space(0, 0, image_w, image_h)
+
+        ocr_table, ocr_elements = self.get_ocr_elements(screenshot_bytes)
 
         alignment_prompt = ""
         if alignment == "start":
@@ -617,6 +880,7 @@ class OSWorldACI(ACI):
                 elem["left"] + (elem["width"] // 2),
                 elem["top"] + (elem["height"] // 2),
             ]
+        coords = self.resize_coordinates(coords)
         emit_event(
             "grounding.generate_text_coords.completed",
             {
@@ -638,15 +902,34 @@ class OSWorldACI(ACI):
         """
         self.current_task_context = task_context
 
-    # Resize from grounding model dim into OSWorld dim (1920 * 1080)
+    # Resize from grounding coord space into current action space.
     def resize_coordinates(self, coordinates: List[int]) -> List[int]:
-        grounding_width = self.engine_params_for_grounding["grounding_width"]
-        grounding_height = self.engine_params_for_grounding["grounding_height"]
+        grounding_width = self.grounding_width or self.engine_params_for_grounding.get(
+            "grounding_width", self.width
+        )
+        grounding_height = self.grounding_height or self.engine_params_for_grounding.get(
+            "grounding_height", self.height
+        )
+        grounding_width = max(int(grounding_width), 1)
+        grounding_height = max(int(grounding_height), 1)
+        logger.info(
+            "grounding.resize_coordinates.start input=%s grounding_space=%sx%s current_screen=%sx%s",
+            coordinates,
+            grounding_width,
+            grounding_height,
+            self.width,
+            self.height,
+        )
 
-        return [
-            round(coordinates[0] * self.width / grounding_width),
-            round(coordinates[1] * self.height / grounding_height),
-        ]
+        x = round(coordinates[0] * self.width / grounding_width)
+        y = round(coordinates[1] * self.height / grounding_height)
+        x = max(0, min(x, max(self.width - 1, 0)))
+        y = max(0, min(y, max(self.height - 1, 0)))
+        logger.info(
+            "grounding.resize_coordinates.result output=%s",
+            [x, y],
+        )
+        return [x, y]
 
     @agent_action
     def click(

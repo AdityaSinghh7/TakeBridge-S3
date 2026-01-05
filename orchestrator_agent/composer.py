@@ -31,11 +31,8 @@ def _summarize_capabilities(capabilities: Dict[str, Any]) -> Tuple[str, str]:
     for p in providers:
         name = p.get("provider") or "unknown"
         tools = p.get("tools") or []
-        preview = ", ".join(tools[:5])
-        extra = ""
-        if len(tools) > 5:
-            extra = f", ... ({len(tools)} tools total)"
-        provider_lines.append(f"- {name}: {preview}{extra}")
+        tools_list = ", ".join(tools)
+        provider_lines.append(f"- {name}: {tools_list}")
     mcp_summary = "\n".join(provider_lines) if provider_lines else "None"
 
     apps = computer_caps.get("available_apps", []) or []
@@ -76,13 +73,13 @@ You have two sub-agents you can delegate work to:
    - **Logical Isolation**: A distinct phase of the project is complete.
 
 4. **Task Definition**:
-   - For **MCP**: You MUST mention the `provider_id` and `tool_names` capable of doing the work.
+   - For **MCP**: You MUST mention the `provider_id` and `tool_id` capable of doing the work.
    - For **CUA**: You MUST mention the `app_name` required.
 
 ### **Defining Outcomes (`expected_outcome`)**
 You must clearly define what the orchestrator should expect at the end of each step:
-- **For Retrieval Steps** (e.g., Search, Read): Define exactly what **data** needs to be returned for future steps (e.g., "The body text of the last 3 emails").
-- **For Mutation/Action Steps** (e.g., Send, Save, Type): Define the **success criteria** or state change (e.g., "Confirmation that the file 'report.txt' is saved on Desktop").
+- **For Retrieval Steps** (e.g., Search, Read): Define the **data needed** for later steps without adding new criteria or thresholds (e.g., "Email contents needed for classification").
+- **For Mutation/Action Steps** (e.g., Send, Save, Type): Define the **success state** without inventing extra requirements (e.g., "Confirmation that the file is saved").
 
 ### **Output Schema**
 Respond with a single JSON object matching this schema:
@@ -120,6 +117,8 @@ Respond with a single JSON object matching this schema:
 - The `prompt` field should be self-contained. 
 - If a step needs data from a previous step, reference it naturally (e.g., "Using the email summary retrieved in the previous step..."). 
 - DO NOT use template variables like `{{step1.result}}`. Use English.
+- Keep prompts and `expected_outcome` high-level and resilient: avoid invented decision rules, keyword lists, thresholds, or example phrases unless the user explicitly provided them.
+- Use the user's categories and requirements as-is; do not add new labels or criteria.
 
 Now the user task you must decompose will be provided separately as 'original_task'.
 """
@@ -317,7 +316,7 @@ def compose_plan(
         logger.info("Calling LLM for compose_plan - task: %s", task[:100])
         resp = respond_once(messages=messages)
         raw_text = extract_assistant_text(resp)
-        logger.info("LLM response received - length: %d chars, preview: %s", len(raw_text), raw_text[:200])
+        logger.info("LLM response received - length: %d chars, preview: %s", len(raw_text), raw_text)
     except Exception as exc:  # pragma: no cover - defensive guard
         logger.exception("Task compose agent call failed on first attempt: %s", exc)
         plan = _build_minimal_plan(task)

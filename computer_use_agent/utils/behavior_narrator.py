@@ -11,7 +11,7 @@ from computer_use_agent.utils.formatters import (
 from shared.streaming import emit_event
 from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
-from typing import Dict
+from typing import Any, Dict
 import base64
 import cv2
 import numpy as np
@@ -176,7 +176,7 @@ class BehaviorNarrator:
         before_img_bytes: bytes,
         after_img_bytes: bytes,
         pyautogui_action: str,
-    ) -> Dict[str, str]:
+    ) -> Dict[str, Any]:
         if pyautogui_action == "DONE":
             return {
                 "fact_thoughts": "The agent has indicated that it is done with the task.",
@@ -201,6 +201,7 @@ class BehaviorNarrator:
                 "detail": "high",
             },
         }
+        artifacts: Dict[str, bytes] = {}
         if mouse_actions:
             coords = mouse_actions[-1].split("(")[1].strip(")").split(", ")
             x, y = int(coords[0]), int(coords[1])
@@ -229,6 +230,11 @@ class BehaviorNarrator:
                     "url": f"data:image/png;base64,{base64.b64encode(zoomed_after_img_bytes).decode('utf-8')}",
                     "detail": "high",
                 },
+            }
+            artifacts = {
+                "marked_before_img_bytes": marked_before_img_bytes,
+                "marked_after_img_bytes": marked_after_img_bytes,
+                "zoomed_after_img_bytes": zoomed_after_img_bytes,
             }
         else:
             after_img_message = {
@@ -275,6 +281,8 @@ class BehaviorNarrator:
             "fact_thoughts": fact_thoughts,
             "fact_answer": f"Fact Caption from Screenshot {screenshot_num}: {fact_answer}",
         }
+        if artifacts:
+            result["artifacts"] = artifacts
         emit_event(
             "behavior_narrator.summary",
             {

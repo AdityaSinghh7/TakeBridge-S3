@@ -12,6 +12,7 @@ resilient in environments where downstream agents are not fully wired.
 """
 
 import logging
+from dataclasses import asdict, is_dataclass
 from typing import Any, Dict, Optional
 
 from orchestrator_agent.data_types import AgentTarget, OrchestratorRequest, PlannedStep
@@ -19,6 +20,24 @@ from computer_use_agent.orchestrator.data_types import OrchestrateRequest
 from shared.hierarchical_logger import set_step_id
 
 logger = logging.getLogger(__name__)
+
+
+def _serialize_runner_result(raw_result_obj: Any) -> Dict[str, Any]:
+    if raw_result_obj is None:
+        return {}
+    if is_dataclass(raw_result_obj):
+        return asdict(raw_result_obj)
+    raw_dict = (
+        raw_result_obj.__dict__
+        if hasattr(raw_result_obj, "__dict__")
+        else dict(raw_result_obj)
+    )
+    steps = raw_dict.get("steps")
+    if isinstance(steps, list):
+        raw_dict["steps"] = [
+            asdict(step) if is_dataclass(step) else step for step in steps
+        ]
+    return raw_dict
 
 
 def _build_controller_payload(metadata: Dict[str, Any]) -> Dict[str, Any]:
@@ -244,7 +263,7 @@ def run_computer_use_agent(
         }
         
         raw_result_obj = runner(cu_request, orchestrator_context=runner_metadata)
-        raw_dict = raw_result_obj.__dict__ if hasattr(raw_result_obj, "__dict__") else dict(raw_result_obj)
+        raw_dict = _serialize_runner_result(raw_result_obj)
         
         # Check if this was a handback - if so, raise exception to stop the orchestrator loop
         if raw_dict.get("status") == "attention" and raw_dict.get("completion_reason") == "HANDOFF_TO_HUMAN":
@@ -316,7 +335,7 @@ def run_computer_use_agent_resume(
         }
 
         raw_result_obj = runner(cu_request, orchestrator_context=runner_metadata)
-        raw_dict = raw_result_obj.__dict__ if hasattr(raw_result_obj, "__dict__") else dict(raw_result_obj)
+        raw_dict = _serialize_runner_result(raw_result_obj)
     except Exception as exc:  # pragma: no cover
         logger.info("Computer-use agent resume fallback due to error: %s", exc)
         raw_dict = {

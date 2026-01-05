@@ -196,7 +196,7 @@ class VMControllerClient:
         interval_s = (
             interval_seconds
             if interval_seconds is not None
-            else _env_float(_HEALTH_INTERVAL_ENV_VAR, 5.0)
+            else _env_float(_HEALTH_INTERVAL_ENV_VAR, 25.0)
         )
         health_path = path or os.getenv(_HEALTH_PATH_ENV_VAR, "/health")
         if health_path and not health_path.startswith("/"):

@@ -16,6 +16,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException
 from orchestrator_agent.capabilities import (
     fetch_mcp_capabilities,
     _normalize_platform,
+    list_computer_actions,
 )
 from orchestrator_agent.composer import compose_plan
 from orchestrator_agent.data_types import OrchestratorRequest
@@ -77,16 +78,22 @@ async def compose_task(
 
     # Stubbed computer capabilities (no per-user VM)
     stub_apps = [
-        "Google Chrome",
-        "Firefox",
-        "VS Code",
-        "Terminal",
-        "LibreOffice Writer",
+        "edge",
+        "libreoffice",
+        "libreoffice-writer",
+        "libreoffice-calc",
+        "libreoffice-impress",
+        "libreoffice-base",
+        "libreoffice-math",
+        "notepad",
+        "powershell",
+        "cmd",
     ]
     computer_caps = {
-        "platform": platform or "darwin",
+        "platform": platform or "windows",
         "available_apps": stub_apps,
         "active_windows": [],
+        "actions": list_computer_actions(),
     }
 
     # Combine capabilities

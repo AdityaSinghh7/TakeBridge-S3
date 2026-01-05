@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import copy
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, cast
@@ -21,6 +22,7 @@ from computer_use_agent.orchestrator.data_types import (
 )
 from computer_use_agent.utils.local_env import LocalEnv
 from computer_use_agent.utils.behavior_narrator import BehaviorNarrator
+from computer_use_agent.utils.computer_use_html_logger import ComputerUseHtmlLogger
 from shared.latency_logger import LATENCY_LOGGER
 from shared.streaming import emit_event
 from shared import agent_signal
@@ -347,9 +349,16 @@ def runner(
         _is_resume_flow = bool(orchestrator_context.get("is_resume_flow"))
     try:
         screen_info = controller.screen_size()
+        logger.info(
+            f"RECEIVED controller screen sizes: {screen_info}"
+        )
         screen_width = int(screen_info.get("width", 1920))
         screen_height = int(screen_info.get("height", 1080))
+        logger.info(
+            f"SETTING controller screen sizes: {screen_width}x{screen_height}"
+        )
     except Exception:
+        logger.exception("ERROR: Failed to get controller screen sizes setting default")
         screen_width = 1920
         screen_height = 1080
 
@@ -369,6 +378,9 @@ def runner(
         # Store orchestrator state in closure for handback capture
         nonlocal _inference_update, _is_resume_flow, _orchestrator_state, _resume_state
         
+        run_id = RUN_LOG_ID.get() or os.getenv("RUN_LOG_ID")
+        html_logger = ComputerUseHtmlLogger(run_id)
+
         grounding_agent = OSWorldACI(
             env=env,
             platform=platform.lower() if platform else "unknown",
@@ -424,6 +436,7 @@ def runner(
                 "platform": platform,
             },
         )
+        html_logger.log_run_start(request.task, platform)
 
         before_screenshot_bytes: Optional[bytes] = None
         reflection_screenshot_bytes: Optional[bytes] = None
@@ -449,6 +462,28 @@ def runner(
         for step_index in range(start_step_index, max_steps + start_step_index):
             agent_signal.raise_if_exit_requested()
             agent_signal.wait_for_resume()
+
+            try:
+                prev_width = grounding_agent.width
+                prev_height = grounding_agent.height
+                screen_info = controller.screen_size()
+                width = int(screen_info.get("width", prev_width))
+                height = int(screen_info.get("height", prev_height))
+                if width > 0 and height > 0:
+                    grounding_agent.width = width
+                    grounding_agent.height = height
+                    if width != prev_width or height != prev_height:
+                        with LATENCY_LOGGER.measure(
+                            "runner",
+                            "capture_screenshot",
+                            extra={"phase": "resize_refresh", "step": step_index},
+                        ):
+                            before_screenshot_bytes = controller.capture_screenshot()
+                        reflection_screenshot_bytes = before_screenshot_bytes
+            except Exception as exc:
+                logger.warning("Failed to refresh screen size: %s", exc)
+
+            step_before_bytes = before_screenshot_bytes
 
             emit_event(
                 "runner.step.started",
@@ -706,6 +741,26 @@ def runner(
                         "completion_reason": completion_reason,
                     },
                 )
+
+                html_logger.log_step(
+                    step_index=step_index,
+                    action=action,
+                    exec_code=exec_code,
+                    execution_mode=execution_mode,
+                    status=status,
+                    completion_reason=completion_reason,
+                    plan=info.get("plan"),
+                    reflection=info.get("reflection"),
+                    handback_request=handback_request,
+                    behavior_fact=None,
+                    behavior_thoughts=None,
+                    before_img=step_before_bytes,
+                    after_img=after_screenshot_bytes,
+                    delayed_after_img=None,
+                    marked_before_img=None,
+                    marked_after_img=None,
+                    zoomed_after_img=None,
+                )
                 
                 # Break out of the loop - run is paused for human attention
                 break
@@ -775,6 +830,9 @@ def runner(
                     after_img_bytes=after_screenshot_bytes,
                     pyautogui_action=action,
                 )
+            behavior_artifacts = None
+            if isinstance(behavior, dict):
+                behavior_artifacts = behavior.pop("artifacts", None)
 
             steps.append(
                 RunnerStep(
@@ -813,6 +871,25 @@ def runner(
             )
 
             if normalized in {"DONE", "FAIL"}:
+                html_logger.log_step(
+                    step_index=step_index,
+                    action=action,
+                    exec_code=exec_code,
+                    execution_mode=execution_mode,
+                    status=status,
+                    completion_reason=completion_reason,
+                    plan=info.get("plan"),
+                    reflection=info.get("reflection"),
+                    handback_request=None,
+                    behavior_fact=behavior.get("fact_answer") if behavior else None,
+                    behavior_thoughts=behavior.get("fact_thoughts") if behavior else None,
+                    before_img=step_before_bytes,
+                    after_img=after_screenshot_bytes,
+                    delayed_after_img=None,
+                    marked_before_img=(behavior_artifacts or {}).get("marked_before_img_bytes"),
+                    marked_after_img=(behavior_artifacts or {}).get("marked_after_img_bytes"),
+                    zoomed_after_img=(behavior_artifacts or {}).get("zoomed_after_img_bytes"),
+                )
                 break
 
             delayed_after_screenshot_bytes = after_screenshot_bytes
@@ -825,6 +902,28 @@ def runner(
 
             reflection_screenshot_bytes = delayed_after_screenshot_bytes
             before_screenshot_bytes = delayed_after_screenshot_bytes
+
+            html_logger.log_step(
+                step_index=step_index,
+                action=action,
+                exec_code=exec_code,
+                execution_mode=execution_mode,
+                status="in_progress",
+                completion_reason=None,
+                plan=info.get("plan"),
+                reflection=info.get("reflection"),
+                handback_request=None,
+                behavior_fact=behavior.get("fact_answer") if behavior else None,
+                behavior_thoughts=behavior.get("fact_thoughts") if behavior else None,
+                before_img=step_before_bytes,
+                after_img=after_screenshot_bytes,
+                delayed_after_img=delayed_after_screenshot_bytes
+                if delayed_after_screenshot_bytes != after_screenshot_bytes
+                else None,
+                marked_before_img=(behavior_artifacts or {}).get("marked_before_img_bytes"),
+                marked_after_img=(behavior_artifacts or {}).get("marked_after_img_bytes"),
+                zoomed_after_img=(behavior_artifacts or {}).get("zoomed_after_img_bytes"),
+            )
 
         else:
             status = "timeout"
@@ -869,6 +968,8 @@ def runner(
                 "handback_request": handback_request_str,
             },
         )
+
+        html_logger.log_run_end(status, completion_reason)
 
         return result
 

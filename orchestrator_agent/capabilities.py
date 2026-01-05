@@ -74,6 +74,21 @@ def _normalize_platform(raw: Optional[str]) -> str:
     return val
 
 
+def list_computer_actions() -> List[str]:
+    """
+    Return the available computer-use agent action names.
+    """
+    try:
+        from computer_use_agent.grounding.grounding_agent import (
+            list_osworld_agent_actions,
+        )
+
+        return list_osworld_agent_actions()
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logger.debug("Unable to load OSWorld agent actions: %s", exc)
+        return []
+
+
 def fetch_mcp_capabilities(user_id: str, force_refresh: bool = False) -> Dict[str, Any]:
     """
     Fetch available MCP providers and tools for a user.
@@ -146,23 +161,12 @@ def fetch_computer_capabilities(
         }
     """
     # Use controller from request metadata
-    def _list_actions() -> List[str]:
-        try:
-            from computer_use_agent.grounding.grounding_agent import (
-                list_osworld_agent_actions,
-            )
-
-            return list_osworld_agent_actions()
-        except Exception as exc:  # pragma: no cover - defensive guard
-            logger.debug("Unable to load OSWorld agent actions: %s", exc)
-            return []
-
     def _fallback_caps() -> Dict[str, Any]:
         """Stubbed capabilities when controller is unavailable or fails."""
         platform_hint = _normalize_platform(
             getattr(request, "platform", None)
             or request.metadata.get("platform")
-            or "darwin"
+            or "windows"
         )
         return {
             "platform": platform_hint or "unknown",
@@ -176,7 +180,7 @@ def fetch_computer_capabilities(
                 "LibreOffice",
             ],
             "active_windows": [],
-            "actions": _list_actions(),
+            "actions": list_computer_actions(),
         }
 
     controller = _resolve_controller(request.metadata)
@@ -211,7 +215,7 @@ def fetch_computer_capabilities(
         windows_data = controller.get_active_windows(exclude_system=True)
 
         # Surface available OSWorld agent actions (click, type, scroll, etc.)
-        actions: List[str] = _list_actions()
+        actions = list_computer_actions()
 
         # Persist the resolved platform back into request metadata for downstream use
         try:
@@ -302,5 +306,6 @@ __all__ = [
     "fetch_computer_capabilities",
     "build_capability_context",
     "invalidate_cache",
+    "list_computer_actions",
     "CACHE_TTL",
 ]
