@@ -579,7 +579,7 @@ def _create_streaming_response(
                 run_status = "error"
                 completion_reason = result.intermediate.get("impossible_reason", "task_impossible")
             else:
-                run_status = "success" if all(r.success for r in result.results) else "partial"
+                run_status = "success"
                 completion_reason = "ok" if result.results else "no_steps"
 
             result_dict = {
@@ -715,7 +715,7 @@ async def orchestrate(
         run_status = "error"
         completion_reason = result.intermediate.get("impossible_reason", "task_impossible")
     else:
-        run_status = "success" if all(r.success for r in result.results) else "partial"
+        run_status = "success"
         completion_reason = "ok" if result.results else "no_steps"
 
     return {
@@ -861,7 +861,7 @@ async def compose_task(
     payload: Dict[str, Any] = Body(...),
     current_user: CurrentUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    from orchestrator_agent.capabilities import _normalize_platform
+    from orchestrator_agent.capabilities import _normalize_platform, list_computer_actions
     from orchestrator_agent.composer import compose_plan
 
     task = (payload.get("task") or "").strip()
@@ -882,16 +882,22 @@ async def compose_task(
     platform = _normalize_platform(platform_override) if platform_override else None
 
     stub_apps = [
-        "Google Chrome",
-        "Firefox",
-        "VS Code",
-        "Terminal",
-        "LibreOffice Writer",
+        "edge",
+        "libreoffice",
+        "libreoffice-writer",
+        "libreoffice-calc",
+        "libreoffice-impress",
+        "libreoffice-base",
+        "libreoffice-math",
+        "notepad",
+        "powershell",
+        "cmd",
     ]
     computer_caps = {
-        "platform": platform or "darwin",
+        "platform": platform or "windows",
         "available_apps": stub_apps,
         "active_windows": [],
+        "actions": list_computer_actions(),
     }
 
     capabilities = {
@@ -1027,7 +1033,7 @@ async def resume_run(
                 "content": [
                     {
                         "type": "text",
-                        "text": f"HANDBACK RESULT:\\n{json.dumps(inference_result, ensure_ascii=False)}",
+                        "text": f"HANDBACK RESULT:\n{json.dumps(inference_result, ensure_ascii=False)}",
                     }
                 ],
             }

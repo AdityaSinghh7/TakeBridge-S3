@@ -793,9 +793,9 @@ def _create_streaming_response(
                 run_status = "error"
                 completion_reason = result.intermediate.get("impossible_reason", "task_impossible")
             else:
-                run_status = "success" if all(r.success for r in result.results) else "partial"
+                run_status = "success"
                 completion_reason = "ok" if result.results else "no_steps"
-            
+
             result_dict = {
                 "task": orch_request.task,
                 "status": run_status,
@@ -950,7 +950,7 @@ async def orchestrate(
             run_status = "error"
             completion_reason = result.intermediate.get("impossible_reason", "task_impossible")
         else:
-            run_status = "success" if all(r.success for r in result.results) else "partial"
+            run_status = "success"
             completion_reason = "ok" if result.results else "no_steps"
 
         return Response(

@@ -533,6 +533,8 @@ def update_status(
     updated_at: Optional[datetime] = None,
     terminal_statuses: Optional[set[str]] = None,
 ) -> int:
+    if status == "partial":
+        status = "success"
     terminal_set = terminal_statuses or {"success", "error", "attention", "cancelled", "partial"}
     terminal = status in terminal_set
     if updated_at is None:

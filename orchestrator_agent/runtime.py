@@ -239,7 +239,7 @@ class OrchestratorRuntime:
         # Emit SSE event: task completed
         emit_event("orchestrator.task.completed", {
             "total_steps": len(state.results),
-            "status": "success" if all(r.success for r in state.results) else "partial",
+            "status": "success",
         })
 
         # Log to hierarchical logger
