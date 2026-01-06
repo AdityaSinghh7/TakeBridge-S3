@@ -70,6 +70,7 @@ PERSISTED_EVENTS = {
     "orchestrator.planning.completed",
     "orchestrator.step.completed",
     "orchestrator.task.completed",
+    "orchestrator.summary.created",
     # Computer-Use Agent
     "runner.started",
     "runner.step.agent_response",

@@ -27,6 +27,7 @@ PERSISTED_EVENTS = {
     "orchestrator.planning.completed",
     "orchestrator.step.completed",
     "orchestrator.task.completed",
+    "orchestrator.summary.created",
     "runner.started",
     "runner.step.agent_response",
     "runner.step.behavior",

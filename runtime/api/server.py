@@ -50,6 +50,7 @@ from server.api.auth import get_current_user, CurrentUser
 from server.api.controller_client import VMControllerClient
 from server.api.handback_inference import infer_human_action
 from server.api.orchestrator_adapter import orchestrate_to_orchestrator
+from orchestrator_agent.summarizer import summarize_run
 from server.api.drive_utils import normalize_drive_path
 from shared.storage import get_attachment_storage, AttachmentStorageError
 
@@ -67,6 +68,7 @@ PERSISTED_EVENTS = {
     "orchestrator.planning.completed",
     "orchestrator.step.completed",
     "orchestrator.task.completed",
+    "orchestrator.summary.created",
     "runner.started",
     "runner.step.agent_response",
     "runner.step.behavior",
@@ -350,6 +352,25 @@ def _persist_run_event(run_id: Optional[str], event: str, data: Optional[Any]) -
         logger.debug("Failed to persist run event via control-plane run_id=%s event=%s", run_id, event)
 
 
+
+
+async def _persist_run_summary(run_id: str, result_dict: Dict[str, Any]) -> None:
+    try:
+        summary_payload = await summarize_run(run_id, result_dict)
+    except Exception as exc:
+        logger.warning("Summarizer failed run_id=%s: %s", run_id, exc)
+        return
+    try:
+        await asyncio.to_thread(
+            _persist_run_event,
+            run_id,
+            "orchestrator.summary.created",
+            summary_payload,
+        )
+    except Exception as exc:
+        logger.warning("Failed to persist summary run_id=%s: %s", run_id, exc)
+
+
 def _update_run_status(run_id: str, status: str, summary: Optional[str] = None):
     try:
         ControlPlaneClient().update_run_status(run_id, status, summary=summary)
@@ -631,6 +652,7 @@ def _create_streaming_response(
                         ]
                     )
                     _update_run_status(run_id, result_dict.get("status") or "success", summary=summary or None)
+                    asyncio.create_task(_persist_run_summary(run_id, result_dict))
         finally:
             committed_drive_changes: List[Dict[str, Any]] = []
             if run_id_local and workspace:
