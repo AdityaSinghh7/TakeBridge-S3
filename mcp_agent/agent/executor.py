@@ -850,6 +850,54 @@ class ActionExecutor:
                 return head
             return entry.get("py_name") or entry.get("tool")
 
+        def _parse_signature_params(signature: str | None) -> tuple[Set[str], Set[str]]:
+            if not signature or "(" not in signature:
+                return set(), set()
+            params_text = signature.split("(", 1)[1].rsplit(")", 1)[0].strip()
+            if not params_text:
+                return set(), set()
+            try:
+                module = ast.parse(f"def _f({params_text}):\n    pass")
+                func = module.body[0]
+                if not isinstance(func, ast.FunctionDef):
+                    raise SyntaxError("signature parse failed")
+                args = func.args
+                all_params: Set[str] = set()
+                required_params: Set[str] = set()
+
+                positional = args.args
+                defaults = args.defaults
+                required_count = len(positional) - len(defaults)
+                for idx, arg in enumerate(positional):
+                    if arg.arg == "context":
+                        continue
+                    all_params.add(arg.arg)
+                    if idx < required_count:
+                        required_params.add(arg.arg)
+
+                for kw_arg, kw_default in zip(args.kwonlyargs, args.kw_defaults):
+                    if kw_arg.arg == "context":
+                        continue
+                    all_params.add(kw_arg.arg)
+                    if kw_default is None:
+                        required_params.add(kw_arg.arg)
+
+                return all_params, required_params
+            except SyntaxError:
+                all_params: Set[str] = set()
+                required_params: Set[str] = set()
+                for part in (p.strip() for p in params_text.split(",") if p.strip()):
+                    if part == "*":
+                        continue
+                    name, has_default = (part.split("=", 1) + [""])[:2]
+                    name = name.strip()
+                    if name == "context":
+                        continue
+                    all_params.add(name)
+                    if not has_default:
+                        required_params.add(name)
+                return all_params, required_params
+
         allowed_servers = {
             (entry.get("server") or entry.get("provider"))
             for entry in self.agent_state.search_results
@@ -863,15 +911,20 @@ class ActionExecutor:
             if not (server and func_name):
                 continue
             allowed_funcs_by_server.setdefault(server, set()).add(func_name)
-            input_params = entry.get("input_params")
-            if not input_params:
+            input_params = entry.get("input_params") or {}
+            sig_params, sig_required = _parse_signature_params(entry.get("signature"))
+            if sig_params:
+                all_params = sig_params
+                required_params = sig_required
+            elif input_params:
+                all_params = {name for name in input_params.keys()}
+                required_params = {
+                    name
+                    for name, desc in input_params.items()
+                    if isinstance(desc, str) and "(required)" in desc.lower()
+                }
+            else:
                 continue  # No schema available; keep function discovery only
-            all_params = {name for name in input_params.keys()}
-            required_params = {
-                name
-                for name, desc in input_params.items()
-                if isinstance(desc, str) and "required" in desc.lower()
-            }
             param_schemas_by_server.setdefault(server, {})[func_name] = {
                 "all_params": all_params,
                 "required_params": required_params,

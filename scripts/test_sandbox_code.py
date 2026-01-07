@@ -58,7 +58,7 @@ def _build_args() -> argparse.Namespace:
     parser.add_argument("--user-id", required=True, help="User id to scope sandbox.")
     parser.add_argument("--code", help="Inline code body (function body of async main).")
     parser.add_argument("--code-file", help="Path to file containing code body.")
-    parser.add_argument("--timeout", type=int, default=30, help="Execution timeout seconds (default: 30).")
+    parser.add_argument("--timeout", type=int, default=90, help="Execution timeout seconds (default: 90).")
     parser.add_argument("--request-id", help="Optional request id (defaults to uuid).")
     parser.add_argument("--python-exec", help="Python executable to run the sandbox (defaults to current).")
     parser.add_argument("--json", dest="json_out", action="store_true", help="Emit JSON only.")

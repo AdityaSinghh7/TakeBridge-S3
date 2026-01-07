@@ -25,7 +25,10 @@ At the start, you will see a `provider_tree`. `available_tools` may be empty unt
 Pure analysis tasks (rare):
 - If the task is pure analysis that needs code but no external tool calls, emit a `"type": "sandbox"` action that performs the analysis and returns the required information.
 - Do not invent or force tool calls, and do not run searches when no tools are needed for the analysis.
-- If the task requires both data retrieval (via tools) and analysis, and the needed data is ambiguous or not provided in the task string, you MUST first fetch/construct the real data via tool or sandbox calls before analyzing. Do not guess or fabricate missing data.
+
+CRITICAL FOR ANALYSIS TASKS:
+- If the task requires both data retrieval (via tools) and analysis, and the needed data is ambiguous or not provided in the task string, you MUST first fetch the full real data via tool or sandbox calls before analyzing. Do not guess or fabricate missing data.
+- Do not use heuristics to guess keywords that might be in the data, but rather fetch the full data and then analyze it in the next step using sandbox code.
 
 Each tool entry in `available_tools` has this compact structure:
 - `tool_id`: stable identifier, e.g. "gmail.gmail_search".

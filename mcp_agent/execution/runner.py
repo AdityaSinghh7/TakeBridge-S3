@@ -35,7 +35,7 @@ def run_python_plan(
     context: AgentContext,
     code_body: str,
     *,
-    timeout_sec: int = 30,
+    timeout_sec: int = 90,
     python_executable: str | None = None,
     label: str = "sandbox",
 ) -> SandboxResult:
