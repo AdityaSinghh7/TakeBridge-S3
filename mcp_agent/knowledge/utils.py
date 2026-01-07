@@ -33,7 +33,9 @@ def utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def parse_action_docstring(doc: str | None) -> tuple[str, Dict[str, str]]:
+def parse_action_docstring(
+    doc: str | None, param_names: set[str] | None = None
+) -> tuple[str, Dict[str, str]]:
     """Extract a description plus per-parameter docs from a structured docstring."""
     if not doc:
         return "", {}
@@ -59,7 +61,15 @@ def parse_action_docstring(doc: str | None) -> tuple[str, Dict[str, str]]:
         if section == "args":
             if ":" in line:
                 name, rest = line.split(":", 1)
-                current_param = name.strip()
+                candidate = name.strip()
+                if param_names and candidate not in param_names:
+                    # Treat unknown "name:" lines as continuation text.
+                    if current_param:
+                        param_docs[current_param] = f"{param_docs.get(current_param, '')} {line}".strip()
+                    else:
+                        description_lines.append(line)
+                    continue
+                current_param = candidate
                 param_docs[current_param] = rest.strip()
             elif current_param:
                 param_docs[current_param] = f"{param_docs.get(current_param, '')} {line}".strip()

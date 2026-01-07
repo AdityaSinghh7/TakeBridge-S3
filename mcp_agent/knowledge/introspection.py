@@ -212,9 +212,10 @@ class ToolboxBuilder:
         authorized: bool,
     ) -> ToolSpec:
         doc = inspect.getdoc(func) or ""
-        description, param_docs = parse_action_docstring(doc)
-        short_desc = short_description(description or doc, fallback=f"{provider}.{func.__name__}")
         signature = inspect.signature(func)
+        param_names = set(signature.parameters.keys())
+        description, param_docs = parse_action_docstring(doc, param_names)
+        short_desc = short_description(description or doc, fallback=f"{provider}.{func.__name__}")
         parameters = []
         for param in signature.parameters.values():
             if param.name in ("self", "context"):
