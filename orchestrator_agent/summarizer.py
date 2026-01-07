@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, List
 
 from orchestrator_agent.data_types import StepResult
 from orchestrator_agent.system_prompt import format_previous_results
 from orchestrator_agent.translator import _safe_json_load
 from shared.llm_client import LLMClient, extract_assistant_text
+
+logger = logging.getLogger(__name__)
 
 SUMMARIZER_SYSTEM_PROMPT = """### ROLE AND OBJECTIVE
 You are the **"Execution Summarizer & Analyst."**
@@ -124,10 +127,22 @@ def _extract_summary_payload(text: str) -> Dict[str, Any]:
 
 async def summarize_run(run_id: str, result_dict: Dict[str, Any]) -> Dict[str, Any]:
     """Return a summary payload for persistence."""
+    logger.info("summarizer.start run_id=%s", run_id)
     summarizer_message = build_summarizer_message(run_id, result_dict)
     status = str(result_dict.get("status") or "")
     completion_reason = str(result_dict.get("completion_reason") or "")
     step_count = int(summarizer_message.get("step_count") or 0)
+    trajectory_steps = summarizer_message.get("trajectory_steps") or ""
+    initial_task_spec = summarizer_message.get("initial_task_spec") or ""
+    messages = summarizer_message.get("messages") or []
+    logger.info(
+        "summarizer.payload run_id=%s task_len=%s trajectory_len=%s step_count=%s messages=%s",
+        run_id,
+        len(str(initial_task_spec)),
+        len(str(trajectory_steps)),
+        step_count,
+        len(messages),
+    )
 
     client = LLMClient()
     try:
@@ -143,9 +158,17 @@ async def summarize_run(run_id: str, result_dict: Dict[str, Any]) -> Dict[str, A
         )
 
     raw_text = extract_assistant_text(response)
+    logger.info("summarizer.response run_id=%s response_len=%s", run_id, len(raw_text or ""))
     parsed = _extract_summary_payload(raw_text)
     summary_text = str(parsed.get("summary") or raw_text or "")
     overall_success = bool(parsed.get("overall_success")) if parsed else False
+    logger.info(
+        "summarizer.parsed run_id=%s parsed=%s summary_len=%s overall_success=%s",
+        run_id,
+        bool(parsed),
+        len(summary_text),
+        overall_success,
+    )
 
     return {
         "run_id": run_id,
@@ -194,6 +217,13 @@ def build_summarizer_message(run_id: str, result_dict: Dict[str, Any]) -> Dict[s
     steps = result_dict.get("steps") or []
     step_results = _coerce_step_results(steps if isinstance(steps, list) else [])
     trajectory_steps = format_previous_results(step_results, task=initial_task_spec)
+    logger.info(
+        "summarizer.build_message run_id=%s task_len=%s trajectory_len=%s step_count=%s",
+        run_id,
+        len(initial_task_spec),
+        len(trajectory_steps),
+        len(step_results),
+    )
     user_payload = {
         "initial_task_spec": initial_task_spec,
         "trajectory_steps": trajectory_steps,
