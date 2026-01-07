@@ -140,6 +140,24 @@ def _json_safe(val: Any) -> str:
             return json.dumps(str(val))
 
 
+def _coerce_optional_bool(value: Any) -> Optional[bool]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"", "none", "null"}:
+            return None
+        if lowered in {"true", "t", "1", "yes", "y"}:
+            return True
+        if lowered in {"false", "f", "0", "no", "n"}:
+            return False
+    return bool(value)
+
+
 def _compress_agent_states(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     Compress agent_states into a JSON-safe wrapper.
@@ -689,6 +707,40 @@ def list_runs_with_workflow(
     limit: int,
 ) -> list[Dict[str, Any]]:
     limit = max(1, min(int(limit), 200))
+    if DB_URL.startswith("postgres"):
+        summary_select = """
+               COALESCE(NULLIF((
+                   SELECT re.payload->>'summary'
+                   FROM run_events re
+                   WHERE re.run_id = wr.id AND re.kind = 'orchestrator.summary.created'
+                   ORDER BY re.ts DESC
+                   LIMIT 1
+               ), ''), wr.summary) AS summary,
+               (
+                   SELECT (re.payload->>'overall_success')::boolean
+                   FROM run_events re
+                   WHERE re.run_id = wr.id AND re.kind = 'orchestrator.summary.created'
+                   ORDER BY re.ts DESC
+                   LIMIT 1
+               ) AS overall_success,
+        """
+    else:
+        summary_select = """
+               COALESCE(NULLIF((
+                   SELECT json_extract(re.payload, '$.summary')
+                   FROM run_events re
+                   WHERE re.run_id = wr.id AND re.kind = 'orchestrator.summary.created'
+                   ORDER BY re.ts DESC
+                   LIMIT 1
+               ), ''), wr.summary) AS summary,
+               (
+                   SELECT json_extract(re.payload, '$.overall_success')
+                   FROM run_events re
+                   WHERE re.run_id = wr.id AND re.kind = 'orchestrator.summary.created'
+                   ORDER BY re.ts DESC
+                   LIMIT 1
+               ) AS overall_success,
+        """
     query = """
         SELECT wr.id,
                wr.workflow_id,
@@ -703,7 +755,9 @@ def list_runs_with_workflow(
                wr.ended_at,
                wr.created_at,
                wr.updated_at,
-               wr.summary,
+    """
+    query += summary_select
+    query += """
                w.name AS workflow_name,
                w.prompt AS workflow_prompt
         FROM workflow_runs wr
@@ -720,7 +774,11 @@ def list_runs_with_workflow(
 
     query += " ORDER BY COALESCE(wr.started_at, wr.created_at) DESC LIMIT :limit"
     rows = execute_text(db, query, params).mappings().all()
-    return [dict(r) for r in rows]
+    results = [dict(r) for r in rows]
+    for row in results:
+        if "overall_success" in row:
+            row["overall_success"] = _coerce_optional_bool(row.get("overall_success"))
+    return results
 
 
 def get_run_vm_endpoint(db: Session, *, run_id: str, user_id: str) -> Dict[str, Any] | None:

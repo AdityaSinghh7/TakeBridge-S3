@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
@@ -35,6 +36,37 @@ def _should_trust_env(url: str) -> bool:
         return True
 
 
+def _json_safe(value: Any, _seen: Optional[set[int]] = None) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, datetime):
+        try:
+            return value.isoformat()
+        except Exception:
+            return str(value)
+    if _seen is None:
+        _seen = set()
+    value_id = id(value)
+    if value_id in _seen:
+        return "<circular>"
+    _seen.add(value_id)
+    if isinstance(value, dict):
+        return {str(key): _json_safe(val, _seen) for key, val in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item, _seen) for item in value]
+    if hasattr(value, "model_dump") and callable(getattr(value, "model_dump")):
+        try:
+            return _json_safe(value.model_dump(), _seen)  # type: ignore[call-arg]
+        except Exception:
+            pass
+    if hasattr(value, "__dict__"):
+        try:
+            return _json_safe({k: v for k, v in vars(value).items() if not k.startswith("_")}, _seen)
+        except Exception:
+            pass
+    return str(value)
+
+
 @dataclass
 class ControlPlaneClient:
     base_url: str = CONTROL_PLANE_BASE_URL
@@ -55,7 +87,8 @@ class ControlPlaneClient:
 
     def _request(self, method: str, path: str, *, params: Optional[Dict[str, Any]] = None, json_body: Any = None) -> Any:
         url = f"{self.base_url}{path}"
-        resp = self._session.request(method, url, headers=self._headers(), params=params, json=json_body, timeout=30)
+        safe_json_body = _json_safe(json_body) if json_body is not None else None
+        resp = self._session.request(method, url, headers=self._headers(), params=params, json=safe_json_body, timeout=30)
         if resp.status_code >= 400:
             detail = resp.text
             raise ControlPlaneError(resp.status_code, detail)
