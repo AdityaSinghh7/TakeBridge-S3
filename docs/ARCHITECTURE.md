@@ -91,24 +91,25 @@ Tool introspection and search capabilities:
 - **`index.py`** - Tool registry and lookup
 - **`introspection.py`** - Extract tool metadata from action wrappers
 - **`search.py`** - Tool search and ranking
-- **`schema_store.py`** - Tool output schema management
 - **`types.py`** - Tool specification types
+
+Output schemas are attached on wrappers via `mcp_agent/tool_schemas.py`.
 
 **Discovery Flow:**
 1. Introspect action wrappers to build tool specs
-2. Load output schemas from `tool_output_schemas.generated.json`
+2. Read output schemas from wrapper `__tb_output_schema__` attributes
 3. Create searchable index with full metadata
 4. Expose via `search_tools(query, detail_level)` API
 
 ### Layer 4: Sandbox Execution
 
-**Location:** `mcp_agent/sandbox/`
+**Location:** `mcp_agent/sandbox/` and `mcp_agent/execution/`
 
 Safe Python code execution environment:
 
 - **`ephemeral.py`** - Ephemeral sandbox environment setup
 - **`glue.py`** - Bridge between sandbox code and MCP tools
-- **`runner.py`** - Async sandbox execution
+- **`execution/runner.py`** - Sandbox execution
 
 **Sandbox Features:**
 - Generated `sandbox_py` modules expose tools as Python functions
@@ -329,11 +330,12 @@ mcp_agent/
 │   ├── index.py          # Tool registry
 │   ├── introspection.py  # Metadata extraction
 │   ├── search.py         # Tool search
-│   ├── schema_store.py   # Output schemas
 │   └── types.py          # Specs
 ├── sandbox/              # Sandbox execution (Layer 4)
 │   ├── ephemeral.py      # Environment setup
 │   ├── glue.py           # Tool bridge
+│   └── runtime.py         # Tool caller runtime
+├── execution/            # Sandbox execution helpers
 │   └── runner.py         # Execution
 ├── registry/             # MCP infrastructure (Layer 1)
 │   ├── crud.py           # Registry operations
@@ -343,7 +345,8 @@ mcp_agent/
 ├── core/                 # Core utilities
 │   ├── context.py        # AgentContext
 │   └── exceptions.py     # Error types
-└── env_sync.py           # Environment setup
+├── env_sync.py           # Environment setup
+└── tool_schemas.py       # Output schema decorators
 
 shared/                   # Cross-cutting (Layer 0)
 ├── token_cost_tracker.py

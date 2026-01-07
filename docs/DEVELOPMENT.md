@@ -62,30 +62,6 @@ The repository includes several scripts for testing the MCP Agent:
   --pretty
 ```
 
-### Generate Tool Output Schemas
-
-```bash
-# Generate schemas from tool output samples
-./scripts/generate_tool_output_schemas.py \
-  --user-id dev-local \
-  --providers gmail,slack
-```
-
-**Options:**
-- `--user-id`: User for MCP registry
-- `--providers`: Comma-separated provider list
-- `--skip-unconfigured`: Skip unconfigured providers
-- `--allow-mutating`: Allow sampling mutating tools (use carefully!)
-
-### Build Tool Output Schemas (Legacy)
-
-```bash
-# Build schemas from samples file
-./scripts/build_tool_output_schemas.py
-```
-
-Reads `tool_output_samples.json` and generates `tool_output_schemas.json`.
-
 ### Probe Tools
 
 ```bash
@@ -134,7 +110,7 @@ def gmail_archive_thread(self, thread_id: str) -> ToolInvocationResult:
 Add output schema decorator:
 
 ```python
-from mcp_agent.knowledge.schema_store import tool_output_schema
+from mcp_agent.tool_schemas import tool_output_schema
 
 @tool_output_schema(
     schema={
@@ -151,28 +127,7 @@ def gmail_archive_thread(self, thread_id: str) -> ToolInvocationResult:
     ...
 ```
 
-#### 3. Update Tool Output Schemas
-
-Add to `tool_output_samples.yaml`:
-
-```yaml
-gmail.gmail_archive_thread:
-  mode: mutate  # read or mutate
-  success_examples:
-    - args:
-        thread_id: "thread_abc123"
-```
-
-Regenerate schemas:
-
-```bash
-./scripts/generate_tool_output_schemas.py \
-  --user-id dev-local \
-  --providers gmail \
-  --allow-mutating
-```
-
-#### 4. Verify Discovery
+#### 3. Verify Discovery
 
 ```python
 from mcp_agent.knowledge.search import search_tools
@@ -265,34 +220,11 @@ Ensure OAuth/MCP integration is set up in:
 
 #### 4. Add Output Schemas
 
-Create `tool_output_samples.yaml` entries:
+Attach `__tb_output_schema__` (or `@tool_output_schema`) directly to each wrapper.
 
-```yaml
-notion.notion_create_page:
-  mode: mutate
-  success_examples:
-    - args:
-        parent_id: "parent_123"
-        title: "Test Page"
-        content: "# Hello World"
-
-notion.notion_search:
-  mode: read
-  success_examples:
-    - args:
-        query: "project notes"
-        limit: 5
-```
-
-#### 5. Generate Schemas & Test
+#### 5. Test
 
 ```bash
-# Generate schemas
-./scripts/generate_tool_output_schemas.py \
-  --user-id dev-local \
-  --providers notion \
-  --allow-mutating
-
 # Test with agent
 ./scripts/run_dev_mcp_task.py \
   --task "Search my Notion for 'project notes'" \
@@ -481,11 +413,10 @@ result = execute_mcp_task(
 ### Typical Development Cycle
 
 1. **Add/modify tool wrapper** in `mcp_agent/actions/wrappers/`
-2. **Update output schemas** in `tool_output_samples.yaml`
-3. **Regenerate schemas**: `./scripts/generate_tool_output_schemas.py`
-4. **Test with dev script**: `./scripts/run_dev_mcp_task.py`
-5. **Verify tool discovery**: Check search results include new tool
-6. **Test in sandbox**: Ensure sandbox helpers work correctly
+2. **Attach output schema** via `__tb_output_schema__` (or `@tool_output_schema`)
+3. **Test with dev script**: `./scripts/run_dev_mcp_task.py`
+4. **Verify tool discovery**: Check search results include new tool
+5. **Test in sandbox**: Ensure sandbox helpers work correctly
 
 ### Debugging Tips
 
@@ -550,7 +481,7 @@ print(f"Tools cached: {len(state.search_results)}")
 ```python
 from typing import Optional
 from mcp_agent.actions.core import mcp_action, ToolInvocationResult
-from mcp_agent.knowledge.schema_store import tool_output_schema
+from mcp_agent.tool_schemas import tool_output_schema
 
 @tool_output_schema(
     schema={

@@ -91,8 +91,7 @@ Every tool response uses the envelope:
 ```
 
 The planner and sandbox only need to know the structure of `data`. We attach
-this information to wrappers using the `tool_output_schema` decorator, and we
-can optionally refine it with manual IO specs (`mcp_agent/toolbox/io_spec.py`).
+this information to wrappers using the `tool_output_schema` decorator.
 
 Defined in `mcp_agent/tool_schemas.py`:
 
@@ -119,10 +118,9 @@ The decorator attaches:
 - `ToolSpec.to_llm_descriptor(...)` feeds `output_schema_pretty` into
   `LLMToolDescriptor.output_schema_pretty`, which the planner exposes to the
   LLM as the authoritative description of what lives under the `data` key.
-- If a manual IO spec exists in `mcp_agent/toolbox/io_spec.py` and is
-  registered via `mcp_agent/toolbox/registry.py`, `search_tools(...)` will
-  prefer its `ToolOutputSpec.pretty_success` / `data_schema_success` over the
-  introspected defaults when building LLM-facing tool descriptors.
+
+Runtime discovery uses wrapper-provided output schemas only; we do not load
+generated schema files for tool discovery.
 
 Placeholder schemas are acceptable for now as long as the text explicitly notes
 that they must be replaced with real Composio‑compatible schemas in a follow‑up

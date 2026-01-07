@@ -75,6 +75,7 @@ AUTH_CONFIG_IDS = {
     "salesforce": os.getenv("COMPOSIO_SALESFORCE_AUTH_CONFIG_ID", ""),
     "snowflake": os.getenv("COMPOSIO_SNOWFLAKE_AUTH_CONFIG_ID", ""),
     "xero": os.getenv("COMPOSIO_XERO_AUTH_CONFIG_ID", ""),
+    "hubspot": os.getenv("COMPOSIO_HUBSPOT_AUTH_CONFIG_ID", ""),
 }
 
 

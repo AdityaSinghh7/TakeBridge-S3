@@ -13,7 +13,7 @@ This document tracks major architectural changes and refactorings in the MCP Age
 - **Scripts Directory Cleanup**
   - Removed 5 irrelevant scripts: `get_slack_oauth_link.py`, `orchestrate_task.py`, `probe_tool_outputs.py`, `show_triage_csv.py`, `trace_execute_mcp_task.py`
   - Moved `probe_tools.py` to `scripts/` directory
-  - Retained only essential scripts: `build_tool_output_schemas.py`, `run_dev_mcp_task.py`, `generate_tool_output_schemas.py`
+  - Retained only essential scripts: `build_tool_output_schemas.py`, `run_dev_mcp_task.py`
 
 - **Temporary Directory Cleanup**
   - Removed 6 temporary toolbox directories: `tmp_toolbox_debug2/`, `tmp_toolbox_debug4/`, `tmp_toolbox_debug6/`, `tmp_toolbox_debug7/`, `tmp_toolbox_run2/`, `tmp_toolbox_run3/`

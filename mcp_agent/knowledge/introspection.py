@@ -471,10 +471,10 @@ def all_tools() -> List[IoToolSpec]:
 
 def ensure_io_specs_loaded() -> None:
     """
-    Lazily load output schemas from tool_output_schemas.generated.json.
+    Register minimal IoToolSpecs from action wrappers.
 
-    Registers basic IoToolSpecs from action wrappers, then enriches them
-    with output schema information extracted from sample MCP responses.
+    Output schemas come from __tb_output_schema__ on the wrappers; we do not
+    merge any generated schema files.
     """
     global _IO_SPECS_LOADED
     if _IO_SPECS_LOADED:
