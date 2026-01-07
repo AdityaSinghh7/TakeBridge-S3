@@ -883,7 +883,7 @@ async def compose_task(
     payload: Dict[str, Any] = Body(...),
     current_user: CurrentUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    from orchestrator_agent.capabilities import _normalize_platform, list_computer_actions
+    from orchestrator_agent.capabilities import _normalize_platform
     from orchestrator_agent.composer import compose_plan
 
     task = (payload.get("task") or "").strip()
@@ -915,11 +915,18 @@ async def compose_task(
         "powershell",
         "cmd",
     ]
+    try:
+        from computer_use_agent.grounding.grounding_agent import list_osworld_agent_actions
+
+        resolved_actions = list_osworld_agent_actions()
+    except Exception as exc:
+        logger.warning("Failed to load computer actions for compose_task: %s", exc)
+        resolved_actions = []
     computer_caps = {
         "platform": platform or "windows",
         "available_apps": stub_apps,
         "active_windows": [],
-        "actions": list_computer_actions(),
+        "actions": resolved_actions,
     }
 
     capabilities = {

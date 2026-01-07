@@ -485,51 +485,57 @@ def translate_step_output(
             client = None
 
     if client:
-        try:
-            messages = _build_messages(task, target, trajectory)
+        messages = _build_messages(task, target, trajectory)
+        for attempt in range(2):
             try:
-                response = client.create_response(
-                    messages=messages,
-                    model=llm_model,
-                    max_output_tokens=max_output_tokens,
-                    reasoning_effort="medium",
-                    text={"format": {"type": "json_object"}},
-                )
-            except TypeError:
-                # Older SDKs may not support json mode yet; fall back to plain text.
-                response = client.create_response(
-                    messages=messages,
-                    model=llm_model,
-                    max_output_tokens=max_output_tokens,
-                    reasoning_effort="medium",
-                )
-            text = None
-            if extract_assistant_text is not None:
                 try:
-                    text = extract_assistant_text(response)
-                except Exception:
-                    text = None
-            if not text:
-                text = getattr(response, "output_text", None) or getattr(
-                    response, "text", None
-                )
-            if isinstance(text, str):
-                parsed = _safe_json_load(text)
-                if parsed and isinstance(parsed, dict):
-                    # Validate required fields
-                    required = ["task", "overall_success", "summary", "total_steps", "steps_summary", "artifacts"]
-                    missing = [k for k in required if k not in parsed]
-                    if not missing:
-                        logger.info("translator.llm_success target=%s", target)
-                        return parsed
-                    logger.info("translator.llm_missing_fields target=%s missing=%s", target, missing)
+                    response = client.create_response(
+                        messages=messages,
+                        model=llm_model,
+                        max_output_tokens=max_output_tokens,
+                        reasoning_effort="medium",
+                        text={"format": {"type": "json_object"}},
+                    )
+                except TypeError:
+                    # Older SDKs may not support json mode yet; fall back to plain text.
+                    response = client.create_response(
+                        messages=messages,
+                        model=llm_model,
+                        max_output_tokens=max_output_tokens,
+                        reasoning_effort="medium",
+                    )
+                text = None
+                if extract_assistant_text is not None:
+                    try:
+                        text = extract_assistant_text(response)
+                    except Exception:
+                        text = None
+                if not text:
+                    text = getattr(response, "output_text", None) or getattr(
+                        response, "text", None
+                    )
+                if isinstance(text, str):
+                    parsed = _safe_json_load(text)
+                    if parsed and isinstance(parsed, dict):
+                        # Validate required fields
+                        required = ["task", "overall_success", "summary", "total_steps", "steps_summary", "artifacts"]
+                        missing = [k for k in required if k not in parsed]
+                        if not missing:
+                            logger.info("translator.llm_success target=%s", target)
+                            return parsed
+                        logger.info("translator.llm_missing_fields target=%s missing=%s", target, missing)
+                    else:
+                        logger.info("translator.llm_invalid_json target=%s parsed_type=%s", target, type(parsed))
                 else:
-                    logger.info("translator.llm_invalid_json target=%s parsed_type=%s", target, type(parsed))
-            else:
-                logger.info("translator.llm_no_text target=%s text_type=%s", target, type(text))
+                    logger.info("translator.llm_no_text target=%s text_type=%s", target, type(text))
+            except Exception as exc:  # pragma: no cover
+                logger.info("translator.llm_error target=%s attempt=%s error=%s", target, attempt + 1, exc)
+
+            if attempt == 0:
+                logger.info("translator.llm_retry target=%s", target)
+                continue
             logger.info("translator.llm_parse_failed target=%s", target)
-        except Exception as exc:  # pragma: no cover
-            logger.info("translator.llm_error target=%s error=%s", target, exc)
+            break
 
     # Deterministic fallback
     logger.info("translator.fallback target=%s", target)
