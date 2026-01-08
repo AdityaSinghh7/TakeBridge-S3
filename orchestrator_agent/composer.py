@@ -85,7 +85,8 @@ You must clearly define what the orchestrator should expect at the end of each s
 Respond with a single JSON object matching this schema:
 
 {{
-  "original_task": "string",
+  "original_task": "A high-level name for the original task",
+  "task_description": "A brief summary of the user's request",
   "steps": [
     {{
       "id": "step-1",
@@ -226,6 +227,8 @@ def _normalize_plan_dict(
 
     # Parse steps
     steps_in: List[Dict[str, Any]] = raw.get("steps") or []
+    llm_original_task = raw.get("original_task") or original_task
+    llm_task_description = raw.get("task_description")
     parsed_steps: List[ComposedStep] = []
     for s in steps_in:
         sid = str(s.get("id") or "").strip()
@@ -275,7 +278,8 @@ def _normalize_plan_dict(
 
     return ComposedPlan(
         schema_version=schema_version,
-        original_task=original_task,
+        original_task=llm_original_task,
+        task_description=llm_task_description,
         steps=parsed_steps,
         notes=notes,
         combined_prompt=combined_prompt,

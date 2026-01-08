@@ -53,6 +53,7 @@ class ComposedPlan:
 
     schema_version: int
     original_task: str
+    task_description: Optional[str] = None
     steps: List[ComposedStep] = field(default_factory=list)
     notes: Optional[str] = None
     # Optional convenience field: concatenated prompts for all steps,
@@ -64,6 +65,7 @@ class ComposedPlan:
         return {
             "schema_version": self.schema_version,
             "original_task": self.original_task,
+            "task_description": self.task_description,
             "notes": self.notes,
             "steps": [s.to_dict() for s in self.steps],
             "combined_prompt": self.combined_prompt,
