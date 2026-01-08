@@ -66,7 +66,7 @@ def _execute_remote_pyautogui(controller: VMControllerClient, code: str) -> Dict
     python_cmd = python_cmd_template.format(payload=payload)
 
     try:
-        preview = script[:200].replace("\n", "\\n")
+        preview = script[:400].replace("\n", "\\n")
         logger.info(
             "Executing remote pyautogui via %s platform=%s - code preview: %s",
             python_exe,
@@ -203,8 +203,8 @@ def _build_trajectory_markdown(
             if step.action:
                 # Truncate action for readability
                 action_display = step.action
-                if len(action_display) > 300:
-                    action_display = action_display[:300] + "... (truncated)"
+                if len(action_display) > 600:
+                    action_display = action_display[:600] + "... (truncated)"
                 lines.append(f"**Action**: `{action_display}`")
 
             if step.execution_result:
@@ -259,19 +259,19 @@ def _build_trajectory_markdown(
                             if action and action not in ("DONE", "FAIL"):
                                 # Truncate code
                                 code_display = action
-                                if len(code_display) > 400:
-                                    code_display = code_display[:400] + "... (truncated)"
+                                if len(code_display) > 800:
+                                    code_display = code_display[:800] + "... (truncated)"
                                 lines.append(f"    **Code**: ```\n{code_display}\n```")
                             else:
                                 lines.append(f"    **Action**: {action}")
                             if thoughts:
-                                thoughts_display = thoughts[:200]
+                                thoughts_display = thoughts[:400]
                                 lines.append(f"    **Thoughts**: {thoughts_display}")
                 else:
                     # Fallback: show as string
                     output_str = str(code_output)
-                    if len(output_str) > 500:
-                        output_str = output_str[:500] + "... (truncated)"
+                    if len(output_str) > 1000:
+                        output_str = output_str[:1000] + "... (truncated)"
                     lines.append(f"**Output**: {output_str}")
 
         # Handback to human output (if present)
@@ -655,7 +655,7 @@ def runner(
                         # Write the full snapshot (replaces existing)
                         update_agent_states(run_id, full_snapshot)
                         # Mark run as needing attention
-                        mark_run_attention(run_id, summary=f"Human attention required: {handback_request[:100]}")
+                        mark_run_attention(run_id, summary=f"Human attention required: {handback_request[:200]}")
                         logger.info("Full handback snapshot persisted for run_id=%s", run_id)
                     except Exception as e:
                         logger.error("Failed to persist handback state: %s", e)

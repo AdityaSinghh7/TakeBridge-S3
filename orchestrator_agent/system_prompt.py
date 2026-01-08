@@ -319,7 +319,7 @@ def format_desktop_environment(
     return apps_str, windows_str
 
 
-def _render_json(value: Any, max_chars: int = 4000) -> str:
+def _render_json(value: Any, max_chars: int = 8000) -> str:
     """
     Pretty-print JSON-like objects with optional truncation to control token use.
 

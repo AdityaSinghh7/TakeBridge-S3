@@ -198,7 +198,7 @@ class CodeAgent:
         step_count = 0
         execution_history = []
 
-        def _truncate(value: str, limit: int = 2000) -> str:
+        def _truncate(value: str, limit: int = 4000) -> str:
             if value is None:
                 return ""
             if not isinstance(value, str):
