@@ -177,6 +177,9 @@ class PROCEDURAL_MEMORY:
         * Higher-level Task Context: the original user goal and supporting data; treat it as a data source.
         * Current Subtask (lower-level): the actionable step you must complete now.
     - Use the higher-level context to extract relevant facts, constraints, and entities that help solve the current subtask.
+    - If the lower-level task references `agent.save_to_knowledge(...)`, treat it as a strong signal to retrieve that data and print it to the terminal.
+    - If only the higher-level task context references `agent.save_to_knowledge(...)`, treat it as a weaker signal and use it to resolve ambiguity about what data to retrieve.
+    - Never call or implement `agent.save_to_knowledge` in code; it is not a predefined function.
 
     # CRITICAL: Language/String/Data Analysis
     - Some tasks require language, string, or data analysis on unstructured text.
@@ -282,6 +285,7 @@ class PROCEDURAL_MEMORY:
     Overview
     Step-by-Step Actions
     Data Operations
+    Data from the code agent
     Analysis/Heuristics
     Outputs/Artifacts
     Errors/Constraints
@@ -289,13 +293,15 @@ class PROCEDURAL_MEMORY:
     Rules:
     - Use neutral, objective language; do not judge success or failure.
     - Include concrete details: commands run, files touched, data fields, transformations, outputs, errors.
+    - In "Overview", explicitly state the low-level task and the higher-level task context when provided.
     - In "Step-by-Step Actions", list each step with code type, command/script, intent, and output/error.
+    - In "Data from the code agent", include any retrieved content/data the task explicitly asks for (e.g., extracted text, parsed values, saved knowledge payloads). If retrieval is not required or data is absent, write "None observed." Retrieve the full data exactly as it was printed to the terminal. DO NOT PRUNE / SUMMARIZE THE DATA, even if the task mentions summarization.
     - In "Outputs/Artifacts", include any files created/modified, values saved/returned, and verification notes for the GUI agent.
     - If a section has nothing to report, write "None observed."
 
     Example:
     Overview:
-    - Task: Extract action items from transcript text.
+    - Low-level Task: Extract action items from transcript text.
     - Completion Reason: DONE
     - Outcome: Parsed transcript and produced structured JSON.
 
@@ -304,6 +310,9 @@ class PROCEDURAL_MEMORY:
 
     Data Operations:
     - Extracted names, emails, tasks, and due dates; normalized whitespace.
+
+    Data from the code agent:
+    - Detailed retrieved data as it was printed to the terminal. Do not prune / summarize the data, even if the task mentions summarization.
 
     Analysis/Heuristics:
     - Used regex to detect dates; flagged missing due dates as ambiguous.

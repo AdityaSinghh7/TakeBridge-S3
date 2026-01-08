@@ -63,6 +63,8 @@ DEFAULT_BACKOFF_BASE_SECONDS = 0.5
 DEFAULT_BACKOFF_CAP_SECONDS = 8.0
 DEFAULT_BACKOFF_JITTER_SECONDS = 0.25
 _RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
+_OPENROUTER_QWEN3_MODEL = "qwen/qwen3-vl-235b-a22b-instruct"
+_OPENROUTER_PROVIDER_ONLY = ["alibaba"]
 
 
 def _is_retryable_error(exc: Exception) -> bool:
@@ -116,6 +118,15 @@ def _extract_text_from_content(content: Any) -> str:
             return str(content.get("text", "") or "")
         return ""
     return ""
+
+
+def _provider_only_for_model(model_name: str) -> list[str] | None:
+    env_model = (os.getenv("OPENROUTER_MODEL") or "").strip()
+    if env_model and model_name == env_model:
+        return _OPENROUTER_PROVIDER_ONLY
+    if model_name == _OPENROUTER_QWEN3_MODEL:
+        return _OPENROUTER_PROVIDER_ONLY
+    return None
 
 
 def _guess_image_mime(image_bytes: bytes) -> str:
@@ -378,8 +389,9 @@ class OpenRouterClient:
         if self._extra_headers:
             extra_headers = {**self._extra_headers, **extra_headers}
 
+        model_name = model or self._default_model
         payload: Dict[str, Any] = {
-            "model": model or self._default_model,
+            "model": model_name,
             "messages": normalized_messages,
         }
 
@@ -395,6 +407,12 @@ class OpenRouterClient:
             payload["extra_headers"] = extra_headers
 
         extra_body = kwargs.pop("extra_body", None)
+        provider_only = _provider_only_for_model(model_name)
+        if provider_only and isinstance(extra_body, dict):
+            if "provider" not in extra_body:
+                extra_body = {**extra_body, "provider": {"only": provider_only}}
+        elif provider_only and extra_body is None:
+            extra_body = {"provider": {"only": provider_only}}
         if extra_body is not None:
             payload["extra_body"] = extra_body
 

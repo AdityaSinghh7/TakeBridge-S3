@@ -1,6 +1,6 @@
 import logging
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional
 
 from computer_use_agent.memory.procedural_memory import PROCEDURAL_MEMORY
 from computer_use_agent.utils.common_utils import call_llm_safe, split_thinking_response
@@ -207,6 +207,57 @@ class CodeAgent:
                 return value
             return value[:limit] + "... (truncated)"
 
+        def _normalize_execution_result(
+            result: Optional[Dict[str, Any]],
+            *,
+            fallback_status: str = "not_executed",
+            fallback_message: str = "",
+        ) -> Dict[str, Any]:
+            if result is None:
+                return {
+                    "status": fallback_status,
+                    "return_code": None,
+                    "output": "",
+                    "error": "",
+                    "message": fallback_message,
+                }
+            return {
+                "status": result.get("status"),
+                "return_code": result.get("returncode", result.get("return_code")),
+                "output": result.get("output", ""),
+                "error": result.get("error", ""),
+                "message": result.get("message", ""),
+            }
+
+        def _emit_step_record(
+            step_index: int,
+            *,
+            action: str,
+            thoughts: str,
+            code_type: Optional[str],
+            code: Optional[str],
+            result: Optional[Dict[str, Any]],
+            completion_signal: Optional[str] = None,
+        ) -> None:
+            payload = {
+                "step": step_index,
+                "action": action,
+                "thoughts": thoughts,
+                "code_type": code_type,
+                "code": code,
+                "execution_result": _normalize_execution_result(
+                    result,
+                    fallback_message=(
+                        f"Action signaled {completion_signal}; no code executed."
+                        if completion_signal
+                        else "No execution result available."
+                    ),
+                ),
+            }
+            if completion_signal:
+                payload["completion_signal"] = completion_signal
+            emit_event("code_agent.step.recorded", payload)
+
         emit_event(
             "code_agent.session.started",
             {
@@ -277,6 +328,15 @@ class CodeAgent:
                 logger.info(f"Step {step_count + 1}: Task completed successfully")
                 execution_history.append(step_entry)
                 completion_reason = "DONE"
+                _emit_step_record(
+                    step_count + 1,
+                    action=action,
+                    thoughts=thoughts,
+                    code_type=None,
+                    code=None,
+                    result=None,
+                    completion_signal=completion_reason,
+                )
                 break
             elif action_upper == "FAIL":
                 print(f"\nTASK FAILED - Step {step_count + 1}")
@@ -286,6 +346,15 @@ class CodeAgent:
                 logger.info(f"Step {step_count + 1}: Task failed by agent request")
                 execution_history.append(step_entry)
                 completion_reason = "FAIL"
+                _emit_step_record(
+                    step_count + 1,
+                    action=action,
+                    thoughts=thoughts,
+                    code_type=None,
+                    code=None,
+                    result=None,
+                    completion_signal=completion_reason,
+                )
                 break
 
             # Extract and execute code
@@ -384,6 +453,14 @@ class CodeAgent:
                     f"Status: skipped\n"
                     f"Message:\n{'-' * 40}\n{result['message']}\n{'-' * 40}"
                 )
+            _emit_step_record(
+                step_count + 1,
+                action=action,
+                thoughts=thoughts,
+                code_type=code_type,
+                code=code,
+                result=result,
+            )
             # Add assistant's thoughts and code to message history
             self.agent.add_message(response, role="assistant")
 
@@ -419,6 +496,17 @@ class CodeAgent:
             task_instruction,
             completion_reason=completion_reason,
             task_context=task_context,
+        )
+        emit_event(
+            "code_agent.summary.created",
+            {
+                "completion_reason": completion_reason,
+                "summary": summary,
+                "steps_executed": step_count,
+                "budget": self.budget,
+                "task": task_instruction,
+                "task_context": task_context,
+            },
         )
 
         result = {
@@ -472,7 +560,7 @@ class CodeAgent:
 
         # Build detailed execution context for summary agent
         execution_context = (
-            f"Task: {task_instruction}\n"
+            f"Low-level Task: {task_instruction}\n"
             f"Completion Reason: {completion_reason or 'unknown'}\n"
         )
         if task_context:
@@ -522,6 +610,7 @@ Produce a structured summary using the exact headings below, in this order:
 Overview
 Step-by-Step Actions
 Data Operations
+Data from the code agent
 Analysis/Heuristics
 Outputs/Artifacts
 Errors/Constraints
@@ -529,6 +618,8 @@ Errors/Constraints
 Requirements:
 - Use factual, non-judgmental language.
 - Include concrete details from the execution context (commands, data operations, outputs, errors).
+- In "Overview", explicitly state the low-level task and the higher-level task context when provided.
+- In "Data from the code agent", include any retrieved content/data the task explicitly asks for (e.g., extracted text, parsed values, saved knowledge payloads). If retrieval is not required or data is absent, write "None observed."
 - If a section has nothing to report, write "None observed."
 """
 

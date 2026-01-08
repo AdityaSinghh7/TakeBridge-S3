@@ -159,7 +159,7 @@ Respond with JSON in **ONE** of these three formats:
   "reasoning": "Brief explanation of why this is the right next step"
 }
 
-You are the single source of data compilation. When you emit a `next_step`, make the `task` string fully self-contained: include any concrete data, context, and outputs already obtained that the MCP or computer-use agent will need to execute. Assume downstream agents start fresh each step and have no memory beyond what you include in the `task`.
+You are the single source of data compilation. When you emit a `next_step`, make the `task` string fully self-contained: include any concrete data, context, and outputs already obtained that the MCP or computer-use agent will need to execute the next step. Assume downstream agents start fresh each step and have no memory beyond what you include in the `task`. The save_to_knowledge data is not persisted across Computer-Use steps, you should always include the full data required to complete the next step within the `task` string.
 
 ### 2. Task Complete
 {

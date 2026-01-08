@@ -81,6 +81,8 @@ PERSISTED_EVENTS = {
     "code_agent.step.response",
     "code_agent.step.execution",
     "code_agent.step.completed",
+    "code_agent.step.recorded",
+    "code_agent.summary.created",
     "grounding.generate_coords.service_failed",
     "grounding.generate_text_coords.started",
     "grounding.generate_text_coords.completed",
