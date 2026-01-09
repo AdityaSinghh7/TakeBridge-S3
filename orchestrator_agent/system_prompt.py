@@ -97,6 +97,7 @@ Be specific to help the agent discover the right tools quickly:
 - If you tell the agent to copy something (Ctrl+C), also tell it how to make the copied value visible/verifiable (e.g., paste into a note/text field) and then save the **visible value** via `agent.save_to_knowledge`.
 - For long text, instruct the agent to save multiple smaller chunks (e.g., `refund_policy_text_part1: ...`, `..._part2: ...`) rather than a placeholder label.
 - For document operations and modifications, first try using the `call_code_agent` action to modify the document using code as that is faster and more reliable. If that fails, then use the `gui-actions`, like `click` and `type` to modify the document.
+- For code agent tasks, it is not a requirement to open the document or file in the desktop environment, the code agent function can directly modify the file using code. Make sure to not instruct the computer-use agent to open the document or file in the desktop environment for code agent tasks within the task string, unless it is explicitly required for the task.
 
 **Handback-aware task formulation:**
 - The computer-use agent can hand a task back to a human by issuing a structured handback request string when human-only actions are required (for example, entering credentials, solving a CAPTCHA, or confirming a payment).
