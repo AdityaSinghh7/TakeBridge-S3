@@ -566,11 +566,17 @@ class AgentState:
                 action_outcome = step.action_outcome
                 summary = action_outcome.get("final_summary") or action_outcome.get("summary", "")
                 reasoning = step.action_reasoning
+                data = action_outcome.get("data")
+                if data is None and isinstance(step.action_input, dict):
+                    data = step.action_input.get("data")
 
                 step_label = "Completion" if step_type == "finish" else "Failure"
                 lines.append(f"### Step {step_num}: {step_label}")
                 lines.append(f"**Reasoning**: {reasoning}")
                 lines.append(f"**Summary**: {summary}")
+                if data is not None:
+                    data_json = json.dumps(data, indent=2, ensure_ascii=False, default=str)
+                    lines.append(f"**Data**:\n```json\n{data_json}\n```")
 
                 if not step.success or step.error:
                     lines.append(f"**Error**: {step.error or 'Task failed'}")

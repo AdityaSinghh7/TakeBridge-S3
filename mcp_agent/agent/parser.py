@@ -92,6 +92,9 @@ def _validate_finish(command: Dict[str, Any]) -> None:
     summary = command.get("summary")
     if summary is not None:
         _require(isinstance(summary, str), "Finish command 'summary' must be a string.")
+    data = command.get("data")
+    if data is not None:
+        _require(isinstance(data, dict), "Finish command 'data' must be an object.")
 
 
 def _validate_search(command: Dict[str, Any]) -> None:

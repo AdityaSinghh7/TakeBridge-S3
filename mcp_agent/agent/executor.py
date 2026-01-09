@@ -65,7 +65,7 @@ def analyze_sandbox(code: str) -> tuple[Set[str], Dict[str, Set[str]], Dict[str,
     return used_servers, calls_by_server, call_details
 
 
-_RECOVERABLE_SANDBOX_ERRORS = {"KeyError", "IndexError", "AttributeError", "TypeError"}
+_RECOVERABLE_SANDBOX_ERRORS = {"KeyError", "IndexError", "AttributeError", "TypeError", "NameError"}
 
 
 def _extract_missing_key(error: Any) -> str | None:
@@ -1093,23 +1093,23 @@ class ActionExecutor:
                 if error_type == "KeyError":
                     missing_key = _extract_missing_key(normalized_result.get("error"))
 
-            recoverable = error_type in _RECOVERABLE_SANDBOX_ERRORS
-            error_code = "sandbox_logic_error" if recoverable else "sandbox_runtime_error"
+            type_recoverable = error_type in _RECOVERABLE_SANDBOX_ERRORS
+            error_code = "sandbox_runtime_error"
             if error_type:
                 error_payload["error_type"] = error_type
             if missing_key:
                 error_payload["missing_key"] = missing_key
-            if recoverable:
-                prior_errors = 0
-                for step in self.agent_state.history:
-                    if (
-                        step.action_type == "sandbox"
-                        and step.error == error_code
-                        and (step.action_input.get("label") or "").strip() == label
-                    ):
-                        prior_errors += 1
-                error_payload["prior_errors"] = prior_errors
-                error_payload["recoverable"] = True
+            prior_errors = 0
+            for step in self.agent_state.history:
+                if (
+                    step.action_type == "sandbox"
+                    and step.error == error_code
+                    and (step.action_input.get("label") or "").strip() == label
+                ):
+                    prior_errors += 1
+            error_payload["prior_errors"] = prior_errors
+            error_payload["recoverable"] = True
+            if type_recoverable:
                 error_payload["hint"] = (
                     "Sandbox code accessed missing/invalid data; check response keys before indexing."
                 )
@@ -1204,6 +1204,17 @@ class ActionExecutor:
 
         preview = command.get("reasoning") or f"Sandbox '{label}' failed: {error_details[:100]}"
         error_code = "sandbox_timeout" if sandbox_result.timed_out else "sandbox_runtime_error"
+        if error_code == "sandbox_runtime_error":
+            prior_errors = 0
+            for step in self.agent_state.history:
+                if (
+                    step.action_type == "sandbox"
+                    and step.error == error_code
+                    and (step.action_input.get("label") or "").strip() == label
+                ):
+                    prior_errors += 1
+            error_payload["prior_errors"] = prior_errors
+            error_payload["recoverable"] = True
         return StepResult(
             type="sandbox",
             success=False,

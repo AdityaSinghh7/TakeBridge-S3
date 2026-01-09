@@ -96,6 +96,7 @@ Be specific to help the agent discover the right tools quickly:
 - If you want a "key", encode it into the saved string, e.g. `agent.save_to_knowledge(["doc_id: 1A2B3C..."])`.
 - If you tell the agent to copy something (Ctrl+C), also tell it how to make the copied value visible/verifiable (e.g., paste into a note/text field) and then save the **visible value** via `agent.save_to_knowledge`.
 - For long text, instruct the agent to save multiple smaller chunks (e.g., `refund_policy_text_part1: ...`, `..._part2: ...`) rather than a placeholder label.
+- For document operations and modifications, first try using the `call_code_agent` action to modify the document using code as that is faster and more reliable. If that fails, then use the `gui-actions`, like `click` and `type` to modify the document.
 
 **Handback-aware task formulation:**
 - The computer-use agent can hand a task back to a human by issuing a structured handback request string when human-only actions are required (for example, entering credentials, solving a CAPTCHA, or confirming a payment).
@@ -127,6 +128,7 @@ Be specific to help the agent discover the right tools quickly:
 - ✅ "In the Chrome browser, click on the 'Download Invoice' button, then wait 5 seconds for download to complete"
 - ✅ "Type 'Q4 Revenue Report' into the filename input field at the top of the document"
 - ✅ "Use hotkey Ctrl+C to copy the selected text, then switch to Notepad and use Ctrl+V to paste"
+- ✅ "Use the code agent to modify the document `report.docx` by typing 'Q4 Revenue Report' into the file content in the last paragraph and saving the document"
 
 **Hybrid Workflows:**
 - Step 1 (Computer-Use): "Open Chrome and navigate to the 3PL portal, click 'Download Invoice' button"

@@ -143,12 +143,18 @@ class AgentOrchestrator:
             self._executor.execute_step(command)
             summary = command.get("summary") or "Task completed."
             reasoning = command.get("reasoning") or ""
+            data = command.get("data")
+            action_input = {"summary": summary, "reasoning": reasoning}
+            action_outcome = {"success": True, "final_summary": summary}
+            if data is not None:
+                action_input["data"] = data
+                action_outcome["data"] = data
             self.agent_state.record_step(
                 action_type="finish",
                 success=True,
                 action_reasoning=reasoning,
-                action_input={"summary": summary, "reasoning": reasoning},
-                action_outcome={"success": True, "final_summary": summary},
+                action_input=action_input,
+                action_outcome=action_outcome,
                 observation=None,
                 observation_metadata=None,
                 error=None,
@@ -386,6 +392,7 @@ class AgentOrchestrator:
                     "sandbox_logic_error",
                     "sandbox_invalid_body",
                     "sandbox_empty_result",
+                    "sandbox_runtime_error",
                 }
                 if error_code in recoverable_codes:
                     prior_errors = observation.get("prior_errors", 0) if isinstance(observation, dict) else 0
