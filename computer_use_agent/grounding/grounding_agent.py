@@ -1004,7 +1004,7 @@ class OSWorldACI(ACI):
         """Scroll the element in the specified direction
         Args:
             element_description:str, an extremely detailed description of which element to enter scroll in. This description should be at least a full sentence. The description should be so detailed that it can be used to uniquely identify the element.
-            clicks:int, the number of clicks to scroll can be positive (up) or negative (down).
+            clicks:int, the number of clicks to scroll can be positive (up) or negative (down). Hint: Start with 150 clicks (or -150 for down). If the scroll moves too little based on what you see, progressively increase the magnitude; if it overshoots, progressively reduce the magnitude.
             shift:bool, whether to use shift+scroll for horizontal scrolling
         """
         coords1 = self.generate_coords(element_description, self.obs)

@@ -600,6 +600,53 @@ def test_12_planner_prompt_json_examples():
     return True
 
 
+def test_13_planner_parse_error_recovery():
+    """Test that planner parse errors trigger a retry before failing."""
+    print("\n" + "="*60)
+    print("TEST 13: Planner Parse Error Recovery")
+    print("="*60)
+
+    from mcp_agent.agent.run_loop import AgentOrchestrator
+    from mcp_agent.agent.state import AgentState
+    from mcp_agent.agent.budget import Budget
+    from mcp_agent.core.context import AgentContext
+
+    class _StubLLM:
+        def __init__(self, outputs):
+            self._outputs = list(outputs)
+            self.calls = 0
+
+        def generate_plan(self, _context):
+            idx = min(self.calls, len(self._outputs) - 1)
+            self.calls += 1
+            return {"text": self._outputs[idx]}
+
+    state = AgentState(
+        task="Test planner parse recovery",
+        user_id="test-user",
+        request_id="test-request",
+        budget=Budget(max_steps=3),
+    )
+    context = AgentContext.create("test-user", request_id="test-request")
+    llm = _StubLLM(
+        [
+            "not json",
+            '{"type": "search", "reasoning": "Retry parse", "query": "gmail"}',
+        ]
+    )
+    orchestrator = AgentOrchestrator(context, state, llm=llm)
+
+    command, failure = orchestrator._next_command()
+
+    assert failure is None
+    assert command is not None
+    assert command.get("type") == "search"
+    assert llm.calls == 2
+
+    print("✓ Planner parse error retried successfully")
+    return True
+
+
 def run_all_tests():
     """Run all integration tests."""
     print("\n" + "="*70)
@@ -619,6 +666,7 @@ def run_all_tests():
         ("Sandbox Invalid Body Guardrail", test_10_sandbox_invalid_body_guardrail),
         ("Sandbox Empty Result Guardrail", test_11_sandbox_empty_result_guardrail),
         ("Planner Prompt JSON Examples", test_12_planner_prompt_json_examples),
+        ("Planner Parse Error Recovery", test_13_planner_parse_error_recovery),
     ]
 
     results = []

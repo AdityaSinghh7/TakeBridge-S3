@@ -101,31 +101,71 @@ class AgentOrchestrator:
         """
         Ask the LLM for the next planner command and parse it.
 
-        Handles empty-response retries and converts protocol/shape errors into a
-        terminal planner failure.
+        Handles empty-response retries and performs limited recovery attempts for
+        protocol/shape errors before returning a terminal failure.
         """
-        llm_result = self.llm.generate_plan(self.agent_state)
-        text = llm_result.get("text") or ""
-        if not text:
-            self.agent_state.record_event(
-                "mcp.llm.retry_empty",
-                {"raw_output": text},
-            )
+        max_parse_retries = 2
+        attempt = 0
+        last_error: Exception | None = None
+        last_text = ""
+
+        while attempt <= max_parse_retries:
+            attempt += 1
             llm_result = self.llm.generate_plan(self.agent_state)
             text = llm_result.get("text") or ""
-        try:
-            return parse_planner_command(text), None
-        except ValueError as exc:
-            # Protocol/shape error in planner output.
-            self.agent_state.record_event(
-                "mcp.planner.protocol_error",
-                {
-                    "error": str(exc),
-                    "raw_preview": text[:200],
-                },
-            )
-            result = self._failure("planner_parse_error", str(exc), preview=text)
-            return None, result
+            if not text:
+                self.agent_state.record_event(
+                    "mcp.llm.retry_empty",
+                    {"raw_output": text, "attempt": attempt},
+                )
+                llm_result = self.llm.generate_plan(self.agent_state)
+                text = llm_result.get("text") or ""
+            try:
+                return parse_planner_command(text), None
+            except ValueError as exc:
+                last_error = exc
+                last_text = text
+                # Protocol/shape error in planner output.
+                self.agent_state.record_event(
+                    "mcp.planner.protocol_error",
+                    {
+                        "error": str(exc),
+                        "raw_preview": self._clean_llm_preview(text, limit=200),
+                    },
+                )
+                if attempt <= max_parse_retries:
+                    self.agent_state.record_event(
+                        "mcp.planner.retry_parse_error",
+                        {
+                            "attempt": attempt,
+                            "max_retries": max_parse_retries,
+                            "error": str(exc),
+                        },
+                    )
+                    continue
+                break
+
+        clean_error = self._format_parse_error(last_error, attempt)
+        result = self._failure(
+            "planner_parse_error",
+            clean_error,
+            preview=self._clean_llm_preview(last_text),
+        )
+        return None, result
+
+    @staticmethod
+    def _clean_llm_preview(text: str, limit: int = 400) -> str:
+        if not text:
+            return ""
+        cleaned = "".join(ch if ch.isprintable() else " " for ch in text).strip()
+        if len(cleaned) > limit:
+            return cleaned[: max(0, limit - 3)] + "..."
+        return cleaned
+
+    @staticmethod
+    def _format_parse_error(exc: Exception | None, attempts: int) -> str:
+        base = str(exc).strip() if exc else "Planner response invalid."
+        return f"{base} (parse retries exhausted after {attempts} attempts)."
 
     def _dispatch_command(self, command: Dict[str, Any]) -> MCPTaskResult | None:
         """

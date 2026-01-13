@@ -59,7 +59,13 @@ class PROCEDURAL_MEMORY:
         - ALWAYS verify code agent results with GUI actions before using agent.done(); NEVER trust code agent output alone. If verification or the code agent fails, use GUI actions to finish the task and only use agent.done() if results match expectations.
         - **CRITICAL**: Files modified by code agent may not show changes in currently open applications - you MUST close and reopen the entire application. Reloading the page/file is insufficient.
 
-        Never assume a task is done based on appearances-always ensure the specific requested action has been performed and verify the modification. If you haven't executed any actions, the task is not complete.
+        Never assume a task is done based on appearances-always ensure the specific requested action has been performed and verify it with on-screen evidence. If you haven't executed any actions, the task is not complete.
+
+        ## Completion & Loop Avoidance (REQUIRED)
+        - Derive a concrete stop condition from the task (often phrased as "stop once …" / "do not …"). Once the stop condition is satisfied, call `agent.done()` immediately and do not continue exploring.
+        - Do not invent UI requirements. Only treat a field/button/section as "missing" if it is visible now or was visible earlier in the trajectory. It's OK if some provided data never gets used.
+        - Avoid unproductive navigation loops (e.g., scrolling up/down repeatedly). If repeated scrolling/search does not reveal any new empty/invalid inputs or required steps, assume you are already done or need a different approach.
+        - Use end-of-page/end-of-flow cues (e.g., a Submit/Finish/Save button, an "End" message, or a disabled CTA with validation errors) to decide when you've reached the end and can stop.
 
         ### END OF GUIDELINES
 
@@ -90,10 +96,10 @@ class PROCEDURAL_MEMORY:
         Carefully analyze based on the screenshot if the previous action was successful. If the previous action was not successful, provide a reason for the failure.
 
         (Screenshot Analysis)
-        Closely examine and describe the current state of the desktop along with the currently open applications.
+        Closely examine and describe the current state of the desktop along with the currently open applications. Only describe UI elements you can actually see (or that you have already verified earlier in the trajectory); do not guess about off-screen fields or requirements.
 
         (Next Action)
-        Based on the current screenshot and the history of your previous interaction with the UI, decide on the next action in natural language to accomplish the given task.
+        Based on the current screenshot and the history of your previous interaction with the UI, decide on the next action in natural language to accomplish the given task. If the task's stop condition is already satisfied, state that and choose `agent.done()` as the next action.
 
         (Grounded Action)
         Translate the next action into code using the provided API methods. Format the code like this:
@@ -105,13 +111,15 @@ class PROCEDURAL_MEMORY:
         2. The code block must contain exactly one line: a single `agent.<action>(...)` call and nothing else. If using the code agent, the line must be `agent.call_code_agent("...")` with a non-empty subtask.
         3. Return exactly one fenced code block and no other code fences or inline code anywhere else in the response.
         4. You must use only the available methods provided above to interact with the UI, do not invent new methods.
-        5. Do not do anything other than the exact specified task. Return with `agent.done()` immediately after the subtask is completed or `agent.fail()` if it cannot be completed.
+        5. Do not do anything other than the exact specified task. Return with `agent.done()` immediately after the subtask is completed or `agent.fail()` if it cannot be completed. Completion must be based on the task's stop condition and on-screen evidence; it does not require finding a place to use every piece of provided data if the UI has no matching field.
         6. Whenever possible, your grounded action should use hot-keys with the agent.hotkey() action instead of clicking or dragging.
         7. My computer's password is 'osworld-public-evaluation', feel free to use it when you need sudo rights.
         8. Generate agent.fail() as your grounded action if you get exhaustively stuck on the task and believe it is impossible.
         9. Generate agent.done() as your grounded action when your believe the task is fully complete.
         10. Do not use the "command" + "tab" hotkey on MacOS.
         11. Prefer hotkeys and application features over clicking on text elements when possible. Highlighting text is fine.
+        12. It is acceptable for some provided information to remain unused if the UI does not ask for it; do not endlessly scroll/search for a hypothetical field.
+        13. If you reach an obvious end-of-page/end-of-flow state (e.g., Submit/Finish/Save is visible) and there are no remaining empty required fields or validation errors, stop and return `agent.done()` instead of scrolling back and forth.
         """
         )
 
@@ -131,9 +139,9 @@ class PROCEDURAL_MEMORY:
     
     Your task is to generate a reflection. Your generated reflection must fall under one of the cases listed below:
 
-    Case 1. The trajectory is not going according to plan. This is often due to a cycle of actions being continually repeated with no progress being made. In this case, explicitly highlight why the current trajectory is incorrect, and encourage the computer agent to modify their action. However, DO NOT encourage a specific action in particular. When the latest update is a connected action outcome with Status ❌ or repeated errors, treat that as a lack of progress even if the screenshot looks unchanged.
+    Case 1. The trajectory is not going according to plan. This is often due to a cycle of actions being continually repeated with no progress being made (e.g., repeated scrolling up/down, refreshing/reloading, or repeatedly searching for an element that never appears). In this case, explicitly highlight why the current trajectory is incorrect, and encourage the computer agent to modify their action. However, DO NOT encourage a specific action in particular. When the latest update is a connected action outcome with Status ❌ or repeated errors, treat that as a lack of progress even if the screenshot looks unchanged.
     Case 2. The trajectory is going according to plan. In this case, simply tell the agent to continue proceeding as planned. DO NOT encourage a specific action in particular. It is acceptable for the screenshot to remain static when a connected action succeeds and no immediate GUI change is expected.
-    Case 3. You believe the current task has been completed. In this case, tell the agent that the task has been successfully completed. Ensure the connected action's success actually satisfies the task requirements; do not assume completion based solely on a successful payload.
+    Case 3. You believe the current task has been completed. In this case, tell the agent that the task has been successfully completed. Ensure the trajectory provides on-screen evidence that the task's stop condition has been met; do not assume completion based solely on a successful payload. It is acceptable if not every piece of provided input data was used, as long as the UI requirements in the task were satisfied.
     
     To be successful, you must follow the rules below:
     - **Your output MUST be based on one of the case options above**.
@@ -143,6 +151,7 @@ class PROCEDURAL_MEMORY:
     - IMPORTANT: Do not assume file modifications or application restarts are errors - they may be legitimate code agent actions
     - Some trajectory steps may omit screenshots when only textual tool outcomes are relevant; rely on the provided summary in those cases
     - Consider whether observed changes align with the task requirements before determining if the trajectory is off-track
+    - Be skeptical of the agent's speculative claims about off-screen fields/elements; repeated searching for something never shown is often a sign of a loop or that the task is already complete.
     """
     )
 

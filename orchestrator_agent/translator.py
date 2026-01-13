@@ -53,6 +53,7 @@ Your task is to extract and organize this into a decisive canonical JSON format 
 - **COUNT accurately** - total steps, tools found, etc.
 - **IDENTIFY failures precisely** - which step number failed, what the error was
 - When deciding what to keep, ask: "What does the task need?" Keep information that serves the task; avoid copying unrelated bulk text.
+- **CRITICAL FOR MCP AGENT OUTPUTS**: If the tool output for the MCP Agent is a large amount of unnecessary data for the task, you can reliably truncate OR summarize the data to keep only the relevant information for the task. Do not invent or fabricate data.
 
 ### No Invention
 - **NEVER fabricate** data, counts, or values not in the trajectory

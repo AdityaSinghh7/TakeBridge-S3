@@ -1,7 +1,8 @@
 """
 llm_client.py
 
-Provider-agnostic LLM facade that routes to OpenAI, DeepSeek, or OpenRouter based on env knobs.
+Provider-agnostic LLM facade that routes to OpenAI, DeepSeek (optionally via Baseten),
+or OpenRouter based on env knobs.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
 
+from shared.baseten_client import BasetenClient
 from shared.deepseek_client import DeepSeekClient
 from shared.openrouter_client import OpenRouterClient
 from shared.oai_client import OAIClient as OpenAIClient
@@ -49,6 +51,28 @@ _LLM_LOG_LOCK = threading.Lock()
 
 def _llm_log_enabled() -> bool:
     return os.getenv("LLM_LOG_ENABLED", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _baseten_enabled_for_deepseek() -> bool:
+    return os.getenv("DEEPSEEK_BASETEN_ENABLED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _baseten_default_model() -> str:
+    baseten_model = os.getenv("BASETEN_MODEL")
+    if baseten_model:
+        return str(baseten_model)
+    candidate = os.getenv("DEEPSEEK_MODEL") or os.getenv("LLM_MODEL")
+    if candidate:
+        candidate_value = str(candidate)
+        if candidate_value.startswith("deepseek-") and "/" not in candidate_value:
+            return "deepseek-ai/DeepSeek-V3.2"
+        return candidate_value
+    return "deepseek-ai/DeepSeek-V3.2"
 
 
 def _sanitize_run_id(value: Optional[str]) -> str:
@@ -247,6 +271,8 @@ def _normalize_provider(provider: Optional[str]) -> str:
 
 def _default_model_for_provider(provider: str) -> str:
     if provider == "deepseek":
+        if _baseten_enabled_for_deepseek():
+            return _baseten_default_model()
         candidate = os.getenv("DEEPSEEK_MODEL") or os.getenv("LLM_MODEL") or "deepseek-reasoner"
         if not str(candidate).startswith("deepseek-"):
             return "deepseek-reasoner"
@@ -267,6 +293,10 @@ def _resolve_model(provider: str, model: Optional[str]) -> str:
         return _default_model_for_provider(provider)
     model_value = str(model)
     if provider == "deepseek":
+        if _baseten_enabled_for_deepseek():
+            if "/" not in model_value:
+                return _baseten_default_model()
+            return model_value
         if not model_value.startswith("deepseek-"):
             return "deepseek-reasoner"
         return model_value
@@ -437,6 +467,8 @@ class LLMClient:
         if provider == "openai":
             return OpenAIClient(**kwargs)
         if provider == "deepseek":
+            if _baseten_enabled_for_deepseek():
+                return BasetenClient(**kwargs)
             return DeepSeekClient(**kwargs)
         if provider == "openrouter":
             return OpenRouterClient(**kwargs)
@@ -920,6 +952,10 @@ def get_client(
 ) -> Any:
     provider = _normalize_provider(None)
     if provider == "deepseek":
+        if _baseten_enabled_for_deepseek():
+            from shared.baseten_client import get_client as get_baseten_client
+
+            return get_baseten_client(api_key=api_key, timeout=timeout, base_url=base_url)
         from shared.deepseek_client import get_client as get_deepseek_client
 
         return get_deepseek_client(api_key=api_key, timeout=timeout, base_url=base_url)

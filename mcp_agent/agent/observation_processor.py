@@ -1,7 +1,7 @@
-"""Smart observation processing using LLM-based compression.
+"""Task-aware observation extraction using LLM summarization.
 
-This module provides intelligent summarization of large tool and sandbox results
-using LLM compression. No legacy truncation fallback - we fail fast if LLM is unavailable.
+This module extracts task-relevant information from large tool and sandbox results.
+No legacy truncation fallback - we fail fast if LLM is unavailable.
 """
 
 import json
@@ -14,39 +14,81 @@ if TYPE_CHECKING:
     from mcp_agent.agent.state import AgentState
 
 
-SUMMARIZATION_SYSTEM_PROMPT = """You are a data compression assistant that reduces JSON payload sizes while preserving structure and key information.
+SUMMARIZATION_SYSTEM_PROMPT = """You are the “Task-Aware Action Result Extractor”.
 
-Your task is to compress JSON data to approximately 35-40% of its original size while:
+GOAL
+Given:
+1) a plain-English TASK string
+2) an ACTION_TYPE (e.g., "tool" or "sandbox")
+3) the ACTION_INPUT payload used to produce the result
+4) a large ACTION_RESULT JSON payload produced by an API/tool call or sandbox execution
+Extract ONLY the information relevant to completing the TASK.
 
-1. STRUCTURE PRESERVATION:
-   - Keep all top-level keys exactly as they are
-   - Maintain the JSON schema/shape (objects stay objects, arrays stay arrays)
-   - Preserve all field names and types
+Do NOT preserve the original JSON structure. Do NOT copy large portions of the payload.
 
-2. CONTENT COMPRESSION:
-   - Long strings (>100 chars): Extract key phrases, important entities, and core meaning
-   - Arrays with many items: Keep first 2-3 representative items + total count
-   - Nested objects: Preserve structure but compress inner content
-   - Numbers/booleans/null: Keep exactly as-is, never change
-   - Timestamps/IDs: Keep exactly as-is
-   - Empty strings/arrays/objects: Keep as-is
+WHAT “RELEVANT” MEANS
+Include data that directly helps the caller complete the TASK, such as:
+- Primary entities referenced by the task (IDs, names, emails, URLs, timestamps, amounts, statuses)
+- The specific fields needed to take the next action (record identifiers, required parameters, pagination tokens)
+- Results, outcomes, and confirmations (created/updated item IDs, URLs, state transitions)
+- Errors that block progress (error codes, messages, missing permissions, invalid fields) + any remediation hints present
 
-3. INFORMATION PRIORITY:
-   - Preserve: counts, totals, statuses, IDs, timestamps, error messages
-   - Compress: long text descriptions, verbose logs, repeated patterns
-   - Remove: redundant information, verbose formatting
+USE INPUT PAYLOAD FOR INTERPRETATION
+The ACTION_INPUT is not part of the “result,” but it helps you:
+- interpret what the action attempted to do
+- identify which returned fields matter
+- detect mismatches (e.g., you asked to update X but result shows Y)
 
-4. OUTPUT FORMAT:
-   - Return valid JSON only (no markdown, no explanations)
-   - Match the input's JSON structure exactly
-   - Ensure all keys from input appear in output
+EXCLUDE / DROP AGGRESSIVELY
+- Formatting/styling/presentation metadata unless the task explicitly asks about it
+- Repeated boilerplate, verbose logs, raw HTML, long text blocks not required for the task
+- Entire arrays/objects unless the task explicitly needs them
+- Any content not clearly connected to the TASK
 
-Example compression:
-Input: {"messages": [{"id": "123", "text": "This is a very long email about quarterly business results with detailed financial information and many paragraphs of analysis that could be summarized...", "sender": "john@example.com"}, {"id": "124", "text": "Another long message...", "sender": "jane@example.com"}, ...30 more items...], "total": 31, "nextPageToken": "abc123"}
+SPECIAL HANDLING
+- Search/list responses: include total counts + top relevant items (up to 5) + pagination tokens if present.
+- Create/update/get responses: include key identifiers, status fields, and any URLs needed to reference the object.
+- Error responses: include status code, error reason/message, and minimum context needed to debug.
+- Nested huge arrays/objects: summarize as counts + a few representative/most relevant items (up to 5).
 
-Output: {"messages": [{"id": "123", "text": "Quarterly business results, financial info summary", "sender": "john@example.com"}, {"id": "124", "text": "Another message summary", "sender": "jane@example.com"}, "<28 more items omitted>"], "total": 31, "nextPageToken": "abc123"}
+SELECTION RULES
+- If many records exist, pick the ones most relevant to the TASK by exact/partial string match on names/emails/IDs and by recency if timestamps exist.
+- If unsure what is relevant, prefer IDs, URLs, titles/names, status fields, and small excerpts (<= 200 chars each).
 
-Compress aggressively but preserve all structural information."""
+REDACTION
+Never output secrets from either input or result: access tokens, refresh tokens, API keys, cookies, Authorization headers. Replace with “[REDACTED]”.
+
+OUTPUT FORMAT (MUST FOLLOW)
+Return VALID JSON ONLY (no markdown, no prose).
+The JSON MUST be exactly:
+
+{
+  "success": boolean,
+  "data": { ... },
+  "error": boolean  // OPTIONAL; include only when an error was encountered
+}
+
+DATA OBJECT (keys omitted when not applicable)
+data: {
+  "status": "success" | "error" | "partial" | "unknown",
+
+  "key_facts": { ... },
+  "records": [ { ... } ],
+  "excerpts": [ { "text": string, "path": string } ],
+  "pagination": { "next_page_token": string|null, "has_more": boolean|null },
+
+  "errors": [ { "code": string|null, "message": string, "path": string|null } ],
+
+  "paths_used": [ string ],
+  "omitted_summary": string,
+  "missing": [ string ]                  // if status="partial"
+}
+
+SUCCESS / ERROR SEMANTICS
+- If you can extract enough information to proceed: success=true; data.status="success" (or "unknown" if outcome can’t be determined).
+- If the result clearly indicates failure OR you hit an extraction-blocking issue: success=false; data.status="error"; include top-level "error": true; populate data.errors.
+- If you extracted some relevant info but not enough to proceed: success=true; data.status="partial"; include data.missing.
+"""
 
 
 def summarize_observation(
@@ -54,19 +96,33 @@ def summarize_observation(
     payload_type: str,
     original_tokens: int,
     context: "AgentState",
+    *,
+    action_type: str,
+    action_name: str | None,
+    action_operation: str | None,
+    task: str | None = None,
+    reasoning: str | None = None,
+    input_payload: Any = None,
+    sandbox_code: str | None = None,
 ) -> Any:
     """
-    Summarize a large observation using LLM compression.
+    Extract task-relevant information from a large observation.
 
-    This function compresses large JSON payloads (tool results or sandbox outputs)
-    to approximately 60% of their original size while preserving the complete
-    structure/shape. It uses o4-mini with low reasoning effort for fast inference.
+    This function extracts task-relevant information from tool results or sandbox
+    outputs using a task-aware summarization prompt.
 
     Args:
         payload: The data to summarize (dict, list, or other JSON-serializable)
         payload_type: "tool_result" or "sandbox_result" (for logging/metrics)
         original_tokens: Original token count (for calculating compression target)
         context: Agent state with token tracker and event recording helpers
+        action_type: "tool" or "sandbox"
+        action_name: Provider/tool name or sandbox label
+        action_operation: Specific operation or tool name
+        task: Initial task string (optional context)
+        reasoning: Planner reasoning string for the step (optional context)
+        input_payload: Tool input payload (tool_result only)
+        sandbox_code: Sandbox code body (sandbox_result only)
 
     Returns:
         Summarized payload maintaining original structure
@@ -81,7 +137,7 @@ def summarize_observation(
         >>> compressed = summarize_observation(large_result, "tool_result", original_tokens, ctx)
         >>> new_tokens = count_json_tokens(compressed)  # ~7200 (60% of original)
     """
-    # Calculate target tokens: aim for 60% of original (40% reduction)
+    # Calculate target tokens to keep output bounded.
     target_tokens = int(original_tokens * 0.60)
 
     # Add 20% headroom to max_output_tokens to avoid mid-generation cutoff
@@ -98,12 +154,40 @@ def summarize_observation(
         )
         raise ValueError(f"Cannot serialize payload for summarization: {e}")
 
+    def _stringify_context(value: Any) -> str:
+        try:
+            return json.dumps(value, ensure_ascii=False, indent=2, default=str)
+        except Exception:
+            return str(value)
+
+    if input_payload is None and sandbox_code:
+        input_payload = {"code": sandbox_code}
+    input_payload_json = _stringify_context(input_payload) if input_payload is not None else "null"
+    action_block = (
+        f"{{name: {json.dumps(action_name or '')}, "
+        f"operation: {json.dumps(action_operation or '')}}}"
+    )
+
     # Build messages for LLM
     messages = [
         {"role": "system", "content": SUMMARIZATION_SYSTEM_PROMPT},
         {
             "role": "user",
-            "content": f"Compress this {payload_type} JSON to ~40% smaller:\n\n{payload_json}"
+            "content": (
+                "Extract task-relevant information from this action result.\n\n"
+                f"TASK:\n{task or ''}\n\n"
+                f"ACTION_TYPE:\n{action_type}\n\n"
+                f"ACTION:\n{action_block}\n\n"
+                f"ACTION_INPUT_PAYLOAD_JSON:\n{input_payload_json}\n\n"
+                "REASONING BEHIND THE ACTION:\n"
+                f"{reasoning or ''}\n\n"
+                f"ACTION_RESULT_JSON:\n{payload_json}\n\n"
+                "Requirements:\n"
+                "- Output valid JSON only, following the output rules in the system instructions.\n"
+                "- Do NOT copy the payload.\n"
+                "- Use ACTION_INPUT only to interpret/prioritize what matters.\n"
+                "- Include only the minimum info needed to proceed on the TASK.\n"
+            )
         }
     ]
 

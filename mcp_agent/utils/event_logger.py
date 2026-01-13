@@ -212,6 +212,14 @@ def _summarize_event(event: str, payload: Any) -> str:
                 "preview_len": preview_len,
             }
         )
+    if event == "mcp.planner.retry_parse_error":
+        return _kv_pairs(
+            {
+                "attempt": payload.get("attempt"),
+                "max_retries": payload.get("max_retries"),
+                "error": _truncate_text(payload.get("error"), 120),
+            }
+        )
 
     if event == "mcp.planner.failed":
         return _kv_pairs(

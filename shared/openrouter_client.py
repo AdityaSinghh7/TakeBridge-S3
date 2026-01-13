@@ -64,6 +64,7 @@ DEFAULT_BACKOFF_CAP_SECONDS = 8.0
 DEFAULT_BACKOFF_JITTER_SECONDS = 0.25
 _RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 _OPENROUTER_QWEN3_MODEL = "qwen/qwen3-vl-235b-a22b-instruct"
+_ENABLE_OPENROUTER_PROVIDER_ONLY = False
 _OPENROUTER_PROVIDER_ONLY = ["alibaba"]
 
 
@@ -121,6 +122,8 @@ def _extract_text_from_content(content: Any) -> str:
 
 
 def _provider_only_for_model(model_name: str) -> list[str] | None:
+    if not _ENABLE_OPENROUTER_PROVIDER_ONLY:
+        return None
     env_model = (os.getenv("OPENROUTER_MODEL") or "").strip()
     if env_model and model_name == env_model:
         return _OPENROUTER_PROVIDER_ONLY

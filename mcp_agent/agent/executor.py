@@ -318,7 +318,18 @@ class ActionExecutor:
                 raw_output_key=result_key,
             )
 
-        observation, is_smart_summary, original_tokens, compressed_tokens = self._process_tool_observation(result)
+        observation, is_smart_summary, original_tokens, compressed_tokens = self._process_tool_observation(
+            result,
+            reasoning=command.get("reasoning"),
+            input_payload={
+                "tool_id": tool_id,
+                "field_path": field_path,
+                "max_depth": max_depth,
+                "max_fields": max_fields,
+            },
+            action_name="inspect_tool_output",
+            action_operation=tool_id,
+        )
         self.agent_state.append_raw_output(
             result_key,
             {
@@ -350,18 +361,30 @@ class ActionExecutor:
 
     # --- Observation processing with intelligent summarization ---
 
-    def _process_tool_observation(self, result: Dict[str, Any]) -> tuple[Any, bool, int, int]:
+    def _process_tool_observation(
+        self,
+        result: Dict[str, Any],
+        *,
+        reasoning: str | None,
+        input_payload: Any,
+        action_name: str | None,
+        action_operation: str | None,
+    ) -> tuple[Any, bool, int, int]:
         """
         Process tool execution result with intelligent summarization.
 
         Strategy:
         1. Check successful/error envelope
         2. Count tokens in data payload
-        3. If < 8000 tokens: return raw data
-        4. If >= 8000 tokens: LLM-summarize maintaining structure
+        3. If < 15000 tokens: return raw data
+        4. If >= 15000 tokens: LLM-summarize maintaining structure
 
         Args:
             result: Raw tool execution response envelope
+            reasoning: Planner reasoning for the step (if provided)
+            input_payload: Tool input payload or inspect parameters
+            action_name: Provider/tool name or inspector label
+            action_operation: Tool operation name or tool_id
 
         Returns:
             Tuple of (observation, is_smart_summary, original_tokens, compressed_tokens)
@@ -397,11 +420,11 @@ class ActionExecutor:
         # Log token count for monitoring
         self.agent_state.record_event(
             "mcp.observation.tool_tokens",
-            {"token_count": token_count, "threshold": 8000}
+            {"token_count": token_count, "threshold": 15000}
         )
 
         # Decision: raw or summarize
-        if token_count < 8000:
+        if token_count < 15000:
             return data, False, token_count, token_count
 
         # Summarize using LLM (no fallback - fail fast)
@@ -410,6 +433,12 @@ class ActionExecutor:
             payload_type="tool_result",
             original_tokens=token_count,
             context=self.agent_state,
+            action_type="tool",
+            action_name=action_name,
+            action_operation=action_operation,
+            task=self.agent_state.task,
+            reasoning=reasoning,
+            input_payload=input_payload,
         )
 
         # Count tokens in summarized output
@@ -420,7 +449,15 @@ class ActionExecutor:
 
         return summarized, True, token_count, compressed_tokens
 
-    def _process_sandbox_observation(self, result: Any) -> tuple[Any, bool, int, int]:
+    def _process_sandbox_observation(
+        self,
+        result: Any,
+        *,
+        reasoning: str | None,
+        sandbox_code: str | None,
+        action_name: str | None,
+        action_operation: str | None,
+    ) -> tuple[Any, bool, int, int]:
         """
         Process sandbox execution result with intelligent summarization.
 
@@ -432,6 +469,10 @@ class ActionExecutor:
 
         Args:
             result: Raw sandbox execution result (any shape)
+            reasoning: Planner reasoning for the step (if provided)
+            sandbox_code: Sandbox code body used for the step
+            action_name: Sandbox label
+            action_operation: Sandbox operation identifier
 
         Returns:
             Tuple of (observation, is_smart_summary, original_tokens, compressed_tokens)
@@ -450,11 +491,11 @@ class ActionExecutor:
         # Log token count for monitoring
         self.agent_state.record_event(
             "mcp.observation.sandbox_tokens",
-            {"token_count": token_count, "threshold": 10000}
+            {"token_count": token_count, "threshold": 15000}
         )
 
         # Decision: raw or summarize
-        if token_count < 10000:
+        if token_count < 15000:
             return result, False, token_count, token_count
 
         # Summarize using LLM (no fallback - fail fast)
@@ -463,6 +504,12 @@ class ActionExecutor:
             payload_type="sandbox_result",
             original_tokens=token_count,
             context=self.agent_state,
+            action_type="sandbox",
+            action_name=action_name,
+            action_operation=action_operation,
+            task=self.agent_state.task,
+            reasoning=reasoning,
+            sandbox_code=sandbox_code,
         )
 
         # Count tokens in summarized output
@@ -612,7 +659,13 @@ class ActionExecutor:
                 args=args,
             )
 
-        observation, is_smart_summary, original_tokens, compressed_tokens = self._process_tool_observation(result)
+        observation, is_smart_summary, original_tokens, compressed_tokens = self._process_tool_observation(
+            result,
+            reasoning=command.get("reasoning"),
+            input_payload=payload,
+            action_name=provider,
+            action_operation=resolved_tool,
+        )
         self.agent_state.append_raw_output(
             result_key,
             {
@@ -1161,7 +1214,13 @@ class ActionExecutor:
             )
 
         if sandbox_result.success and not sandbox_result.timed_out:
-            observation, is_smart_summary, original_tokens, compressed_tokens = self._process_sandbox_observation(sandbox_result.result)
+            observation, is_smart_summary, original_tokens, compressed_tokens = self._process_sandbox_observation(
+                sandbox_result.result,
+                reasoning=command.get("reasoning"),
+                sandbox_code=code_body,
+                action_name=label,
+                action_operation="sandbox",
+            )
             preview = command.get("reasoning") or f"Sandbox '{label}' success"
             # Add metadata about tool success to the observation
             if isinstance(observation, dict) and not observation.get("error"):
