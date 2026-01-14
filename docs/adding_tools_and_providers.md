@@ -1,342 +1,210 @@
-# Adding MCP Tools and Providers
+# Adding MCP Providers and Tools (Current Workflow)
 
-This document describes the canonical contracts and the step‑by‑step process for
-adding new MCP providers and tools to the TakeBridge planner/toolbox.
+This document is the up-to-date, code-aligned guide for extending the MCP agent.
+It focuses on the exact data required to add:
+- a new tool for an existing provider,
+- a new provider (with or without tools),
+- a new provider and tools together.
 
-The goals are:
-
-- One **canonical response wrapper** for all MCP tool calls.
-- Clear, human‑readable **input parameter docs** for each tool.
-- A repeatable process for documenting the **`data` schema** of tool responses.
-
-The current implementations for Slack and Gmail are the reference examples.
+Primary code paths:
+- Wrappers: `mcp_agent/actions/wrappers/`
+- Provider discovery: `mcp_agent/actions/provider_loader.py`
+- Tool metadata: `mcp_agent/knowledge/introspection.py`
+- Docstring parsing: `mcp_agent/knowledge/utils.py`
+- Search output: `mcp_agent/knowledge/search.py`
+- Output schema decorator: `mcp_agent/tool_schemas.py`
 
 ---
 
-## 1. Canonical ActionResponse contract
+## How input_params and output_fields are generated
 
-All Composio/MCP tool wrappers normalize their output into a shared wrapper.
+### input_params (tool inputs)
+`ToolSpec` is built from wrapper signatures + docstrings:
+- `mcp_agent/knowledge/introspection.py` calls `parse_action_docstring(...)` in
+  `mcp_agent/knowledge/utils.py`.
+- It reads `Description:` and `Args:` blocks in the docstring.
+- Parameter names must match the function signature.
+- The first parameter `context: AgentContext` is ignored for tool inputs.
+- Required vs optional is determined by whether a default exists.
 
-Defined in `mcp_agent/toolbox/types.py:ActionResponse`:
-
-```python
-class ActionResponse(TypedDict, total=False):
-    successful: bool
-    data: dict[str, Any]
-    error: Optional[str]
-    raw: Any | None
+`ToolSpec.to_compact_descriptor()` produces `input_params`, a dict like:
 ```
+{
+  "query": "str (required) - Gmail search query",
+  "max_results": "int (optional, default=20) - Max results to return"
+}
+```
+This is what the planner and sandbox validator use.
 
-Notes:
+Docstring parsing rules (from `parse_action_docstring`):
+- `Description:` lines form the short description.
+- `Args:` lines must be `name: text` and the name must exist in the signature.
+- Continued lines under `Args:` are appended to the prior param description.
 
-- `successful` is the canonical success flag inside the planner/toolbox.
-- `data` is always a dict in normalized responses (possibly empty).
-- `error` is a human‑readable error message (or `None` when successful).
-- `raw` carries the original provider payload for debugging/inspection.
-- Internally we may attach additional fields (e.g. `logs`, `provider`, `tool`),
-  but callers can always rely on the fields above.
+### output_fields (tool outputs)
+Tool outputs come from `__tb_output_schema__` attached to each wrapper:
+- The schema can be the full envelope or just the `data` payload.
+- If the schema includes top-level `properties.data`, it is automatically
+  unwrapped for summarization.
+- `summarize_schema_for_llm(...)` creates `output_fields`:
+  - leaf paths like `messages[].subject: string`
+  - fold markers for large objects/arrays, e.g.:
+    `orders[]: object (contains 15 sub-fields; inspect_tool_output(..., field_path="orders[]"))`
 
-Wrappers in `mcp_agent/actions.py` already follow this contract via
-`ToolInvocationResult`, which is a superset of `ActionResponse`. New wrappers
-should continue to normalize into this shape.
-
----
-
-## 2. Manual input schema (parameters)
-
-Input schemas are defined through:
-
-- The Python signature of each wrapper (types and defaults).
-- A structured docstring with `Description:` and `Args:` sections.
-
-Toolbox metadata is derived from these via `ToolboxBuilder`:
-
-- `mcp_agent/toolbox/builder.py` inspects wrappers in `mcp_agent/actions.py`.
-- It builds a `ToolSpec` (`mcp_agent/toolbox/models.py`) containing:
-  - `provider`, `name` (tool name), `python_name`, `python_signature`
-  - `parameters` (a list of `ParameterSpec` with name, type, required, default)
-  - `short_description` and full `description` from the docstring
-
-The LLM‑facing descriptor (`LLMToolDescriptor`) is produced by
-`ToolSpec.to_llm_descriptor(...)` and surfaced via `search_tools(...)`. It
-includes:
-
-- `call_signature` – Python‑style signature ready to copy into sandbox code.
-- `input_params_pretty` – lines of human‑readable parameter documentation.
-- `input_params` – machine‑readable description of required and optional params.
-
-For the currently implemented tools (Slack and Gmail), the signatures and
-docstrings in `mcp_agent/actions.py` are the source of truth for input schemas.
-
-When adding a new tool, you must:
-
-- Use accurate type annotations in the function signature.
-- Keep docstrings up to date under `Description:` and `Args:`.
-
-`ToolboxBuilder` will pick these up automatically.
+If the schema is large, `has_hidden_fields` will be true and you must use
+`inspect_tool_output` (see `mcp_agent/actions/wrappers/toolbox.py`) to drill
+down.
 
 ---
 
-## 3. Output schema for `ActionResponse.data`
+## Data required for any new tool
 
-Every tool response uses the envelope:
+You must provide the following data for each new wrapper tool:
+
+1. **Provider ID**
+   - String used in the wrapper module name and `_invoke_mcp_tool` call.
+   - Example: `"gmail"` for `mcp_agent/actions/wrappers/gmail.py`.
+
+2. **Wrapper function name**
+   - Public function name becomes the tool name and `tool_id`.
+   - `tool_id` is `{provider}.{function_name}` (e.g., `gmail.gmail_search`).
+
+3. **MCP tool name (Composio)**
+   - The actual MCP tool constant passed to `_invoke_mcp_tool`.
+   - Example: `"GMAIL_SEND_EMAIL"`.
+
+4. **Signature + defaults**
+   - Types + defaults define required/optional inputs.
+   - Optional params must have defaults.
+
+5. **Docstring with Description/Args**
+   - `Description:` and `Args:` blocks drive input_params descriptions.
+   - Param names must match the signature.
+
+6. **Output schema**
+   - Attach `__tb_output_schema__` (full envelope or data schema).
+   - This drives `output_fields` and `inspect_tool_output`.
+
+Optional:
+- `__tb_output_schema_pretty__` (human-readable lines) using `@tool_output_schema`.
+- Put large schemas into helper modules (see `mcp_agent/actions/slack_output_helper.py`).
+
+---
+
+## Add a new tool to an existing provider
+
+### 1) Implement the wrapper
+**File:** `mcp_agent/actions/wrappers/<provider>.py`
 
 ```python
-{
-    "successful": bool,
-    "data": dict,         # tool‑specific payload
-    "error": str | None,
-    ...
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+from mcp_agent.types import ToolInvocationResult
+from ._common import _clean_payload, ensure_authorized, _invoke_mcp_tool
+
+if TYPE_CHECKING:
+    from mcp_agent.core.context import AgentContext
+
+
+def gmail_archive_thread(
+    context: "AgentContext",
+    thread_id: str,
+) -> ToolInvocationResult:
+    """
+    Description:
+        Archive a Gmail thread by ID.
+    Args:
+        thread_id: Gmail thread ID to archive.
+    """
+    provider = "gmail"
+    tool_name = "GMAIL_ARCHIVE_THREAD"
+    ensure_authorized(context, provider)
+    payload = _clean_payload({"thread_id": thread_id})
+    return _invoke_mcp_tool(context, provider, tool_name, payload)
+
+
+gmail_archive_thread.__tb_output_schema__ = {
+    "properties": {
+        "data": {
+            "type": "object",
+            "properties": {
+                "threadId": {"type": "string"},
+                "archived": {"type": "boolean"},
+            },
+        },
+        "successful": {"type": "boolean"},
+        "error": {"type": "string"},
+    }
 }
 ```
 
-The planner and sandbox only need to know the structure of `data`. We attach
-this information to wrappers using the `tool_output_schema` decorator.
-
-Defined in `mcp_agent/tool_schemas.py`:
-
+### 2) Verify discovery
 ```python
-def tool_output_schema(schema: Dict[str, Any], pretty: Optional[str] = None):
-    \"\"\"Attach a description of the tool's `data` field schema to a wrapper.\"\"\"
+from mcp_agent.knowledge.search import search_tools
+
+tools = search_tools(query="gmail archive", user_id="dev-local")
+assert any(t["tool_id"] == "gmail.gmail_archive_thread" for t in tools)
 ```
 
-Usage in `mcp_agent/actions.py` (examples):
-
-- `slack_post_message`
-- `slack_search_messages`
-- `gmail_send_email`
-- `gmail_search`
-
-The decorator attaches:
-
-- `__tb_output_schema__`: machine‑readable structure for `data`.
-- `__tb_output_schema_pretty__`: human‑readable lines describing `data`.
-
-`ToolboxBuilder._build_tool(...)` stores these on `ToolSpec` as
-`output_schema` and `output_schema_pretty`. Later:
-
-- `ToolSpec.to_llm_descriptor(...)` feeds `output_schema_pretty` into
-  `LLMToolDescriptor.output_schema_pretty`, which the planner exposes to the
-  LLM as the authoritative description of what lives under the `data` key.
-
-Runtime discovery uses wrapper-provided output schemas only; we do not load
-generated schema files for tool discovery.
-
-Placeholder schemas are acceptable for now as long as the text explicitly notes
-that they must be replaced with real Composio‑compatible schemas in a follow‑up
-pass.
+If `output_fields` is empty, your `__tb_output_schema__` is missing or invalid.
 
 ---
 
-## 4. Planner‑facing tool descriptor (search_tools)
+## Add a new provider (no tools yet)
 
-The only discovery API for the planner is:
+Providers are auto-discovered by scanning `mcp_agent/actions/wrappers/`.
+Only modules with at least one public function are included.
 
-- `mcp_agent/toolbox/search.py:search_tools(...)`
+Required data:
+1. **Provider ID** (module name)
+2. **Composio Auth Config ID**
 
-It returns a list of tool descriptors (one per available tool) with the
-following planner‑relevant fields:
+Steps:
+1) Add the Composio auth config mapping:
+   - File: `mcp_agent/registry/oauth.py`
+   - Update `AUTH_CONFIG_IDS` with:
+     `"yourprovider": os.getenv("COMPOSIO_YOURPROVIDER_AUTH_CONFIG_ID", "")`
 
-- `provider` – provider id (e.g. `"gmail"`).
-- `server` – logical server/module alias (usually same as provider).
-- `module` – sandbox module path (e.g. `"sandbox_py.servers.gmail"`).
-- `function` – sandbox helper function (e.g. `"gmail_search"`).
-- `tool_id` – stable id (e.g. `"gmail.gmail_search"`).
-- `call_signature` – copy‑pasteable signature for sandbox code.
-- `description` – short tool description.
-- `input_params_pretty` – human‑readable parameter docs.
-- `output_schema_pretty` – human‑readable description of `data` under the
-  canonical wrapper.
-- `input_params` – machine‑readable required/optional param metadata.
-- `output_schema` – machine‑readable `data` schema.
-- `score` – numeric relevance for ranking.
+2) Create wrapper module:
+   - File: `mcp_agent/actions/wrappers/yourprovider.py`
+   - Add at least one public wrapper (otherwise the provider is not discovered).
 
-Legacy/compatibility fields (e.g. `py_module`, `py_name`, `path`) are included
-for existing planner code and UI, but internal fields such as `mcp_tool_name`,
-OAuth flags, or source paths are **not** exposed to the LLM.
+3) Ensure the provider is authorized in DB:
+   - `search_tools(...)` only returns providers that are authorized.
 
----
-
-## 5. Checklist: adding a new tool for an existing provider
-
-Example: add `gmail_archive_thread`.
-
-1. **Add or update the wrapper**
-
-   - File: `mcp_agent/actions.py` (or a future provider‑specific module).
-   - Implement the wrapper using the `mcp_action` decorator and normalize any
-     raw MCP response into `ActionResponse`/`ToolInvocationResult`:
-
-   ```python
-   @mcp_action
-   def gmail_archive_thread(self, thread_id: str) -> ToolInvocationResult:
-       \"\"\"
-       Description:
-           Archives a Gmail thread by id.
-       Args:
-           thread_id: Gmail thread id to archive.
-       \"\"\"
-       tool_name = "GMAIL_ARCHIVE_THREAD"
-       user_id = _current_user_id()
-       if getattr(self, "_validation_only", False):
-           return _structured_result(
-               "gmail",
-               tool_name,
-               successful=True,
-               data={"skipped": "validation_only"},
-               payload_keys=[],
-           )
-       if not OAuthManager.is_authorized("gmail", user_id=user_id):
-           emit_event(
-               "mcp.call.skipped",
-               {"server": "gmail", "tool": tool_name, "reason": "unauthorized", "user_id": user_id},
-           )
-           return _structured_result(
-               "gmail",
-               tool_name,
-               successful=False,
-               error="unauthorized",
-               payload_keys=[],
-           )
-
-       payload = {"thread_id": thread_id}
-       return _invoke_mcp_tool("gmail", tool_name, payload)
-   ```
-
-   Requirements:
-
-   - Accurate type annotations in the signature.
-   - Up‑to‑date `Description:` and `Args:` sections in the docstring.
-   - Use `_structured_result` / `_normalize_tool_response` so the result
-     conforms to the ActionResponse contract.
-
-2. **Describe the output schema**
-
-   - Add a `tool_output_schema` decorator above the wrapper:
-
-   ```python
-   from mcp_agent.tool_schemas import tool_output_schema
-
-
-   @tool_output_schema(
-       schema={
-           "data": {
-               "threadId": "str",
-               "archived": "bool",
-           }
-       },
-       pretty=\"\"\"
-   Canonical wrapper: { successful: bool, data: dict, error: str | null }
-
-   data: {
-     threadId: str,
-     archived: bool,
-   }
-
-   Note: This schema is a placeholder; align it with the Composio GMAIL_ARCHIVE_THREAD
-   response once the connector contract is finalized.
-   \"\"\".strip(),
-   )
-   @mcp_action
-   def gmail_archive_thread(...):
-       ...
-   ```
-
-   - If you do not yet know the exact `data` payload, write a clearly‑marked
-     placeholder and follow up later.
-
-3. **Regenerate toolbox metadata and sandbox helpers**
-
-   - Run a short script or use an existing admin endpoint that invokes:
-
-   ```python
-   from mcp_agent.toolbox.builder import ToolboxBuilder
-
-   builder = ToolboxBuilder(user_id="<test-user>")
-   manifest = builder.build()
-   builder.persist(manifest)
-   ```
-
-   This will:
-
-   - Update `toolbox/manifest.json` for the user.
-   - Persist provider/tool JSON metadata.
-   - Regenerate `sandbox_py` helpers for sandbox code.
-
-4. **Verify the tool is discoverable**
-
-   - Use `search_tools(...)` directly in a REPL, or call the HTTP endpoint:
-     `GET /api/mcp/auth/tools/search?q=gmail archive&detail=summary`.
-   - Confirm the result entry contains:
-     - `provider`, `server`, `module`, `function`, `tool_id`
-     - `call_signature`
-     - `input_params_pretty`
-     - `output_schema_pretty`
-
-5. **Add tests where appropriate**
-
-   - Unit‑test the wrapper behavior with fake or stubbed MCP clients:
-     - Unauthorized path returns `successful=False`, `error="unauthorized"`.
-     - Happy path calls the expected Composio tool name with the right payload.
-   - Optionally assert on `search_tools(...)` output in the toolbox tests to
-     ensure the descriptor shape is stable.
+Optional:
+- Add the provider to `PROVIDER_FAMILIES` in `mcp_agent/knowledge/search.py`
+  for better matching in tool search.
 
 ---
 
-## 6. Checklist: adding a new provider
+## Add a new provider + new tools
 
-Example: add `notion`.
-
-1. **Wire the provider into the core registry**
-
-   - Update `mcp_agent/actions.py` (or a future provider‑specific module) to
-     include wrappers for each MCP action you expose.
-   - Add the provider and its actions to `SUPPORTED_PROVIDERS` and
-     `PROVIDER_ACTIONS`.
-
-2. **Ensure OAuth / MCP client support**
-
-   - `mcp_agent/oauth.py` and `mcp_agent/registry.py` must know how to create an
-     MCP client for the new provider (URL + headers).
-   - Confirm that `init_registry(user_id)` registers the provider when
-     configured.
-
-3. **Implement wrappers and output schemas**
-
-   - For each action:
-     - Implement a wrapper with `mcp_action`.
-     - Normalize the response to the ActionResponse/ToolInvocationResult shape.
-     - Attach `tool_output_schema(...)` describing the `data` payload.
-
-4. **Regenerate toolbox metadata**
-
-   - Use `ToolboxBuilder` for a test user to regenerate the manifest and
-     sandbox helpers.
-   - Inspect `toolbox/providers/<provider>/tools/*.json` to verify the new
-     tools are present and include expected metadata.
-
-5. **Verify planner integration**
-
-   - Use `search_tools(...)` to confirm the new tools surface correctly and
-     include the descriptor fields described above.
-   - Optionally add planner tests that:
-     - Stub `search_tools` to return the new tool.
-     - Exercise a simple planner run that calls the tool or uses the sandbox
-       helper.
+Combine the two flows:
+1) Add provider auth config ID in `mcp_agent/registry/oauth.py`.
+2) Create `mcp_agent/actions/wrappers/<provider>.py`.
+3) Add tools with correct signatures, docstrings, and output schemas.
+4) Verify with `search_tools(...)`.
 
 ---
 
-## 7. Summary
+## Common pitfalls
 
-- **ActionResponse** is the canonical output wrapper: every MCP tool wrapper
-  must behave like `{"successful": bool, "data": dict, "error": str | None}`.
-- **Manual input schemas** come from accurate function signatures and
-  docstrings in `mcp_agent/actions.py`; the toolbox derives `ToolSpec` and
-  `LLMToolDescriptor` from these.
-- **Output schemas** for `data` live on `ToolSpec.output_schema` and
-  `ToolSpec.output_schema_pretty`, populated via `tool_output_schema` and
-  consumed by the planner through `search_tools(...)`.
+- **Docstring param names do not match signature**: descriptions are dropped.
+- **Missing `__tb_output_schema__`**: `output_fields` empty, inspect fails.
+- **Wrapper function imported from elsewhere**: discovery ignores it (only
+  functions defined in the module are included).
+- **Module name starts with "_"**: provider is skipped by discovery.
+- **Provider not authorized**: it will not appear in search results.
 
-Following the checklists above keeps new tools/providers predictable for both
-the planner and the sandbox, and avoids leaking internal implementation details
-to the LLM.
+---
+
+## Quick reference: file locations
+
+- Wrappers: `mcp_agent/actions/wrappers/<provider>.py`
+- Provider discovery: `mcp_agent/actions/provider_loader.py`
+- Tool metadata + docstring parsing: `mcp_agent/knowledge/introspection.py`
+- Docstring parser: `mcp_agent/knowledge/utils.py`
+- Output schema decorator: `mcp_agent/tool_schemas.py`
+- Search entrypoint: `mcp_agent/knowledge/search.py`
