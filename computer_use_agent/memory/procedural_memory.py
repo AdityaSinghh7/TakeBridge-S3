@@ -208,12 +208,10 @@ class PROCEDURAL_MEMORY:
 
     # CRITICAL: File Modification Strategy
     - ALWAYS prioritize modifying existing open files IN PLACE rather than creating new files
+    - ALWAYS try to first read the file contents and understand the file structure in a step before modifying it in the next step.
     - The screenshot context shows which file is currently open and should be modified
     - For open documents (LibreOffice .docx/.xlsx, text editors, etc.), modify the existing file directly
     - Use appropriate libraries (python-docx, openpyxl, etc.) to modify files in place
-    - CRITICAL: When modifying files, perform COMPLETE OVERWRITES, not appends
-    - For documents: replace all paragraphs/sheets with new content
-    - For text files: write the complete new content, overwriting the old
     - Only create new files when explicitly required by the task
     - Verify your reasoning aligns with the user's intent for the open file
 

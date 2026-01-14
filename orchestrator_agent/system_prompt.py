@@ -13,13 +13,27 @@ planner/agent calls without reading from disk.
 from __future__ import annotations
 
 import json
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from orchestrator_agent.data_types import OrchestratorRequest, RunState, StepResult
 
+_PACIFIC_TIMEZONE = ZoneInfo("America/Los_Angeles")
+
+
+def _current_pacific_date() -> str:
+    return datetime.now(_PACIFIC_TIMEZONE).strftime("%Y-%m-%d")
+
+
+def _render_static_foundation() -> str:
+    return STATIC_FOUNDATION.replace("[[PACIFIC_DATE]]", _current_pacific_date())
+
+
 STATIC_FOUNDATION = """\
 You are the Orchestrator Agent - a meta-agent that decides the next atomic step to accomplish a user's task.
+Today's date (Pacific Time): [[PACIFIC_DATE]].
 
 ## Your Role
 
@@ -449,7 +463,7 @@ def build_system_prompt(
         Complete system prompt string
     """
     # Start with static foundation
-    prompt_parts = [STATIC_FOUNDATION]
+    prompt_parts = [_render_static_foundation()]
     from computer_use_agent.grounding.grounding_agent import (
                 list_osworld_agent_actions,
             )
@@ -516,7 +530,7 @@ def get_system_prompt() -> str:
     Returns the static foundation prompt. For full dynamic prompts,
     use build_system_prompt() instead.
     """
-    return STATIC_FOUNDATION
+    return _render_static_foundation()
 
 
 __all__ = [
