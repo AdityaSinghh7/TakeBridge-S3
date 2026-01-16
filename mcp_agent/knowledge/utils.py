@@ -445,6 +445,10 @@ def summarize_schema_for_llm(
         if tier2_lines:
             # Fall back to root structural lines when no leaves are visible.
             return tier2_lines, True
+        if _is_unknown_object_schema(data_schema):
+            return [
+                'data: object (unknown keys; inspect_tool_output(..., field_path=""))'
+            ], True
         return [], False
 
     # Tier-1: greedy scan (bounded for safety) only when we are summarizing.
@@ -513,6 +517,27 @@ def _schema_type(schema: Any) -> str:
     if "enum" in schema:
         return "enum"
     return "unknown"
+
+
+def _has_properties(schema: Dict[str, Any]) -> bool:
+    props = schema.get("properties")
+    return isinstance(props, dict) and bool(props)
+
+
+def _is_unknown_object_schema(schema: Any) -> bool:
+    if not isinstance(schema, dict):
+        return False
+    if schema.get("type") == "object" and not _has_properties(schema):
+        if schema.get("additionalProperties") is True:
+            return True
+    for key in ("anyOf", "oneOf"):
+        options = schema.get(key)
+        if isinstance(options, list):
+            for option in options:
+                if _is_unknown_object_schema(option):
+                    return True
+    return False
+
 
 
 def _array_item_schema(schema: Dict[str, Any]) -> Dict[str, Any] | None:

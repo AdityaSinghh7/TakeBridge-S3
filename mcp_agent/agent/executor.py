@@ -820,7 +820,7 @@ class ActionExecutor:
                 {
                     "label": label,
                     "error": str(exc),
-                    "code_preview": code_body[:4000],
+                    "code_preview": code_body,
                 },
             )
             prior_errors = 0
@@ -838,7 +838,7 @@ class ActionExecutor:
                 "error": error_text,
                 "label": label,
                 "prior_errors": prior_errors,
-                "code_preview": code_body[:400],
+                "code_preview": code_body,
             }
             return StepResult(
                 type="sandbox",
@@ -871,7 +871,7 @@ class ActionExecutor:
                 {
                     "label": label,
                     "patterns": forbidden_patterns,
-                    "code_preview": code_body[:4000],
+                    "code_preview": code_body,
                 },
             )
             observation = {
@@ -1108,7 +1108,7 @@ class ActionExecutor:
             "logs": sandbox_result.logs,
             "error": sandbox_result.error,
             "result": normalized_result,
-            "code_preview": code_body[:1200],
+            "code_preview": code_body,
             "all_tools_succeeded": all_tools_succeeded,
         }
         self.agent_state.append_raw_output(result_key, entry)
@@ -1237,7 +1237,13 @@ class ActionExecutor:
             )
 
         # Failure path: propagate stderr/logs to the observation and error fields
-        error_details = sandbox_result.error or ("sandbox timed out" if sandbox_result.timed_out else "sandbox_execution_failed")
+        error_details = sandbox_result.error or (
+            "sandbox timed out" if sandbox_result.timed_out else "sandbox_execution_failed"
+        )
+        if sandbox_result.timed_out:
+            error_details = (
+                f"{error_details}. Hint: split the sandbox work into two separate sandbox steps to avoid timeout."
+            )
         # Truncate logs to a reasonable number of lines to avoid huge observations
         logs = sandbox_result.logs or []
         MAX_LOG_LINES = 50
@@ -1263,7 +1269,22 @@ class ActionExecutor:
 
         preview = command.get("reasoning") or f"Sandbox '{label}' failed: {error_details[:100]}"
         error_code = "sandbox_timeout" if sandbox_result.timed_out else "sandbox_runtime_error"
-        if error_code == "sandbox_runtime_error":
+        if error_code == "sandbox_timeout":
+            prior_errors = 0
+            for step in self.agent_state.history:
+                if (
+                    step.action_type == "sandbox"
+                    and step.error == error_code
+                    and (step.action_input.get("label") or "").strip() == label
+                ):
+                    prior_errors += 1
+            error_payload["prior_errors"] = prior_errors
+            error_payload["recoverable"] = True
+            error_payload["hint"] = (
+                "Sandbox timed out. Split the work into two separate sandbox steps "
+                "and return intermediate results to avoid timeouts."
+            )
+        elif error_code == "sandbox_runtime_error":
             prior_errors = 0
             for step in self.agent_state.history:
                 if (

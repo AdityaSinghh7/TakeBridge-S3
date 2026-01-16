@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import Any, Dict, Iterable, List, Literal, Optional, Sequence, Union
 
+from shared.llm_defaults import get_default_llm_timeout
 from shared.run_context import RUN_LOG_ID
 
 logger = logging.getLogger(__name__)
@@ -322,6 +323,8 @@ class OpenRouterClient:
     ) -> None:
         if api_key is None:
             api_key = os.getenv("OPENROUTER_API_KEY")
+        if timeout is None:
+            timeout = get_default_llm_timeout()
         client_kwargs: Dict[str, Any] = {"api_key": api_key, "timeout": timeout}
         resolved_base_url = (
             base_url
@@ -552,6 +555,8 @@ def _get_client_singleton(
     timeout: Optional[float] = None,
     base_url: Optional[str] = None,
 ) -> OpenRouterClient:
+    if timeout is None:
+        timeout = get_default_llm_timeout()
     return OpenRouterClient(
         default_model=default_model,
         timeout=timeout,
@@ -580,6 +585,8 @@ def respond_once(
     **kwargs: Any,
 ) -> Any:
     _maybe_load_env(dotenv_path)
+    if timeout is None:
+        timeout = get_default_llm_timeout()
     client = _get_client_singleton(
         default_model=model,
         timeout=timeout,
@@ -611,9 +618,10 @@ def get_client(
 ) -> OpenAI:
     if api_key is None:
         api_key = os.getenv("OPENROUTER_API_KEY")
+    if timeout is None:
+        timeout = get_default_llm_timeout()
     client_kwargs: Dict[str, Any] = {"api_key": api_key}
-    if timeout is not None:
-        client_kwargs["timeout"] = timeout
+    client_kwargs["timeout"] = timeout
     resolved_base_url = (
         base_url or os.getenv("OPENROUTER_BASE_URL") or "https://openrouter.ai/api/v1"
     )

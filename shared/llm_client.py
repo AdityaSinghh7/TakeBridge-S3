@@ -8,6 +8,7 @@ or OpenRouter based on env knobs.
 from __future__ import annotations
 
 import base64
+import concurrent.futures
 import json
 import logging
 import os
@@ -20,9 +21,11 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
 
 from shared.baseten_client import BasetenClient
 from shared.deepseek_client import DeepSeekClient
+from shared.llm_defaults import get_default_llm_timeout
 from shared.openrouter_client import OpenRouterClient
 from shared.oai_client import OAIClient as OpenAIClient
 from shared.oai_client import extract_assistant_text as _extract_openai_text
+from shared.llm_request_registry import clear_request, register_request
 from shared.run_context import RUN_LOG_ID
 
 logger = logging.getLogger(__name__)
@@ -47,6 +50,12 @@ def _maybe_load_env(dotenv_path: Optional[str] = None) -> None:
 
 
 _LLM_LOG_LOCK = threading.Lock()
+_LLM_CANCEL_POLL_SECONDS = 1.0
+_LLM_RETRY_SENTINEL = object()
+
+
+class LLMRequestCancelled(RuntimeError):
+    pass
 
 
 def _llm_log_enabled() -> bool:
@@ -420,6 +429,8 @@ class LLMClient:
         retry_backoff_jitter: Optional[float] = None,
         provider: Optional[str] = None,
     ) -> None:
+        if timeout is None:
+            timeout = get_default_llm_timeout()
         self._provider = _normalize_provider(provider)
         self._fallback_provider = os.getenv("LLM_FALLBACK_PROVIDER")
         self._fallback_provider = (
@@ -435,6 +446,7 @@ class LLMClient:
         )
         self._default_model_raw = default_model or _default_model_for_provider(self._provider)
         self._default_model = _resolve_model(self._provider, self._default_model_raw)
+        self._timeout = timeout
         provider_kwargs: Dict[str, Any] = {
             "api_key": api_key,
             "default_model": self._default_model,
@@ -483,6 +495,7 @@ class LLMClient:
                 default_model=_resolve_model(self._fallback_provider, self._default_model_raw),
                 default_reasoning_effort="medium",
                 default_reasoning_summary=None,
+                timeout=self._timeout,
             )
         return self._fallback_client
 
@@ -495,7 +508,8 @@ class LLMClient:
                 default_model=_resolve_model(self._image_provider, self._default_model_raw),
                 default_reasoning_effort="medium",
                 default_reasoning_summary=None,
-        )
+                timeout=self._timeout,
+            )
         return self._image_client
 
     def _log_llm_call(
@@ -549,34 +563,93 @@ class LLMClient:
         stream: bool,
         call: Any,
     ) -> Any:
-        start = time.time()
-        try:
-            response = call()
-        except Exception as exc:
-            duration_ms = (time.time() - start) * 1000.0
-            self._log_llm_call(
-                requested_provider=requested_provider,
+        run_id = RUN_LOG_ID.get() or os.getenv("RUN_LOG_ID")
+        entry = None
+        if run_id:
+            entry = register_request(
+                run_id=run_id,
                 provider=provider,
-                requested_model=requested_model,
-                request=request,
-                error=exc,
-                route_reason=route_reason,
-                duration_ms=duration_ms,
+                model=requested_model,
                 stream=stream,
+                request=request,
             )
-            raise
-        duration_ms = (time.time() - start) * 1000.0
-        self._log_llm_call(
-            requested_provider=requested_provider,
-            provider=provider,
-            requested_model=requested_model,
-            request=request,
-            response=response,
-            route_reason=route_reason,
-            duration_ms=duration_ms,
-            stream=stream,
-        )
-        return response
+        request_id = entry.request_id if entry else None
+
+        def _call_with_cancellation() -> Any:
+            if not entry or stream:
+                return call()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(call)
+                while True:
+                    try:
+                        return future.result(timeout=_LLM_CANCEL_POLL_SECONDS)
+                    except concurrent.futures.TimeoutError:
+                        if entry.cancel_event.is_set():
+                            if future.done():
+                                return future.result()
+                            if entry.retry_event.is_set():
+                                entry.cancel_event.clear()
+                                entry.retry_event.clear()
+                                entry.retry_count += 1
+                                entry.last_retry_at = time.time()
+                                return _LLM_RETRY_SENTINEL
+                            raise LLMRequestCancelled(
+                                f"LLM request cancelled for run_id={entry.run_id}"
+                            )
+
+        try:
+            while True:
+                start = time.time()
+                try:
+                    response = _call_with_cancellation()
+                except Exception as exc:
+                    duration_ms = (time.time() - start) * 1000.0
+                    self._log_llm_call(
+                        requested_provider=requested_provider,
+                        provider=provider,
+                        requested_model=requested_model,
+                        request=request,
+                        error=exc,
+                        route_reason=route_reason,
+                        duration_ms=duration_ms,
+                        stream=stream,
+                    )
+                    raise
+                if entry and not stream and entry.retry_event.is_set():
+                    entry.cancel_event.clear()
+                    entry.retry_event.clear()
+                    entry.retry_count += 1
+                    entry.last_retry_at = time.time()
+                    logger.info(
+                        "LLM manual retry requested (post-response) run_id=%s provider=%s model=%s",
+                        run_id,
+                        provider,
+                        requested_model,
+                    )
+                    continue
+                if response is _LLM_RETRY_SENTINEL:
+                    logger.info(
+                        "LLM manual retry requested run_id=%s provider=%s model=%s",
+                        run_id,
+                        provider,
+                        requested_model,
+                    )
+                    continue
+                duration_ms = (time.time() - start) * 1000.0
+                self._log_llm_call(
+                    requested_provider=requested_provider,
+                    provider=provider,
+                    requested_model=requested_model,
+                    request=request,
+                    response=response,
+                    route_reason=route_reason,
+                    duration_ms=duration_ms,
+                    stream=stream,
+                )
+                return response
+        finally:
+            if run_id and request_id:
+                clear_request(run_id, request_id)
 
     def _deepseek_unsupported(
         self,
@@ -951,6 +1024,8 @@ def get_client(
     base_url: Optional[str] = None,
 ) -> Any:
     provider = _normalize_provider(None)
+    if timeout is None:
+        timeout = get_default_llm_timeout()
     if provider == "deepseek":
         if _baseten_enabled_for_deepseek():
             from shared.baseten_client import get_client as get_baseten_client

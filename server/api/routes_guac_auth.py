@@ -92,6 +92,33 @@ def _store_cached_entry(
     )
 
 
+def _request_guac_token(guac_url: str) -> tuple[str, Optional[str]]:
+    token_url = f"{guac_url.rstrip('/')}/api/tokens"
+    try:
+        resp = httpx.post(
+            token_url,
+            data={"username": settings.GUAC_ADMIN_USER, "password": settings.GUAC_ADMIN_PASS},
+            timeout=10.0,
+        )
+    except httpx.HTTPError as exc:
+        logger.error("Guacamole token request failed: %s", exc)
+        raise HTTPException(status_code=502, detail="guac_token_upstream_error") from exc
+
+    if resp.status_code >= 400:
+        logger.warning(
+            "Guacamole token request rejected status=%s body=%s",
+            resp.status_code,
+            resp.text[:200],
+        )
+        raise HTTPException(status_code=502, detail="guac_token_rejected")
+
+    data = resp.json()
+    auth_token = data.get("authToken")
+    if not auth_token:
+        raise HTTPException(status_code=502, detail="guac_token_missing")
+    return auth_token, data.get("dataSource")
+
+
 def _build_client_url(
     base_url: str,
     auth_token: str,
@@ -170,18 +197,22 @@ def _extract_connection_ids(data: Any) -> list[str]:
 
 def _fetch_default_connection_id(
     guac_url: str, auth_token: str, data_source: Optional[str]
-) -> tuple[Optional[str], list[str]]:
+) -> tuple[Optional[str], list[str], bool]:
     token = auth_token
     base = guac_url.rstrip("/")
     candidates: list[str] = []
+    had_403 = False
 
     def _get_json(url: str) -> Optional[Dict[str, Any]]:
+        nonlocal had_403
         try:
             resp = httpx.get(url, params={"token": token}, timeout=10.0)
         except httpx.HTTPError as exc:
             logger.error("Guacamole session data request failed: %s", exc)
             return None
         if resp.status_code >= 400:
+            if resp.status_code == 403:
+                had_403 = True
             logger.warning(
                 "Guacamole session data rejected status=%s body=%s",
                 resp.status_code,
@@ -213,12 +244,12 @@ def _fetch_default_connection_id(
         candidates.extend(_extract_connection_ids(data))
         ident = _select_default_connection(data)
         if ident:
-            return ident, candidates
+            return ident, candidates, had_403
         if root is None:
             root = data
 
     if not root:
-        return None, candidates
+        return None, candidates, had_403
 
     data_sources = root.get("dataSources")
     if isinstance(data_sources, dict) and data_sources:
@@ -229,14 +260,14 @@ def _fetch_default_connection_id(
                 candidates.extend(_extract_connection_ids(entry))
                 ident = _select_default_connection(entry)
                 if ident:
-                    return ident, candidates
+                    return ident, candidates, had_403
             fallback = _get_json(f"{base}/api/session/data/{chosen}")
             if fallback:
                 candidates.extend(_extract_connection_ids(fallback))
-                return _select_default_connection(fallback), candidates
+                return _select_default_connection(fallback), candidates, had_403
 
     candidates.extend(_extract_connection_ids(root))
-    return _select_default_connection(root), candidates
+    return _select_default_connection(root), candidates, had_403
 
 
 @router.post("/runs/{run_id}/token")
@@ -279,37 +310,22 @@ def get_run_guac_token(
         auth_token = cached.auth_token
         data_source = cached.data_source
     else:
-        token_url = f"{guac_url.rstrip('/')}/api/tokens"
-        try:
-            resp = httpx.post(
-                token_url,
-                data={"username": settings.GUAC_ADMIN_USER, "password": settings.GUAC_ADMIN_PASS},
-                timeout=10.0,
-            )
-        except httpx.HTTPError as exc:
-            logger.error("Guacamole token request failed: %s", exc)
-            raise HTTPException(status_code=502, detail="guac_token_upstream_error") from exc
-
-        if resp.status_code >= 400:
-            logger.warning(
-                "Guacamole token request rejected status=%s body=%s",
-                resp.status_code,
-                resp.text[:200],
-            )
-            raise HTTPException(status_code=502, detail="guac_token_rejected")
-
-        data = resp.json()
-        auth_token = data.get("authToken")
-        if not auth_token:
-            raise HTTPException(status_code=502, detail="guac_token_missing")
-        data_source = data.get("dataSource")
+        auth_token, data_source = _request_guac_token(guac_url)
         _store_cached_entry(_RUN_TOKEN_CACHE, cache_key, guac_url, auth_token, data_source)
 
     connection_id = _normalize_connection_id(payload.get("connection_id"))
     if not connection_id:
-        default_id, candidates = _fetch_default_connection_id(
+        default_id, candidates, had_403 = _fetch_default_connection_id(
             guac_url, auth_token, data_source
         )
+        if had_403:
+            logger.info("Guacamole session data returned 403; refreshing token and retrying.")
+            _RUN_TOKEN_CACHE.pop(cache_key, None)
+            auth_token, data_source = _request_guac_token(guac_url)
+            _store_cached_entry(_RUN_TOKEN_CACHE, cache_key, guac_url, auth_token, data_source)
+            default_id, candidates, _ = _fetch_default_connection_id(
+                guac_url, auth_token, data_source
+            )
         connection_id = _normalize_connection_id(default_id) or _normalize_connection_id(
             settings.GUAC_CONNECTION_ID
         )
@@ -373,37 +389,24 @@ def get_workspace_guac_token(
         auth_token = cached.auth_token
         data_source = cached.data_source
     else:
-        token_url = f"{guac_url.rstrip('/')}/api/tokens"
-        try:
-            resp = httpx.post(
-                token_url,
-                data={"username": settings.GUAC_ADMIN_USER, "password": settings.GUAC_ADMIN_PASS},
-                timeout=10.0,
-            )
-        except httpx.HTTPError as exc:
-            logger.error("Guacamole token request failed: %s", exc)
-            raise HTTPException(status_code=502, detail="guac_token_upstream_error") from exc
-
-        if resp.status_code >= 400:
-            logger.warning(
-                "Guacamole token request rejected status=%s body=%s",
-                resp.status_code,
-                resp.text[:200],
-            )
-            raise HTTPException(status_code=502, detail="guac_token_rejected")
-
-        data = resp.json()
-        auth_token = data.get("authToken")
-        if not auth_token:
-            raise HTTPException(status_code=502, detail="guac_token_missing")
-        data_source = data.get("dataSource")
+        auth_token, data_source = _request_guac_token(guac_url)
         _store_cached_entry(_WORKSPACE_TOKEN_CACHE, cache_key, guac_url, auth_token, data_source)
 
     connection_id = _normalize_connection_id(payload.get("connection_id"))
     if not connection_id:
-        default_id, candidates = _fetch_default_connection_id(
+        default_id, candidates, had_403 = _fetch_default_connection_id(
             guac_url, auth_token, data_source
         )
+        if had_403:
+            logger.info("Guacamole session data returned 403; refreshing token and retrying.")
+            _WORKSPACE_TOKEN_CACHE.pop(cache_key, None)
+            auth_token, data_source = _request_guac_token(guac_url)
+            _store_cached_entry(
+                _WORKSPACE_TOKEN_CACHE, cache_key, guac_url, auth_token, data_source
+            )
+            default_id, candidates, _ = _fetch_default_connection_id(
+                guac_url, auth_token, data_source
+            )
         connection_id = _normalize_connection_id(default_id) or _normalize_connection_id(
             settings.GUAC_CONNECTION_ID
         )

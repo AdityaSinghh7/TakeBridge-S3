@@ -22,6 +22,8 @@ from contextlib import nullcontext
 
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Sequence, Union
+
+from shared.llm_defaults import get_default_llm_timeout
 from shared.run_context import RUN_LOG_ID
 
 logger = logging.getLogger(__name__)
@@ -306,6 +308,8 @@ class OAIClient:
         if api_key is None:
             # Load OPENAI_API_KEY from env (optionally preloaded via respond_once)
             api_key = os.getenv("OPENAI_API_KEY")
+        if timeout is None:
+            timeout = get_default_llm_timeout()
 
         client_kwargs: Dict[str, Any] = {"api_key": api_key, "timeout": timeout}
         if base_url:
@@ -629,6 +633,8 @@ def _get_client_singleton(
     default_tools_fingerprint: pass a stable string if you want a unique cache entry
     per default tool set (e.g., hash of the tools schema). Otherwise, leave None.
     """
+    if timeout is None:
+        timeout = get_default_llm_timeout()
     return OAIClient(
         default_model=default_model,
         default_reasoning_effort=default_reasoning_effort,
@@ -679,6 +685,8 @@ def respond_once(
     """
     # Load env before constructing/using the client so OPENAI_API_KEY is present
     _maybe_load_env(dotenv_path)
+    if timeout is None:
+        timeout = get_default_llm_timeout()
 
     # Optional cache partitioning by base client behavior
     client = _get_client_singleton(
@@ -731,10 +739,11 @@ def get_client(
     """
     if api_key is None:
         api_key = os.getenv("OPENAI_API_KEY")
+    if timeout is None:
+        timeout = get_default_llm_timeout()
 
     client_kwargs: Dict[str, Any] = {"api_key": api_key}
-    if timeout is not None:
-        client_kwargs["timeout"] = timeout
+    client_kwargs["timeout"] = timeout
     if base_url is not None:
         client_kwargs["base_url"] = base_url
 

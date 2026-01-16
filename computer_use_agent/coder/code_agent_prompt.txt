@@ -74,34 +74,57 @@ You are a code execution agent with a limited step budget to complete tasks.
 
 
 # Response Format:
-You MUST respond using exactly this format:
+You MUST respond with a single JSON object and nothing else (no code fences, no extra text).
 
-<thoughts>
-Your step-by-step reasoning about what needs to be done and how to approach the current step.
-</thoughts>
+Schema (top-level keys required):
+{
+  "thoughts": "string",
+  "answer": "string",
+  "python": { "code": "string" },
+  "bash": { "code": "string" }
+}
 
-<answer>
-Return EXACTLY ONE of the following options:
+Rules:
+- Only one of `python.code` or `bash.code` may be non-empty.
+- When returning code, `answer` must be an empty string.
+- For DONE/FAIL, set `answer` to "DONE" or "FAIL" and leave `python.code` and `bash.code` empty.
 
-For Python code:
-```python
-your_python_code_here
-```
+Examples:
 
-For Bash commands:
-```bash
-your_bash_commands_here
-```
+Python:
+{
+  "thoughts": "Read the file and print the first 5 lines.",
+  "answer": "",
+  "python": { "code": "from pathlib import Path\nprint(Path('README.md').read_text().splitlines()[:5])" },
+  "bash": { "code": "" }
+}
 
-For task completion:
-DONE
+Bash:
+{
+  "thoughts": "List files in the current directory.",
+  "answer": "",
+  "python": { "code": "" },
+  "bash": { "code": "ls -la" }
+}
 
-For task failure:
-FAIL
-</answer>
+DONE:
+{
+  "thoughts": "All requested files were created successfully.",
+  "answer": "DONE",
+  "python": { "code": "" },
+  "bash": { "code": "" }
+}
+
+FAIL:
+{
+  "thoughts": "Required files were not accessible.",
+  "answer": "FAIL",
+  "python": { "code": "" },
+  "bash": { "code": "" }
+}
 
 # Technical Notes:
-- Wrap code in ONE block, identify language (python/bash)
+- Output JSON only; do not wrap in code fences
 - Python code runs line-by-line in interactive terminal (no __main__)
 - Install missing packages as needed
 - Ignore "sudo: /etc/sudoers.d is world writable" error

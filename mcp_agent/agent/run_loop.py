@@ -433,6 +433,7 @@ class AgentOrchestrator:
                     "sandbox_invalid_body",
                     "sandbox_empty_result",
                     "sandbox_runtime_error",
+                    "sandbox_timeout",
                 }
                 if error_code in recoverable_codes:
                     prior_errors = observation.get("prior_errors", 0) if isinstance(observation, dict) else 0

@@ -1197,6 +1197,39 @@ async def internal_execute_run(
     return await proxy_request(request, stream=True, body=body)
 
 
+@app.post("/internal/runs/{run_id}/llm/retry")
+async def internal_retry_llm_request(
+    run_id: str,
+    request: Request,
+    x_internal_token: Optional[str] = Header(default=None, alias="X-Internal-Token"),
+    authorization: Optional[str] = Header(default=None),
+) -> Response:
+    token_source = "x-internal-token" if x_internal_token else "missing"
+    token_value = x_internal_token
+    if not token_value and authorization:
+        token_source = "authorization"
+        auth = authorization.strip()
+        token_value = auth[7:].strip() if auth.lower().startswith("bearer ") else auth
+
+    _require_internal_token(
+        token_value,
+        run_id=run_id,
+        user_agent=request.headers.get("user-agent"),
+        token_source=token_source,
+    )
+
+    if _runtime_proxy_enabled():
+        return await proxy_request(request, stream=False)
+
+    from shared.llm_request_registry import request_cancel_retry
+
+    entry = request_cancel_retry(run_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="no_active_llm_request")
+    payload = {"status": "retry_requested", "run_id": run_id, "request": entry}
+    return Response(content=json.dumps(payload), media_type="application/json")
+
+
 @app.get("/config")
 async def config_defaults() -> Dict[str, Any]:
     """

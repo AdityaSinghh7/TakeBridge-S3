@@ -3,7 +3,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple, Optional
 
 from computer_use_agent.memory.procedural_memory import PROCEDURAL_MEMORY
-from computer_use_agent.utils.common_utils import call_llm_safe, split_thinking_response
+from computer_use_agent.utils.common_utils import (
+    call_llm_safe,
+    parse_code_agent_response,
+    split_thinking_response,
+)
 from computer_use_agent.core.mllm import LMMAgent
 from shared.streaming import emit_event
 from shared.text_utils import safe_ascii
@@ -45,6 +49,19 @@ def extract_code_block(action: str) -> Tuple[Optional[str], Optional[str]]:
         f"Extracted code block: type={code_type}, length={len(code) if code else 0}"
     )
     return code_type, code
+
+
+def _build_action_from_parsed_response(
+    answer: str,
+    code_type: Optional[str],
+    code: Optional[str],
+) -> str:
+    normalized_answer = (answer or "").strip()
+    if normalized_answer.upper() in {"DONE", "FAIL"}:
+        return normalized_answer
+    if code_type and code:
+        return f"```{code_type}\n{code}\n```"
+    return normalized_answer
 
 
 def execute_code(code_type: str, code: str, env_controller) -> Dict:
@@ -284,6 +301,7 @@ class CodeAgent:
                 reasoning_effort="high",
                 reasoning_summary="auto",
                 max_output_tokens=12288,
+                text={"format": {"type": "json_object"}},
                 cost_source=f"code_agent.step_{step_count + 1}",
             )
 
@@ -306,8 +324,23 @@ class CodeAgent:
                 logger.error(error_msg)
                 raise RuntimeError(error_msg)
 
-            # Parse the response to extract action
-            action, thoughts = split_thinking_response(response)
+            parsed_response = parse_code_agent_response(response)
+            parsed_code_type = None
+            parsed_code = None
+            parsed_answer = ""
+            parsed_thoughts = ""
+            if parsed_response:
+                parsed_code_type = parsed_response.get("code_type") or None
+                parsed_code = parsed_response.get("code") or None
+                parsed_answer = parsed_response.get("answer", "")
+                parsed_thoughts = parsed_response.get("thoughts", "")
+                action = _build_action_from_parsed_response(
+                    parsed_answer, parsed_code_type, parsed_code
+                )
+                thoughts = parsed_thoughts
+            else:
+                # Parse the response to extract action
+                action, thoughts = split_thinking_response(response)
             step_entry = {"step": step_count + 1, "action": action, "thoughts": thoughts}
             emit_event(
                 "code_agent.step.response",
@@ -358,7 +391,10 @@ class CodeAgent:
                 break
 
             # Extract and execute code
-            code_type, code = extract_code_block(action)
+            if parsed_response and parsed_code:
+                code_type, code = parsed_code_type, parsed_code
+            else:
+                code_type, code = extract_code_block(action)
 
             if code:
                 result = execute_code(code_type, code, env_controller)

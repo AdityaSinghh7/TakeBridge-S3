@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -191,13 +192,95 @@ def call_llm_formatted(
     return response
 
 
+_JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+
+
+def _extract_json_candidate(text: str) -> str:
+    stripped = text.strip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        return stripped
+    matches = _JSON_BLOCK_RE.findall(text)
+    if matches:
+        candidate = matches[-1].strip()
+        if candidate.startswith("{") and candidate.endswith("}"):
+            return candidate
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        candidate = text[start : end + 1].strip()
+        if candidate.startswith("{") and candidate.endswith("}"):
+            return candidate
+    return ""
+
+
+def parse_code_agent_response(full_response: str) -> Optional[Dict[str, str]]:
+    json_candidate = _extract_json_candidate(full_response)
+    if not json_candidate:
+        return None
+    try:
+        payload = json.loads(json_candidate)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    thoughts_val = payload.get("thoughts")
+    answer_val = payload.get("answer")
+    thoughts = thoughts_val.strip() if isinstance(thoughts_val, str) else ""
+    answer = answer_val.strip() if isinstance(answer_val, str) else ""
+
+    def _extract_code(value: object) -> Optional[str]:
+        if isinstance(value, dict):
+            candidate = value.get("code")
+        else:
+            candidate = value
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+        return None
+
+    python_code = _extract_code(payload.get("python"))
+    bash_code = _extract_code(payload.get("bash"))
+
+    code_type = None
+    code = None
+    issues = []
+    if python_code and bash_code:
+        code_type = "python"
+        code = python_code
+        issues.append("both_python_and_bash")
+    elif python_code:
+        code_type = "python"
+        code = python_code
+    elif bash_code:
+        code_type = "bash"
+        code = bash_code
+
+    if issues:
+        logger.warning("Code agent JSON response issues: %s", ", ".join(issues))
+
+    if not answer and not code:
+        return None
+
+    return {
+        "thoughts": thoughts,
+        "answer": answer,
+        "code_type": code_type or "",
+        "code": code or "",
+    }
+
+
 def split_thinking_response(full_response: str) -> Tuple[str, str]:
     try:
         thoughts = full_response.split("<thoughts>")[-1].split("</thoughts>")[0].strip()
         answer = full_response.split("<answer>")[-1].split("</answer>")[0].strip()
-        return answer, thoughts
+        if thoughts or answer:
+            return answer, thoughts
     except Exception:
-        return full_response, ""
+        pass
+    parsed = parse_code_agent_response(full_response)
+    if parsed:
+        return parsed.get("answer", ""), parsed.get("thoughts", "")
+    return full_response, ""
 
 
 def parse_code_from_string(input_string: str) -> str:

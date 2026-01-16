@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 DetailLevel = Literal["names", "summary", "full"]
 
 # Minimum score thresholds for filtering results
-MIN_SEMANTIC_SCORE_THRESHOLD = 0.25  # Minimum score to include in results when using semantic search (increased for better precision)
+MIN_SEMANTIC_SCORE_THRESHOLD = 0.45  # Minimum score to include in results when using semantic search (increased for better precision)
 MIN_FALLBACK_SCORE_THRESHOLD = 0.3  # Higher threshold for fallback heuristic mode
 ADAPTIVE_THRESHOLD_RATIO = 0.5  # Keep tools within 70% of top score when using adaptive threshold
 
