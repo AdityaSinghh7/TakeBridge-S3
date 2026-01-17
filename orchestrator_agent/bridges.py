@@ -11,11 +11,13 @@ These bridges are intentionally thin and catch failures to keep the orchestrator
 resilient in environments where downstream agents are not fully wired.
 """
 
+import json
 import logging
 from dataclasses import asdict, is_dataclass
 from typing import Any, Dict, Optional
 
-from orchestrator_agent.data_types import AgentTarget, OrchestratorRequest, PlannedStep
+from orchestrator_agent.data_types import AgentTarget, OrchestratorRequest, PlannedStep, StepResult
+from orchestrator_agent.system_prompt import format_previous_results
 from computer_use_agent.orchestrator.data_types import OrchestrateRequest
 from shared.hierarchical_logger import set_step_id
 
@@ -109,6 +111,29 @@ def _extract_mcp_trajectory(raw_result: Dict[str, Any]) -> str:
     return "\n".join(messages) if messages else "No trajectory available"
 
 
+def _build_higher_level_trajectory(
+    orchestrator_state: Optional[Dict[str, Any]],
+    task: str,
+) -> str:
+    if not orchestrator_state:
+        return format_previous_results([], task=task)
+
+    results = orchestrator_state.get("results")
+    if not isinstance(results, list) or not results:
+        return format_previous_results([], task=task)
+
+    selected = results[-5:] if len(results) > 5 else results[-1:]
+
+    try:
+        step_results = [StepResult(**entry) for entry in selected]
+        return format_previous_results(step_results, task=task)
+    except Exception:
+        try:
+            return json.dumps(selected, indent=2, ensure_ascii=False, default=str)
+        except Exception:
+            return str(selected)
+
+
 def _extract_computer_use_trajectory(raw_result: Dict[str, Any]) -> str:
     """Extract markdown trajectory from computer-use agent result.
 
@@ -148,6 +173,7 @@ def _extract_computer_use_trajectory(raw_result: Dict[str, Any]) -> str:
 def run_mcp_agent(
     request: OrchestratorRequest,
     step: PlannedStep,
+    orchestrator_state: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Execute MCP agent and return self-contained trajectory.
 
@@ -174,11 +200,16 @@ def run_mcp_agent(
         if request.tool_constraints:
             tool_constraints = request.tool_constraints.to_dict()
 
+        higher_level_task = request.task
+        higher_level_trajectory = _build_higher_level_trajectory(orchestrator_state, higher_level_task)
+
         # Build extra_context with step_id and tool_constraints
         extra_context = {
             "request_id": request.request_id,
             "step_id": step.step_id,
             "tool_constraints": tool_constraints,
+            "orchestrator_task": higher_level_task,
+            "orchestrator_trajectory": higher_level_trajectory,
         }
 
         raw_result = execute_mcp_task(
@@ -375,7 +406,7 @@ def run_agent_bridge(
         orchestrator_state: Optional serialized orchestrator RunState for handback snapshots
     """
     if target == "mcp":
-        return run_mcp_agent(request, step)
+        return run_mcp_agent(request, step, orchestrator_state=orchestrator_state)
     if target == "computer_use":
         return run_computer_use_agent(request, step, orchestrator_state=orchestrator_state)
     raise ValueError(f"Unsupported agent target: {target}")

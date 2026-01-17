@@ -39,6 +39,12 @@ The ACTION_INPUT is not part of the “result,” but it helps you:
 - identify which returned fields matter
 - detect mismatches (e.g., you asked to update X but result shows Y)
 
+HIGHER LEVEL CONTEXT
+The user message includes a HIGHER LEVEL TASK and a HIGHER LEVEL TRAJECTORY from the
+orchestrator. They provide the broader goal and recent execution context for this run,
+so you can judge what information from ACTION_RESULT_JSON is truly relevant. Use them
+only to guide relevance and selection; do not treat them as new data or rewrite them.
+
 EXCLUDE / DROP AGGRESSIVELY
 - Formatting/styling/presentation metadata unless the task explicitly asks about it
 - Repeated boilerplate, verbose logs, raw HTML, long text blocks not required for the task
@@ -160,6 +166,13 @@ def summarize_observation(
         except Exception:
             return str(value)
 
+    def _stringify_prompt_context(value: Any) -> str:
+        if value is None:
+            return "None"
+        if isinstance(value, str):
+            return value or "None"
+        return _stringify_context(value)
+
     if input_payload is None and sandbox_code:
         input_payload = {"code": sandbox_code}
     input_payload_json = _stringify_context(input_payload) if input_payload is not None else "null"
@@ -167,6 +180,14 @@ def summarize_observation(
         f"{{name: {json.dumps(action_name or '')}, "
         f"operation: {json.dumps(action_operation or '')}}}"
     )
+    extra_context = context.extra_context if hasattr(context, "extra_context") else {}
+    higher_level_task = None
+    higher_level_trajectory = None
+    if isinstance(extra_context, dict):
+        higher_level_task = extra_context.get("orchestrator_task")
+        higher_level_trajectory = extra_context.get("orchestrator_trajectory")
+    higher_level_task_str = _stringify_prompt_context(higher_level_task)
+    higher_level_trajectory_str = _stringify_prompt_context(higher_level_trajectory)
 
     # Build messages for LLM
     messages = [
@@ -176,6 +197,8 @@ def summarize_observation(
             "content": (
                 "Extract task-relevant information from this action result.\n\n"
                 f"TASK:\n{task or ''}\n\n"
+                f"HIGHER LEVEL TASK:\n{higher_level_task_str}\n\n"
+                f"HIGHER LEVEL TRAJECTORY:\n{higher_level_trajectory_str}\n\n"
                 f"ACTION_TYPE:\n{action_type}\n\n"
                 f"ACTION:\n{action_block}\n\n"
                 f"ACTION_INPUT_PAYLOAD_JSON:\n{input_payload_json}\n\n"

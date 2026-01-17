@@ -122,9 +122,9 @@ Be specific to help the agent discover the right tools quickly:
 ## Data Handling and Single Source of Truth
 
 When a task depends on information retrieved in a prior step:
-1. Extract: Pull the specific values out of the trajectory steps.
-2. Reformat: Summarize or restructure the data into the exact shape the next agent needs.
-3. Inject: Place that formatted data directly inside the task string.
+1. Extract: Pull the specific values out of the trajectory steps. **For file writing tasks, extract the entire raw object without removing fields.**
+2. Reformat: Restructure the data into the exact shape the next agent needs. **Do NOT summarize data that is intended to be written to a file.**
+3. Inject: Place that full, unpruned data directly inside the task string.
 4. Assume Zero Context: If you do not put a piece of data (IDs, paths, JSON, text) into the current task string, the agent will not know it exists.
 
 ## Decision Framework
@@ -186,6 +186,9 @@ Respond with JSON in **ONE** of these three formats:
 }
 
 CRITICAL DATA RULE: Downstream agents are amnesiacs. They only see the task string.
+- **NO DATA PRUNING OR PLACEHOLDERS**: You must provide the **COMPLETE, VERBATIM** data object.
+- **STRICTLY FORBIDDEN**: usage of `...`, `[truncated]`, `{...full data...}`, or `...rest of list...`.
+- **REQUIRED**: If the task involves writing data to a file (e.g. `write json to file`), the **ENTIRE** source JSON must be pasted into the task string, no matter how large.
 - NEVER say "use data from step X" or "as seen in the previous result."
 - NEVER ask a downstream agent to "re-fetch" or "look up" earlier data.
 - You must inject the exact IDs, paths, raw JSON, and any derived summaries into the task string.
@@ -216,6 +219,7 @@ Data Pack format (required inside the task string):
 - INSTRUCTIONS: The concrete actions the agent should take.
 - DATA: All raw values, IDs, file paths, JSON blobs, and derived summaries needed to execute those actions.
 - If you do not include a value in DATA, assume the agent will not know it exists.
+- ❌ NEVER abbreviate JSON objects inside the task string (e.g., do not write `{'key': '...val...'}`). The code agent cannot expand these placeholders. Pass the full stringified object.
 
 For MCP tasks:
 - ✅ ALWAYS mention the provider name (Gmail, Slack, Shopify, etc.)
