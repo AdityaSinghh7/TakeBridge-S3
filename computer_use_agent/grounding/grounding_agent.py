@@ -4,7 +4,7 @@ import time
 from collections import defaultdict
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import httpx
 import pytesseract
@@ -28,23 +28,98 @@ logger = logging.getLogger("desktopenv.agent")
 
 _TEXT_SPAN_PROMPT_PATH = Path(__file__).with_name("text_span_prompt.txt")
 
-GROUNDING_CLICK_REGEXES = [
-    re.compile(r"click\s*\(\s*x\s*=\s*(\d+)\s*,\s*y\s*=\s*(\d+)\s*\)", re.IGNORECASE),
-    re.compile(r"click\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)", re.IGNORECASE),
-]
+_FLOAT_PATTERN = r"-?\d+(?:\.\d+)?"
+_CLICK_POINT_RE = re.compile(
+    rf"click\s*\(\s*(?:x\s*=\s*)?(?P<x>{_FLOAT_PATTERN})\s*,\s*(?:y\s*=\s*)?(?P<y>{_FLOAT_PATTERN})\s*\)",
+    re.IGNORECASE,
+)
+_BRACKET_POINT_RE = re.compile(
+    rf"[\[\(]\s*(?P<x>{_FLOAT_PATTERN})\s*,\s*(?P<y>{_FLOAT_PATTERN})\s*[\]\)]",
+    re.IGNORECASE,
+)
+_NUMBER_RE = re.compile(_FLOAT_PATTERN)
 
 
-def _parse_xy_from_text(text: str) -> Optional[Tuple[int, int]]:
-    if not text or "click" not in text.lower():
+def _parse_xy_from_text(text: str) -> Optional[Tuple[float, float]]:
+    if not text:
         return None
-    for pattern in GROUNDING_CLICK_REGEXES:
+    for pattern in (_CLICK_POINT_RE, _BRACKET_POINT_RE):
         match = pattern.search(text)
         if match:
             try:
-                return int(match.group(1)), int(match.group(2))
+                return float(match.group("x")), float(match.group("y"))
             except Exception:
-                continue
+                return None
+    numbers = _NUMBER_RE.findall(text)
+    if len(numbers) >= 2:
+        try:
+            return float(numbers[0]), float(numbers[1])
+        except Exception:
+            return None
     return None
+
+
+def _decode_screenshot_data(screenshot_data: object) -> bytes:
+    if isinstance(screenshot_data, str):
+        data = screenshot_data.strip()
+        if data.startswith("data:"):
+            data = data.split("base64,", 1)[-1]
+        return base64.b64decode(data)
+    if isinstance(screenshot_data, bytes):
+        return screenshot_data
+    raise ValueError(f"Unsupported screenshot type: {type(screenshot_data)}")
+
+
+def _get_image_size(image_bytes: bytes) -> Tuple[int, int]:
+    with Image.open(BytesIO(image_bytes)) as img:
+        return img.size
+
+
+def _is_probable_norm_1000(x: float, y: float, img_w: int, img_h: int) -> bool:
+    if not (0.0 <= x <= 1000.0 and 0.0 <= y <= 1000.0):
+        return False
+    if not float(x).is_integer() or not float(y).is_integer():
+        return True
+    return img_w <= 1100 and img_h <= 1100
+
+
+def _normalize_point_to_dims(
+    x: float,
+    y: float,
+    *,
+    img_w: int,
+    img_h: int,
+    target_w: int,
+    target_h: int,
+    allow_norm_1000: Optional[bool],
+) -> List[int]:
+    target_w = max(int(target_w), 1)
+    target_h = max(int(target_h), 1)
+    if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
+        scaled_x = x * target_w
+        scaled_y = y * target_h
+    else:
+        use_norm_1000 = False
+        if allow_norm_1000 is True:
+            use_norm_1000 = 0.0 <= x <= 1000.0 and 0.0 <= y <= 1000.0
+        elif allow_norm_1000 is None:
+            use_norm_1000 = _is_probable_norm_1000(x, y, img_w, img_h)
+            if not use_norm_1000 and 0.0 <= x <= 1000.0 and 0.0 <= y <= 1000.0:
+                if img_w > 1000 and img_h > 1000:
+                    logger.debug(
+                        "Ambiguous grounding coords scale (0..1000 with large image); assuming pixel-space."
+                    )
+        if use_norm_1000:
+            scaled_x = (x / 1000.0) * target_w
+            scaled_y = (y / 1000.0) * target_h
+        else:
+            img_w = max(int(img_w), 1)
+            img_h = max(int(img_h), 1)
+            scaled_x = (x / img_w) * target_w
+            scaled_y = (y / img_h) * target_h
+    scaled_x = max(0.0, min(float(target_w - 1), round(scaled_x)))
+    scaled_y = max(0.0, min(float(target_h - 1), round(scaled_y)))
+    return [int(scaled_x), int(scaled_y)]
 
 
 def _load_text_span_prompt() -> str:
@@ -257,6 +332,8 @@ class OSWorldACI(ACI):
         engine_params_for_grounding = dict(engine_params_for_grounding)
         engine_params_for_grounding.setdefault("engine_type", "openai")
         engine_params_for_grounding.setdefault("model", "o4-mini")
+        engine_params_for_grounding.setdefault("grounding_width", self.width)
+        engine_params_for_grounding.setdefault("grounding_height", self.height)
         self.grounding_model = LMMAgent(engine_params_for_grounding)
         self.engine_params_for_grounding = engine_params_for_grounding
 
@@ -321,22 +398,28 @@ class OSWorldACI(ACI):
             },
         )
 
-        if isinstance(screenshot_data, str):
-            image_bytes = base64.b64decode(screenshot_data)
-        elif isinstance(screenshot_data, bytes):
-            image_bytes = screenshot_data
-        else:
+        try:
+            image_bytes = _decode_screenshot_data(screenshot_data)
+        except Exception as exc:
             raise ValueError(
-                f"Unsupported screenshot type for grounding inference: {type(screenshot_data)}"
-            )
+                "Failed to decode screenshot for grounding inference"
+            ) from exc
 
         source = "fallback"
         coords: Optional[List[int]] = None
+        grounding_width = max(
+            int(self.engine_params_for_grounding.get("grounding_width") or self.width),
+            1,
+        )
+        grounding_height = max(
+            int(self.engine_params_for_grounding.get("grounding_height") or self.height),
+            1,
+        )
 
         if self.grounding_inference_fn is not None:
             x_norm, y_norm = self.grounding_inference_fn(image_bytes, ref_expr)
-            x = round(x_norm * self.width)
-            y = round(y_norm * self.height)
+            x = min(max(0, round(x_norm * grounding_width)), grounding_width - 1)
+            y = min(max(0, round(y_norm * grounding_height)), grounding_height - 1)
             coords = [x, y]
             source = "custom_inference"
         else:
@@ -357,9 +440,15 @@ class OSWorldACI(ACI):
                 self.grounding_model.reset()
 
                 # Configure the context, UI-TARS demo does not use system prompt
-                prompt = f"Query:{ref_expr}\nOutput only the coordinate of one point in your response.\n"
+                prompt = (
+                    "You are a GUI grounding model.\n"
+                    "Given the screenshot, find the best single click point for the target.\n"
+                    "Return only: click(x, y)\n"
+                    "x and y must be integers in [0,1000] representing thousandths of the image.\n"
+                    f"Target: {ref_expr}"
+                )
                 self.grounding_model.add_message(
-                    text_content=prompt, image_content=obs["screenshot"], put_text_last=True
+                    text_content=prompt, image_content=image_bytes, put_text_last=True
                 )
 
                 # Generate and parse coordinates
@@ -368,9 +457,23 @@ class OSWorldACI(ACI):
                     cost_source="grounding.fallback_coords",
                 )
                 print("RAW GROUNDING MODEL RESPONSE:", response)
-                numericals = re.findall(r"\d+", response)
-                assert len(numericals) >= 2
-                coords = [int(numericals[0]), int(numericals[1])]
+                point = _parse_xy_from_text(response)
+                if not point:
+                    raise RuntimeError(f"Failed to parse grounding coordinates from: {response}")
+                try:
+                    img_w, img_h = _get_image_size(image_bytes)
+                except Exception as exc:
+                    logger.warning("Failed to read screenshot size for fallback grounding: %s", exc)
+                    img_w, img_h = grounding_width, grounding_height
+                coords = _normalize_point_to_dims(
+                    point[0],
+                    point[1],
+                    img_w=img_w,
+                    img_h=img_h,
+                    target_w=grounding_width,
+                    target_h=grounding_height,
+                    allow_norm_1000=True,
+                )
                 source = "llm"
 
         if coords is None:
@@ -483,17 +586,17 @@ class OSWorldACI(ACI):
                 coords = _parse_xy_from_text(text)
                 if not coords:
                     raise ValueError(f"No coordinates found in response: {text}")
-                x_val, y_val = coords
-                if 0 <= x_val <= 1 and 0 <= y_val <= 1:
-                    raw_x = x_val * width
-                    raw_y = y_val * height
-                else:
-                    raw_x = x_val
-                    raw_y = y_val
-                coords_payload = [
-                    round(raw_x * self.width / width),
-                    round(raw_y * self.height / height),
-                ]
+                grounding_width = self.engine_params_for_grounding.get("grounding_width") or self.width
+                grounding_height = self.engine_params_for_grounding.get("grounding_height") or self.height
+                coords_payload = _normalize_point_to_dims(
+                    coords[0],
+                    coords[1],
+                    img_w=width,
+                    img_h=height,
+                    target_w=grounding_width,
+                    target_h=grounding_height,
+                    allow_norm_1000=None,
+                )
                 emit_event(
                     "grounding.generate_coords.service_success",
                     {
@@ -528,8 +631,9 @@ class OSWorldACI(ACI):
         return None
 
     # Calls pytesseract to generate word level bounding boxes for text grounding
-    def get_ocr_elements(self, b64_image_data: str) -> Tuple[str, List]:
-        image = Image.open(BytesIO(b64_image_data))
+    def get_ocr_elements(self, screenshot_data: Union[str, bytes]) -> Tuple[str, List]:
+        image_bytes = _decode_screenshot_data(screenshot_data)
+        image = Image.open(BytesIO(image_bytes))
         image_data = pytesseract.image_to_data(image, output_type=Output.DICT)
 
         # Clean text by removing leading and trailing spaces and non-alphabetical characters, but keeping punctuation
@@ -638,10 +742,10 @@ class OSWorldACI(ACI):
         """
         self.current_task_context = task_context
 
-    # Resize from grounding model dim into OSWorld dim (1920 * 1080)
+    # Resize from grounding model dim into OSWorld dim (default 1920 * 1080)
     def resize_coordinates(self, coordinates: List[int]) -> List[int]:
-        grounding_width = self.engine_params_for_grounding["grounding_width"]
-        grounding_height = self.engine_params_for_grounding["grounding_height"]
+        grounding_width = self.engine_params_for_grounding.get("grounding_width") or self.width
+        grounding_height = self.engine_params_for_grounding.get("grounding_height") or self.height
 
         return [
             round(coordinates[0] * self.width / grounding_width),

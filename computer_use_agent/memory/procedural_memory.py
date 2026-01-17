@@ -194,6 +194,10 @@ class PROCEDURAL_MEMORY:
     - Some tasks require language, string, or data analysis on unstructured text.
     - Use code for parsing/extraction/normalization; for ambiguity, prefer programmatic signals but if regex/heuristics are insufficient, use your own reasoning and clearly flag ambiguity (optionally write the analysis to a file for transparency).
 
+    # CRITICAL: Data Fidelity and Missing Information
+    - Never invent, guess, or fabricate data that is not explicitly present in files, tool outputs, or provided context.
+    - If required data is unavailable after reasonable inspection, be cautious and return FAIL rather than making up placeholder values.
+
     # CRITICAL: Incremental Step-by-Step Approach
     - Break down complex tasks into small, self-contained steps
     - Each step should contain a single, focused code snippet that advances toward the goal
@@ -325,7 +329,7 @@ class PROCEDURAL_MEMORY:
     - Include concrete details: commands run, files touched, data fields, transformations, outputs, errors.
     - In "Overview", explicitly state the low-level task and the higher-level task context when provided.
     - In "Step-by-Step Actions", list each step with code type, command/script, intent, and output/error.
-    - In "Data from the code agent", include any retrieved content/data the task explicitly asks for (e.g., extracted text, parsed values, saved knowledge payloads). If retrieval is not required or data is absent, write "None observed." Retrieve the full data exactly as it was printed to the terminal. DO NOT PRUNE / SUMMARIZE THE DATA, even if the task mentions summarization.
+    - In "Data from the code agent", include any retrieved content/data (e.g., extracted text, parsed values, saved knowledge payloads). If data is absent, write "None observed." Retrieve the full data exactly as it was printed to the terminal. DO NOT PRUNE / SUMMARIZE THE DATA, even if the task mentions summarization.
     - In "Outputs/Artifacts", include any files created/modified, values saved/returned, and verification notes for the GUI agent.
     - If a section has nothing to report, write "None observed."
 

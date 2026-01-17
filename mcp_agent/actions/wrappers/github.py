@@ -77,6 +77,170 @@ github_get_branch_protection.__tb_output_schema__ = {
 }
 
 
+def github_get_all_status_check_contexts(
+    context: "AgentContext",
+    owner: str,
+    repo: str,
+    branch: str,
+) -> ToolInvocationResult:
+    """
+    Description:
+        Fetches all required status check contexts for a protected branch; returns an empty list if the branch isn't protected or has no required checks.
+    Args:
+        owner: (required) The username or organization that owns the repository you want to check. Enter it exactly as it appears on GitHub (not case-sensitive).
+        repo: (required) The repository you want to check within that account. Type the repo name as it appears on GitHub, without the .git suffix.
+        branch: (required) The branch you want to check for required status checks. Enter the exact branch name, like 'main' or 'develop'. Wildcard characters (e.g., '*') are not permitted; use the GitHub GraphQL API for wildcard patterns.
+    """
+    provider = "github"
+    tool_name = "GITHUB_GET_ALL_STATUS_CHECK_CONTEXTS"
+    ensure_authorized(context, provider)
+    payload = _clean_payload(
+        {
+            "owner": owner,
+            "repo": repo,
+            "branch": branch,
+        }
+    )
+    return _invoke_mcp_tool(context, provider, tool_name, payload)
+
+
+github_get_all_status_check_contexts.__tb_output_schema__ = {
+    "properties": {
+        "data": {
+            "additionalProperties": True,
+            "title": "Data",
+            "type": "object",
+        },
+        "error": {
+            "anyOf": [{"type": "string"}, {"type": "null"}],
+            "default": None,
+            "description": "Error if any occurred during the execution of the action",
+            "title": "Error",
+        },
+        "successful": {
+            "description": "Whether or not the action execution was successful or not",
+            "title": "Successful",
+            "type": "boolean",
+        },
+    },
+    "required": ["data", "successful"],
+    "title": "GetAllStatusCheckContextsResponseWrapper",
+    "type": "object",
+}
+
+
+def github_get_a_repository_ruleset(
+    context: "AgentContext",
+    owner: str,
+    repo: str,
+    ruleset_id: int,
+    includes_parents: bool = True,
+) -> ToolInvocationResult:
+    """
+    Description:
+        Retrieves a specific repository ruleset by its ID; if `includes_parents` is true, the search for this `ruleset_id` also extends to rulesets from parent organizations.
+    Args:
+        owner: (required) The username or organization that owns the repository you want to access. This helps us locate the correct repository.
+        repo: (required) The exact name of the repository you want to use, without the .git part. This tells us which project to fetch the ruleset from.
+        ruleset_id: (required) The specific ID of the ruleset you want to retrieve. You can get this from a ruleset list or from the repository’s settings.
+        includes_parents: (optional, default=True) Choose whether to also include rulesets set at the organization or higher levels that apply to this repository.
+    """
+    provider = "github"
+    tool_name = "GITHUB_GET_A_REPOSITORY_RULESET"
+    ensure_authorized(context, provider)
+    payload = _clean_payload(
+        {
+            "owner": owner,
+            "repo": repo,
+            "ruleset_id": ruleset_id,
+            "includes_parents": includes_parents,
+        }
+    )
+    return _invoke_mcp_tool(context, provider, tool_name, payload)
+
+
+github_get_a_repository_ruleset.__tb_output_schema__ = {
+    "properties": {
+        "data": {
+            "additionalProperties": True,
+            "description": "Details of the retrieved repository ruleset, including its configuration and rules.",
+            "title": "Data",
+            "type": "object",
+        },
+        "error": {
+            "anyOf": [{"type": "string"}, {"type": "null"}],
+            "default": None,
+            "description": "Error if any occurred during the execution of the action",
+            "title": "Error",
+        },
+        "successful": {
+            "description": "Whether or not the action execution was successful or not",
+            "title": "Successful",
+            "type": "boolean",
+        },
+    },
+    "required": ["data", "successful"],
+    "title": "GetARepositoryRulesetResponseWrapper",
+    "type": "object",
+}
+
+
+def github_get_repository_content(
+    context: "AgentContext",
+    owner: str,
+    repo: str,
+    path: str,
+    ref: str | None = None,
+) -> ToolInvocationResult:
+    """
+    Description:
+        Retrieves a file's Base64 encoded content or lists a directory's contents from a GitHub repository.
+    Args:
+        owner: (required) The username or organization that owns the repository you want to access. This tells us which account to look in.
+        repo: (required) The repository within that account that you want to read from. Provide its short name without .git, like 'Spoon-Knife'.
+        path: (required) The file or folder path inside the repository that you want to retrieve. Use an empty string for the root directory. Paths are case-sensitive; if you hit a 404, list the parent directory to verify the exact casing.
+        ref: (optional) The branch, tag, or commit to read from. Leave empty to use the repository's default branch (often 'main').
+    """
+    provider = "github"
+    tool_name = "GITHUB_GET_REPOSITORY_CONTENT"
+    ensure_authorized(context, provider)
+    payload = _clean_payload(
+        {
+            "owner": owner,
+            "repo": repo,
+            "path": path,
+            "ref": ref,
+        }
+    )
+    return _invoke_mcp_tool(context, provider, tool_name, payload)
+
+
+github_get_repository_content.__tb_output_schema__ = {
+    "properties": {
+        "data": {
+            "additionalProperties": True,
+            "description": "For files: includes `name`, `path`, `sha`, `size`, `type` ('file'), `content` (Base64 encoded), and `download_url`. For directories: contains a `details` key with an array of items in the directory, each with `name`, `path`, `sha`, `type` ('file' or 'dir'), and other metadata.",
+            "title": "Data",
+            "type": "object",
+        },
+        "error": {
+            "anyOf": [{"type": "string"}, {"type": "null"}],
+            "default": None,
+            "description": "Error if any occurred during the execution of the action",
+            "title": "Error",
+        },
+        "successful": {
+            "description": "Whether or not the action execution was successful or not",
+            "title": "Successful",
+            "type": "boolean",
+        },
+    },
+    "required": ["data", "successful"],
+    "title": "GetRepositoryContentResponseWrapper",
+    "type": "object",
+}
+
+
 def github_search_issues_and_pull_requests(
     context: "AgentContext",
     q: str,

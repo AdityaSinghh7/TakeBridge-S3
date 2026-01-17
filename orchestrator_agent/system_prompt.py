@@ -133,6 +133,7 @@ When a task depends on information retrieved in a prior step:
 1. **If the task can be done via an available API provider** → Use MCP
 2. **If the task requires desktop UI interaction** → Use Computer-Use
 3. **If you're unsure which provider/app can help** → Use MCP first to search/explore, then decide next step
+4. **Do not use the computer-use agent to directly call APIs for providers that are available in the MCP agent.**
 
 **Code-based analysis guidance:**
 - If the task requires analysis via code, prefer the MCP agent's sandbox code capability.

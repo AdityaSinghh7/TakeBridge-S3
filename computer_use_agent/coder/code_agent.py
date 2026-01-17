@@ -655,7 +655,7 @@ Requirements:
 - Use factual, non-judgmental language.
 - Include concrete details from the execution context (commands, data operations, outputs, errors).
 - In "Overview", explicitly state the low-level task and the higher-level task context when provided.
-- In "Data from the code agent", include any retrieved content/data the task explicitly asks for (e.g., extracted text, parsed values, saved knowledge payloads). If retrieval is not required or data is absent, write "None observed."
+- In "Data from the code agent", include any retrieved content/data (e.g., extracted text, parsed values, saved knowledge payloads). If data is absent, write "None observed."
 - If a section has nothing to report, write "None observed."
 """
 

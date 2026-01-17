@@ -431,6 +431,7 @@ class AgentOrchestrator:
                     "sandbox_syntax_error",
                     "sandbox_logic_error",
                     "sandbox_invalid_body",
+                    "sandbox_invalid_args",
                     "sandbox_empty_result",
                     "sandbox_runtime_error",
                     "sandbox_timeout",

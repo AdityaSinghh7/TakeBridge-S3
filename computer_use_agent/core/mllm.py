@@ -48,6 +48,22 @@ class LMMAgent:
             return base64.b64encode(image_content).decode("utf-8")
         raise TypeError(f"Unsupported image content type: {type(image_content)}")
 
+    @staticmethod
+    def _guess_image_mime(image_bytes: bytes) -> str:
+        if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "image/png"
+        if image_bytes[:3] == b"\xff\xd8\xff":
+            return "image/jpeg"
+        if image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
+            return "image/webp"
+        return "image/png"
+
+    @classmethod
+    def _image_bytes_to_data_url(cls, image_bytes: bytes) -> str:
+        mime = cls._guess_image_mime(image_bytes)
+        encoded = base64.b64encode(image_bytes).decode("utf-8")
+        return f"data:{mime};base64,{encoded}"
+
     def reset(self) -> None:
         self.messages = [
             {
@@ -100,12 +116,19 @@ class LMMAgent:
         if image_content is not None:
             images = image_content if isinstance(image_content, list) else [image_content]
             for image in images:
-                encoded = self.encode_image(image)
+                if isinstance(image, bytes):
+                    url = self._image_bytes_to_data_url(image)
+                elif isinstance(image, str):
+                    with open(image, "rb") as image_file:
+                        url = self._image_bytes_to_data_url(image_file.read())
+                else:
+                    encoded = self.encode_image(image)
+                    url = f"data:image/png;base64,{encoded}"
                 message["content"].append(
                     {
                         "type": "image_url",
                         "image_url": {
-                            "url": f"data:image/png;base64,{encoded}",
+                            "url": url,
                             "detail": image_detail,
                         },
                     }

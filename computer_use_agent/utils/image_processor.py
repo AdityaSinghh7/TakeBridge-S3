@@ -46,6 +46,16 @@ class ImageProcessor:
         return self.encode_image_bytes(image_content)
 
     @staticmethod
+    def guess_mime(image_content: bytes) -> str:
+        if image_content.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "image/png"
+        if image_content[:3] == b"\xff\xd8\xff":
+            return "image/jpeg"
+        if image_content[:4] == b"RIFF" and image_content[8:12] == b"WEBP":
+            return "image/webp"
+        return "image/png"
+
+    @staticmethod
     def downscale_image_bytes(image: bytes, max_w: int = 1280, max_h: int = 720) -> bytes:
         np_img = np.frombuffer(image, dtype=np.uint8)
         img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
@@ -67,9 +77,10 @@ class ImageProcessor:
     # ------------------------------------------------------------------ #
 
     def format_image(self, image: bytes, detail: str = "high") -> Dict[str, Any]:
+        mime = self.guess_mime(image)
         return {
             "type": self.image_key,
-            "image_url": f"data:image/png;base64,{self.encode_image(image)}",
+            "image_url": f"data:{mime};base64,{self.encode_image(image)}",
             "detail": detail,
         }
 
