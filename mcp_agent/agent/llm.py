@@ -90,6 +90,10 @@ class PlannerLLM:
             self._client = LLMClient(default_model=self.model)
         return self._client
 
+    def resolved_model(self) -> str:
+        client = self._get_client()
+        return getattr(client, "default_model", None) or self.model
+
     def _build_messages(
         self,
         context: "AgentState",

@@ -512,6 +512,54 @@ class LLMClient:
             )
         return self._image_client
 
+    def resolve_request_model(
+        self,
+        *,
+        model: Optional[str] = None,
+        messages: Optional[Iterable[Message]] = None,
+        input: Optional[Union[InputItem, Sequence[InputItem], str]] = None,
+        conversation: Optional[str] = None,
+        previous_response_id: Optional[str] = None,
+        carry_items: Optional[List[InputItem]] = None,
+    ) -> tuple[str, str]:
+        """
+        Resolve the provider/model that would be used for this request without issuing a call.
+
+        Mirrors the routing logic used in create_response/stream_response for DeepSeek
+        image handling and optional fallback providers.
+        """
+        resolved_model = _resolve_model(self._provider, model or self._default_model_raw)
+
+        if self._provider != "deepseek":
+            return self._provider, resolved_model
+
+        issues = self._deepseek_unsupported(
+            messages=messages,
+            input=input,
+            conversation=conversation,
+            previous_response_id=previous_response_id,
+            carry_items=carry_items,
+        )
+        if not issues:
+            return self._provider, resolved_model
+
+        issue_set = set(issues)
+        if issue_set == {"image_content"} and self._image_provider:
+            image_model = _resolve_model(
+                self._image_provider or "openrouter",
+                model or self._default_model_raw,
+            )
+            return self._image_provider or "openrouter", image_model
+
+        if self._fallback_provider:
+            fallback_model = _resolve_model(
+                self._fallback_provider,
+                model or self._default_model_raw,
+            )
+            return self._fallback_provider, fallback_model
+
+        return self._provider, resolved_model
+
     def _log_llm_call(
         self,
         *,

@@ -138,6 +138,14 @@ class ActionExecutor:
         self.agent_context = agent_context
         self.agent_state = agent_state
 
+    def _tokenizer_model(self) -> str | None:
+        extra = getattr(self.agent_state, "extra_context", None)
+        if isinstance(extra, dict):
+            model = extra.get("tokenizer_model")
+            if isinstance(model, str) and model.strip():
+                return model.strip()
+        return None
+
     def execute_step(self, command: Dict[str, Any]) -> StepResult:
         """Execute a planner command and return a structured result.
 
@@ -395,7 +403,7 @@ class ActionExecutor:
                 error_msg = result.get("error", "Unknown failure")
                 error_data = {"successful": False, "error": error_msg}
                 try:
-                    error_tokens = count_json_tokens(error_data)
+                    error_tokens = count_json_tokens(error_data, model=self._tokenizer_model())
                 except Exception:
                     error_tokens = 0
                 return error_data, False, error_tokens, error_tokens
@@ -408,7 +416,7 @@ class ActionExecutor:
 
         # Count tokens in data payload
         try:
-            token_count = count_json_tokens(data)
+            token_count = count_json_tokens(data, model=self._tokenizer_model())
         except Exception as e:
             self.agent_state.record_event(
                 "mcp.observation.token_count_failed",
@@ -439,11 +447,12 @@ class ActionExecutor:
             task=self.agent_state.task,
             reasoning=reasoning,
             input_payload=input_payload,
+            tokenizer_model=self._tokenizer_model(),
         )
 
         # Count tokens in summarized output
         try:
-            compressed_tokens = count_json_tokens(summarized)
+            compressed_tokens = count_json_tokens(summarized, model=self._tokenizer_model())
         except Exception:
             compressed_tokens = token_count  # Fallback to original if counting fails
 
@@ -479,7 +488,7 @@ class ActionExecutor:
         """
         # Count tokens in full result
         try:
-            token_count = count_json_tokens(result)
+            token_count = count_json_tokens(result, model=self._tokenizer_model())
         except Exception as e:
             self.agent_state.record_event(
                 "mcp.observation.token_count_failed",
@@ -510,11 +519,12 @@ class ActionExecutor:
             task=self.agent_state.task,
             reasoning=reasoning,
             sandbox_code=sandbox_code,
+            tokenizer_model=self._tokenizer_model(),
         )
 
         # Count tokens in summarized output
         try:
-            compressed_tokens = count_json_tokens(summarized)
+            compressed_tokens = count_json_tokens(summarized, model=self._tokenizer_model())
         except Exception:
             compressed_tokens = token_count  # Fallback to original if counting fails
 

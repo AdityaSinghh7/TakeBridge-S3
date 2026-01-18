@@ -625,12 +625,27 @@ class OrchestratorRuntime:
             max_retries=1,  # We'll retry once internally
         )
 
-        # Retry once on failure
-        for attempt in range(2):
+        # Retry on invalid JSON with a stronger JSON-only reminder and higher output cap.
+        max_attempts = 3
+        retry_note = (
+            "Your previous response was invalid JSON. "
+            "Return a single valid JSON object that matches the schema. "
+            "Ensure all strings are properly escaped and closed. "
+            "Do not include any extra text."
+        )
+        for attempt in range(max_attempts):
             try:
+                if attempt == 0:
+                    attempt_messages = messages
+                else:
+                    attempt_messages = [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "system", "content": retry_note},
+                        {"role": "user", "content": user_message},
+                    ]
                 response = client.create_response(
                     model="o4-mini",
-                    messages=messages,
+                    messages=attempt_messages,
                     text={"format": {"type": "json_object"}},
                     reasoning_effort="high",
                 )
@@ -647,12 +662,16 @@ class OrchestratorRuntime:
                 return result
 
             except json.JSONDecodeError as e:
-                if attempt == 0:
-                    logger.error(f"LLM returned invalid JSON, retrying: {e}")
+                logger.error(
+                    "LLM returned invalid JSON (attempt %s/%s): %s",
+                    attempt + 1,
+                    max_attempts,
+                    e,
+                )
+                if attempt + 1 < max_attempts:
                     continue
-                else:
-                    logger.critical(f"LLM retry failed with invalid JSON: {e}")
-                    raise
+                logger.critical(f"LLM retry failed with invalid JSON: {e}")
+                raise
 
             except Exception as e:
                 if attempt == 0:

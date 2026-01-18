@@ -110,6 +110,7 @@ def summarize_observation(
     reasoning: str | None = None,
     input_payload: Any = None,
     sandbox_code: str | None = None,
+    tokenizer_model: str | None = None,
 ) -> Any:
     """
     Extract task-relevant information from a large observation.
@@ -221,8 +222,7 @@ def summarize_observation(
         response = client.create_response(
             model="o4-mini",
             messages=messages,
-            max_output_tokens=max_output,
-            reasoning_effort="low",  # Fast inference for compression task
+            reasoning_effort="high",
             text={"format": {"type": "json_object"}},  # Force JSON output
         )
 
@@ -242,7 +242,7 @@ def summarize_observation(
         compressed_payload = json.loads(compressed_text)
 
         # Calculate and log compression metrics
-        compressed_tokens = count_json_tokens(compressed_payload)
+        compressed_tokens = count_json_tokens(compressed_payload, model=tokenizer_model)
         reduction_pct = ((original_tokens - compressed_tokens) / original_tokens) * 100
 
         context.record_event(

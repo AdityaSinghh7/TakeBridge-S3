@@ -35,6 +35,15 @@ class AgentOrchestrator:
         self.agent_context = agent_context
         self.agent_state = agent_state
         self.llm = llm or PlannerLLM()
+        tokenizer_model: Optional[str] = None
+        resolver = getattr(self.llm, "resolved_model", None)
+        if callable(resolver):
+            try:
+                tokenizer_model = resolver()
+            except Exception:
+                tokenizer_model = None
+        if tokenizer_model and isinstance(self.agent_state.extra_context, dict):
+            self.agent_state.extra_context.setdefault("tokenizer_model", tokenizer_model)
         self._executor = ActionExecutor(self.agent_context, self.agent_state)
 
     def run(self) -> MCPTaskResult:
