@@ -12,6 +12,7 @@ import concurrent.futures
 import json
 import logging
 import os
+import random
 import threading
 import time
 from datetime import datetime
@@ -52,10 +53,76 @@ def _maybe_load_env(dotenv_path: Optional[str] = None) -> None:
 _LLM_LOG_LOCK = threading.Lock()
 _LLM_CANCEL_POLL_SECONDS = 1.0
 _LLM_RETRY_SENTINEL = object()
+_LLM_RATE_LIMIT_RETRY_DEFAULT = 2
+_LLM_RETRY_BACKOFF_BASE_SECONDS = 0.5
+_LLM_RETRY_BACKOFF_CAP_SECONDS = 8.0
+_LLM_RETRY_BACKOFF_JITTER_SECONDS = 0.25
 
 
 class LLMRequestCancelled(RuntimeError):
     pass
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    if exc is None:
+        return False
+    name = exc.__class__.__name__.lower()
+    message = str(exc).lower()
+    if "ratelimit" in name or "rate limit" in message:
+        return True
+    if "429" in message:
+        return True
+    for attr in ("status_code", "status", "http_status", "code"):
+        value = getattr(exc, attr, None)
+        if isinstance(value, int) and value == 429:
+            return True
+    return False
+
+
+def _resolve_rate_limit_retries(request: Dict[str, Any]) -> int:
+    env_value = os.getenv("LLM_RATE_LIMIT_RETRIES")
+    if env_value is not None:
+        try:
+            return max(0, int(env_value))
+        except Exception:
+            pass
+    params = (request or {}).get("params", {}) or {}
+    value = params.get("rate_limit_retries")
+    if value is not None:
+        try:
+            return max(0, int(value))
+        except Exception:
+            pass
+    return _LLM_RATE_LIMIT_RETRY_DEFAULT
+
+
+def _resolve_rate_limit_backoff(request: Dict[str, Any]) -> tuple[float, float, float]:
+    params = (request or {}).get("params", {}) or {}
+    base = params.get("retry_backoff_base")
+    cap = params.get("retry_backoff_cap")
+    jitter = params.get("retry_backoff_jitter")
+    resolved_base = (
+        _LLM_RETRY_BACKOFF_BASE_SECONDS if base is None else max(0.0, float(base))
+    )
+    resolved_cap = (
+        _LLM_RETRY_BACKOFF_CAP_SECONDS if cap is None else float(cap)
+    )
+    resolved_cap = max(resolved_base, resolved_cap)
+    resolved_jitter = (
+        _LLM_RETRY_BACKOFF_JITTER_SECONDS
+        if jitter is None
+        else max(0.0, float(jitter))
+    )
+    return resolved_base, resolved_cap, resolved_jitter
+
+
+def _rate_limit_backoff_delay(
+    attempt: int, base: float, cap: float, jitter: float
+) -> float:
+    delay = min(cap, base * (2**attempt))
+    if jitter:
+        delay += random.uniform(0.0, jitter)
+    return delay
 
 
 def _llm_log_enabled() -> bool:
@@ -613,6 +680,9 @@ class LLMClient:
     ) -> Any:
         run_id = RUN_LOG_ID.get() or os.getenv("RUN_LOG_ID")
         entry = None
+        rate_limit_retries = _resolve_rate_limit_retries(request)
+        backoff_base, backoff_cap, backoff_jitter = _resolve_rate_limit_backoff(request)
+        rate_limit_attempts = 0
         if run_id:
             entry = register_request(
                 run_id=run_id,
@@ -662,6 +732,26 @@ class LLMClient:
                         duration_ms=duration_ms,
                         stream=stream,
                     )
+                    if _is_rate_limit_error(exc) and rate_limit_attempts < rate_limit_retries:
+                        delay = _rate_limit_backoff_delay(
+                            rate_limit_attempts,
+                            backoff_base,
+                            backoff_cap,
+                            backoff_jitter,
+                        )
+                        rate_limit_attempts += 1
+                        logger.warning(
+                            "LLM rate limit retry run_id=%s provider=%s model=%s attempt=%s/%s delay=%.2fs error=%s",
+                            run_id,
+                            provider,
+                            requested_model,
+                            rate_limit_attempts,
+                            rate_limit_retries,
+                            delay,
+                            str(exc),
+                        )
+                        time.sleep(delay)
+                        continue
                     raise
                 if entry and not stream and entry.retry_event.is_set():
                     entry.cancel_event.clear()

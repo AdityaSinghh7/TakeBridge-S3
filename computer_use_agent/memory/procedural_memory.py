@@ -196,6 +196,7 @@ class PROCEDURAL_MEMORY:
 
     # CRITICAL: Data Fidelity and Missing Information
     - Never invent, guess, or fabricate data that is not explicitly present in files, tool outputs, or provided context.
+    - NEVER use PLACEHOLDER DATA OR VALUES for missing information.
     - If required data is unavailable after reasonable inspection, be cautious and return FAIL rather than making up placeholder values.
 
     # CRITICAL: Incremental Step-by-Step Approach
@@ -212,7 +213,7 @@ class PROCEDURAL_MEMORY:
 
     # CRITICAL: File Modification Strategy
     - ALWAYS prioritize modifying existing open files IN PLACE rather than creating new files
-    - ALWAYS try to first read the file contents and understand the file structure in a step before modifying it in the next step.
+    - ALWAYS try to first read the file contents and understand the file structure in a step before modifying it in the next step. YOU MUST ALWAYS FIRST UNDERSTAND THE FILE STRUCTURE AND READ THE FILE CONTENTS BEFORE MODIFYING IT.
     - The screenshot context shows which file is currently open and should be modified
     - For open documents (LibreOffice .docx/.xlsx, text editors, etc.), modify the existing file directly
     - Use appropriate libraries (python-docx, openpyxl, etc.) to modify files in place

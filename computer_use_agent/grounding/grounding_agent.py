@@ -358,6 +358,7 @@ class OSWorldACI(ACI):
         # Store full task context (for composing code subtasks)
         self.current_task_context = None
         self.last_code_agent_result = None
+        self.code_agent_history = []
         # Store handback inference result for continuation after human intervention
         self.handback_inference = None
         self.grounding_base_url = grounding_base_url
@@ -1069,6 +1070,7 @@ class OSWorldACI(ACI):
 
         # Store the result for the worker to access
         self.last_code_agent_result = result
+        self.code_agent_history.append(result)
 
         logger.info("Code agent execution completed")
         logger.info("Result - Completion reason: %s", result.get("completion_reason"))

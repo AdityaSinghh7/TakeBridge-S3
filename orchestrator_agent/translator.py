@@ -54,6 +54,8 @@ Your task is to extract and organize this into a decisive canonical JSON format 
 - **IDENTIFY failures precisely** - which step number failed, what the error was
 - When deciding what to keep, ask: "What does the task need?" Keep information that serves the task; avoid copying unrelated bulk text.
 - **CRITICAL FOR MCP AGENT OUTPUTS**: If the tool output for the MCP Agent is a large amount of unnecessary data for the task, you can reliably truncate OR summarize the data to keep only the relevant information for the task. Do not invent or fabricate data.
+- **CRITICAL FOR CODE AGENT OUTPUTS**: Execution history may include full code for all steps. Extract only the code that was actually executed for the task. Do not invent or fabricate code.
+- **CODE AGENT MULTI-CALLS**: Multiple steps may include Code Agent blocks. Treat each block as the authoritative record for that step’s executed code and outcomes.
 
 ### No Invention
 - **NEVER fabricate** data, counts, or values not in the trajectory

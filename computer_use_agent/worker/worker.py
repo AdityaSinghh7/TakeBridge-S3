@@ -206,6 +206,128 @@ class Worker(BaseModule):
                     messages.pop(idx)
             else:
                 idx += 1
+
+    def _get_code_agent_history(self) -> List[Dict[str, Any]]:
+        history = getattr(self.grounding_agent, "code_agent_history", None)
+        if isinstance(history, list):
+            return history
+        return []
+
+    def _format_code_agent_history(self, history: List[Dict[str, Any]]) -> str:
+        if not history:
+            return ""
+        lines = ["", "CODE AGENT HISTORY:"]
+        for idx, code_result in enumerate(history, 1):
+            lines.append(f"Result {idx}:")
+            lines.append(
+                f"Task/Subtask Instruction: {code_result.get('task_instruction', '')}"
+            )
+            lines.append(f"Steps Completed: {code_result.get('steps_executed', '')}")
+            lines.append(f"Max Steps: {code_result.get('budget', '')}")
+            lines.append(
+                f"Completion Reason: {code_result.get('completion_reason', '')}"
+            )
+            lines.append(f"Summary: {code_result.get('summary', '')}")
+            exec_history = code_result.get("execution_history") or []
+            if exec_history:
+                lines.append("Execution History:")
+                for step_index, step in enumerate(exec_history, 1):
+                    action = step.get("action", "")
+                    if action in ("DONE", "FAIL"):
+                        lines.append(f"Step {step_index}: {action}")
+                    else:
+                        lines.append(f"Step {step_index}:\n{action}")
+        lines.append("")
+        return "\n".join(lines)
+
+    def _log_code_agent_result(self, code_result: Dict[str, Any]) -> None:
+        # Save code agent result to text file and emit truncated logs.
+        try:
+            from datetime import datetime
+
+            # Create logs directory if it doesn't exist
+            logs_dir = "logs"
+            if not os.path.exists(logs_dir):
+                os.makedirs(logs_dir)
+
+            # Generate filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"logs/code_agent_result_step_{self.turn_count + 1}_{timestamp}.txt"
+
+            with open(filename, "w", encoding="utf-8", errors="backslashreplace") as f:
+                f.write(f"CODE AGENT RESULT - Step {self.turn_count + 1}\n")
+                f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+                f.write(
+                    f"Task/Subtask Instruction: {code_result.get('task_instruction', '')}\n"
+                )
+                f.write(f"Steps Completed: {code_result.get('steps_executed', '')}\n")
+                f.write(f"Max Steps: {code_result.get('budget', '')}\n")
+                f.write(
+                    f"Completion Reason: {code_result.get('completion_reason', '')}\n"
+                )
+                f.write(f"Summary: {code_result.get('summary', '')}\n")
+                exec_history = code_result.get("execution_history") or []
+                if exec_history:
+                    f.write("\nExecution History:\n")
+                    for i, step in enumerate(exec_history):
+                        f.write(f"\nStep {i+1}:\n")
+                        f.write(f"Action: {step.get('action', '')}\n")
+                        if "thoughts" in step:
+                            f.write(f"Thoughts: {step.get('thoughts', '')}\n")
+
+            logger.info("Code agent result saved to: %s", filename)
+        except Exception as e:
+            logger.error("Failed to save code agent result to file: %s", e)
+
+        # Log the code agent result section for debugging (truncated execution history)
+        log_message = "\nCODE AGENT RESULT:\n"
+        log_message += (
+            f"Task/Subtask Instruction: {code_result.get('task_instruction', '')}\n"
+        )
+        log_message += f"Steps Completed: {code_result.get('steps_executed', '')}\n"
+        log_message += f"Max Steps: {code_result.get('budget', '')}\n"
+        log_message += (
+            f"Completion Reason: {code_result.get('completion_reason', '')}\n"
+        )
+        log_message += f"Summary: {code_result.get('summary', '')}\n"
+        exec_history = code_result.get("execution_history") or []
+        if exec_history:
+            log_message += "Execution History (truncated):\n"
+            # Only log first 3 steps and last 2 steps to keep logs manageable
+            total_steps = len(exec_history)
+            for i, step in enumerate(exec_history):
+                if i < 3 or i >= total_steps - 2:
+                    action = step.get("action", "")
+                    if "```python" in action:
+                        code_start = action.find("```python") + 9
+                        code_end = action.find("```", code_start)
+                        if code_end != -1:
+                            python_code = action[code_start:code_end].strip()
+                            log_message += (
+                                f"Step {i+1}: ```python\n{python_code}\n```\n"
+                            )
+                        else:
+                            log_message += f"Step {i+1}: {action}\n"
+                    elif "```bash" in action:
+                        code_start = action.find("```bash") + 7
+                        code_end = action.find("```", code_start)
+                        if code_end != -1:
+                            bash_code = action[code_start:code_end].strip()
+                            log_message += (
+                                f"Step {i+1}: ```bash\n{bash_code}\n```\n"
+                            )
+                        else:
+                            log_message += f"Step {i+1}: {action}\n"
+                    else:
+                        log_message += f"Step {i+1}: {action}\n"
+                elif i == 3 and total_steps > 5:
+                    log_message += f"... (truncated {total_steps - 5} steps) ...\n"
+
+        logger.info(
+            "WORKER_CODE_AGENT_RESULT_SECTION - Step %s: Code agent result logged:\n%s",
+            self.turn_count + 1,
+            safe_ascii(log_message),
+        )
     def update_latest_screenshot(self, screenshot: bytes | None) -> None:
         if not screenshot:
             return
@@ -343,6 +465,12 @@ class Worker(BaseModule):
             # Restore knowledge and code agent result if present
             if "knowledge" in prompts_state and isinstance(prompts_state.get("knowledge"), list):
                 self.grounding_agent.knowledge = prompts_state.get("knowledge") or []
+            if "code_agent_history" in prompts_state and isinstance(
+                prompts_state.get("code_agent_history"), list
+            ):
+                self.grounding_agent.code_agent_history = (
+                    prompts_state.get("code_agent_history") or []
+                )
             if prompts_state.get("last_code_agent_result") is not None:
                 self.grounding_agent.last_code_agent_result = prompts_state.get("last_code_agent_result")
 
@@ -416,6 +544,11 @@ class Worker(BaseModule):
                     },
                 )
                 reflection_text = self.worker_history[-1]
+                history_block = self._format_code_agent_history(
+                    self._get_code_agent_history()
+                )
+                if history_block:
+                    reflection_text += history_block
                 if image_bytes:
                     self.update_latest_screenshot(image_bytes)
                 self.reflection_agent.add_message(
@@ -578,141 +711,16 @@ class Worker(BaseModule):
             f"\nCurrent Text Buffer = [{','.join(self.grounding_agent.knowledge)}]\n"
         )
 
-        # Add code agent result from previous step if available (from full task or subtask execution)
+        history_block = self._format_code_agent_history(self._get_code_agent_history())
+        if history_block:
+            generator_message += history_block
+
+        # Log and clear the most recent code agent result after it has been captured.
         if (
             hasattr(self.grounding_agent, "last_code_agent_result")
             and self.grounding_agent.last_code_agent_result is not None
         ):
-            code_result = self.grounding_agent.last_code_agent_result
-            generator_message += f"\nCODE AGENT RESULT:\n"
-            generator_message += (
-                f"Task/Subtask Instruction: {code_result['task_instruction']}\n"
-            )
-            generator_message += f"Steps Completed: {code_result['steps_executed']}\n"
-            generator_message += f"Max Steps: {code_result['budget']}\n"
-            generator_message += (
-                f"Completion Reason: {code_result['completion_reason']}\n"
-            )
-            generator_message += f"Summary: {code_result['summary']}\n"
-            if code_result["execution_history"]:
-                generator_message += f"Execution History:\n"
-                for i, step in enumerate(code_result["execution_history"]):
-                    action = step["action"]
-                    # Format code snippets with proper backticks
-                    if "```python" in action:
-                        # Extract Python code and format it
-                        code_start = action.find("```python") + 9
-                        code_end = action.find("```", code_start)
-                        if code_end != -1:
-                            python_code = action[code_start:code_end].strip()
-                            generator_message += (
-                                f"Step {i+1}: \n```python\n{python_code}\n```\n"
-                            )
-                        else:
-                            generator_message += f"Step {i+1}: \n{action}\n"
-                    elif "```bash" in action:
-                        # Extract Bash code and format it
-                        code_start = action.find("```bash") + 7
-                        code_end = action.find("```", code_start)
-                        if code_end != -1:
-                            bash_code = action[code_start:code_end].strip()
-                            generator_message += (
-                                f"Step {i+1}: \n```bash\n{bash_code}\n```\n"
-                            )
-                        else:
-                            generator_message += f"Step {i+1}: \n{action}\n"
-                    else:
-                        generator_message += f"Step {i+1}: \n{action}\n"
-            generator_message += "\n"
-
-            # Save code agent result to text file
-            try:
-                import os
-                from datetime import datetime
-
-                # Create logs directory if it doesn't exist
-                logs_dir = "logs"
-                if not os.path.exists(logs_dir):
-                    os.makedirs(logs_dir)
-
-                # Generate filename with timestamp
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = (
-                    f"logs/code_agent_result_step_{self.turn_count + 1}_{timestamp}.txt"
-                )
-
-                with open(
-                    filename, "w", encoding="utf-8", errors="backslashreplace"
-                ) as f:
-                    f.write(f"CODE AGENT RESULT - Step {self.turn_count + 1}\n")
-                    f.write(f"Timestamp: {datetime.now().isoformat()}\n")
-                    f.write(
-                        f"Task/Subtask Instruction: {code_result['task_instruction']}\n"
-                    )
-                    f.write(f"Steps Completed: {code_result['steps_executed']}\n")
-                    f.write(f"Max Steps: {code_result['budget']}\n")
-                    f.write(f"Completion Reason: {code_result['completion_reason']}\n")
-                    f.write(f"Summary: {code_result['summary']}\n")
-                    if code_result["execution_history"]:
-                        f.write(f"\nExecution History:\n")
-                        for i, step in enumerate(code_result["execution_history"]):
-                            f.write(f"\nStep {i+1}:\n")
-                            f.write(f"Action: {step['action']}\n")
-                            if "thoughts" in step:
-                                f.write(f"Thoughts: {step['thoughts']}\n")
-
-                logger.info(f"Code agent result saved to: {filename}")
-            except Exception as e:
-                logger.error(f"Failed to save code agent result to file: {e}")
-
-            # Log the code agent result section for debugging (truncated execution history)
-            log_message = f"\nCODE AGENT RESULT:\n"
-            log_message += (
-                f"Task/Subtask Instruction: {code_result['task_instruction']}\n"
-            )
-            log_message += f"Steps Completed: {code_result['steps_executed']}\n"
-            log_message += f"Max Steps: {code_result['budget']}\n"
-            log_message += f"Completion Reason: {code_result['completion_reason']}\n"
-            log_message += f"Summary: {code_result['summary']}\n"
-            if code_result["execution_history"]:
-                log_message += f"Execution History (truncated):\n"
-                # Only log first 3 steps and last 2 steps to keep logs manageable
-                total_steps = len(code_result["execution_history"])
-                for i, step in enumerate(code_result["execution_history"]):
-                    if i < 3 or i >= total_steps - 2:  # First 3 and last 2 steps
-                        action = step["action"]
-                        if "```python" in action:
-                            code_start = action.find("```python") + 9
-                            code_end = action.find("```", code_start)
-                            if code_end != -1:
-                                python_code = action[code_start:code_end].strip()
-                                log_message += (
-                                    f"Step {i+1}: ```python\n{python_code}\n```\n"
-                                )
-                            else:
-                                log_message += f"Step {i+1}: {action}\n"
-                        elif "```bash" in action:
-                            code_start = action.find("```bash") + 7
-                            code_end = action.find("```", code_start)
-                            if code_end != -1:
-                                bash_code = action[code_start:code_end].strip()
-                                log_message += (
-                                    f"Step {i+1}: ```bash\n{bash_code}\n```\n"
-                                )
-                            else:
-                                log_message += f"Step {i+1}: {action}\n"
-                        else:
-                            log_message += f"Step {i+1}: {action}\n"
-                    elif i == 3 and total_steps > 5:
-                        log_message += f"... (truncated {total_steps - 5} steps) ...\n"
-
-            logger.info(
-                "WORKER_CODE_AGENT_RESULT_SECTION - Step %s: Code agent result added to generator message:\n%s",
-                self.turn_count + 1,
-                safe_ascii(log_message),
-            )
-
-            # Reset the code agent result after adding it to context
+            self._log_code_agent_result(self.grounding_agent.last_code_agent_result)
             self.grounding_agent.last_code_agent_result = None
 
         # Add handback inference result if present (from human intervention)
@@ -798,10 +806,7 @@ class Worker(BaseModule):
             {
                 "step": current_step,
                 "notes_count": len(getattr(self.grounding_agent, "knowledge", []) or []),
-                "has_code_agent_context": bool(
-                    hasattr(self.grounding_agent, "last_code_agent_result")
-                    and self.grounding_agent.last_code_agent_result
-                ),
+                "has_code_agent_context": bool(self._get_code_agent_history()),
             },
         )
 

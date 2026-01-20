@@ -147,6 +147,8 @@ def _build_trajectory_till_now(
     steps: List[RunnerStep],
     generator_messages: List[Dict[str, Any]],
     reflection_messages: List[Dict[str, Any]],
+    code_agent_history: Optional[List[Dict[str, Any]]] = None,
+    knowledge: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Build a snapshot of the trajectory so far for persistence/resume."""
     filtered_generator = [
@@ -159,10 +161,15 @@ def _build_trajectory_till_now(
         for msg in reflection_messages
         if msg.get("role") not in {"developer", "system"}
     ]
-    return {
+    snapshot = {
         "generator_messages": filtered_generator,
         "reflection_messages": filtered_reflection,
     }
+    if isinstance(code_agent_history, list):
+        snapshot["code_agent_history"] = copy.deepcopy(code_agent_history)
+    if isinstance(knowledge, list):
+        snapshot["knowledge"] = list(knowledge)
+    return snapshot
 
 
 def _build_trajectory_markdown(
@@ -247,21 +254,17 @@ def _build_trajectory_markdown(
                     if completion:
                         lines.append(f"**Completion**: {completion}")
 
-                    # Show execution history (limit to last 3 steps)
+                    # Show full execution history
                     if exec_history:
                         lines.append("**Execution History**:")
-                        for hist_step in exec_history[-3:]:  # Last 3 steps only
+                        for hist_step in exec_history:
                             step_num = hist_step.get("step", "?")
                             action = hist_step.get("action", "")
                             thoughts = hist_step.get("thoughts", "")
 
                             lines.append(f"  Step {step_num}:")
                             if action and action not in ("DONE", "FAIL"):
-                                # Truncate code
-                                code_display = action
-                                if len(code_display) > 800:
-                                    code_display = code_display[:800] + "... (truncated)"
-                                lines.append(f"    **Code**: ```\n{code_display}\n```")
+                                lines.append(f"    **Code**: ```\n{action}\n```")
                             else:
                                 lines.append(f"    **Action**: {action}")
                             if thoughts:
@@ -409,6 +412,14 @@ def runner(
                 ref_msgs = traj_state.get("reflection_messages") or []
                 agent.executor.generator_agent.messages = copy.deepcopy(gen_msgs)
                 agent.executor.reflection_agent.messages = copy.deepcopy(ref_msgs)
+                history = traj_state.get("code_agent_history")
+                if isinstance(history, list):
+                    agent.executor.grounding_agent.code_agent_history = copy.deepcopy(
+                        history
+                    )
+                knowledge = traj_state.get("knowledge")
+                if isinstance(knowledge, list):
+                    agent.executor.grounding_agent.knowledge = list(knowledge)
                 # Mark resume mode and bump turn_count to skip initial copy
                 agent.executor.resume_mode = True
             except Exception as exc:
@@ -625,6 +636,16 @@ def runner(
                             steps,
                             generator_messages,
                             reflection_messages_for_snapshot,
+                            code_agent_history=getattr(
+                                worker_executor.grounding_agent,
+                                "code_agent_history",
+                                None,
+                            ),
+                            knowledge=getattr(
+                                worker_executor.grounding_agent,
+                                "knowledge",
+                                None,
+                            ),
                         ),
                         "runner": {
                             "trajectory_md": partial_trajectory_md,

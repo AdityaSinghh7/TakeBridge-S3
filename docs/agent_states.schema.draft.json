@@ -263,6 +263,22 @@
             }
           ]
         },
+        "code_agent_history": [
+          {
+            "task_instruction": "string",
+            "steps_executed": 3,
+            "budget": 20,
+            "completion_reason": "DONE|FAIL|BUDGET_EXHAUSTED",
+            "summary": "string",
+            "execution_history": [
+              {
+                "step": 1,
+                "action": "```python\nprint('hi')\n```",
+                "thoughts": "string"
+              }
+            ]
+          }
+        ],
         "handback_inference": "string|null - formatted inference result for agent context after resume"
       },
       "handback": {
