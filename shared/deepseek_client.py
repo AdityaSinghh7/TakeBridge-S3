@@ -253,6 +253,9 @@ class DeepSeekClient:
         if resolved_base_url:
             client_kwargs["base_url"] = resolved_base_url
         self._client = OpenAI(**client_kwargs)
+        self._api_key = api_key
+        self._base_url = resolved_base_url
+        self._timeout = timeout
         self._default_model = default_model
         self._default_reasoning_effort = default_reasoning_effort
         self._default_reasoning_summary = default_reasoning_summary
@@ -263,6 +266,46 @@ class DeepSeekClient:
         self._retry_backoff_base = base
         self._retry_backoff_cap = cap
         self._retry_backoff_jitter = max(0.0, float(retry_backoff_jitter))
+
+    def as_langchain_chat_model(
+        self,
+        *,
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        timeout: Optional[float] = None,
+        max_retries: Optional[int] = None,
+        **kwargs: Any,
+    ) -> Any:
+        """
+        Build a langchain_openai.ChatOpenAI model for DeepSeek (OpenAI-compatible).
+        """
+        try:
+            from langchain_openai import ChatOpenAI
+        except Exception as exc:  # pragma: no cover - optional dependency
+            raise RuntimeError(
+                "The 'langchain-openai' package is required to use DeepSeek via LangChain."
+            ) from exc
+
+        resolved_model = model or self._default_model
+        resolved_api_key = api_key or self._api_key or os.getenv("DEEPSEEK_API_KEY")
+        resolved_base_url = (
+            base_url
+            or self._base_url
+            or os.getenv("DEEPSEEK_BASE_URL")
+            or "https://api.deepseek.com"
+        )
+        resolved_timeout = timeout if timeout is not None else self._timeout
+        resolved_retries = self._max_retries if max_retries is None else max(0, int(max_retries))
+
+        return ChatOpenAI(
+            model=resolved_model,
+            api_key=resolved_api_key,
+            base_url=resolved_base_url,
+            timeout=resolved_timeout,
+            max_retries=resolved_retries,
+            **kwargs,
+        )
 
     @property
     def default_model(self) -> str:

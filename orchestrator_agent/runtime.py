@@ -13,6 +13,7 @@ import asyncio
 import contextvars
 import json
 import logging
+import os
 from datetime import datetime
 from typing import Iterable, List, Optional, Tuple, Dict, Any, Callable
 
@@ -593,6 +594,147 @@ class OrchestratorRuntime:
         )
 
     def _call_planner_llm(
+        self, system_prompt: str, request: OrchestratorRequest
+    ) -> Dict:
+        """
+        Call the orchestrator planner using LangChain create_agent(), with
+        fallback to the shared LLM client if LangChain is unavailable.
+
+        Args:
+            system_prompt: The dynamic system prompt with capabilities and context
+            request: Orchestration request
+
+        Returns:
+            Decision dict: {"type": "next_step"|"task_complete"|"task_impossible", ...}
+
+        Raises:
+            Exception if planner call fails after retry
+        """
+        try:
+            return self._call_planner_agent(system_prompt, request)
+        except Exception as exc:
+            logger.warning("LangChain planner failed; falling back to LLMClient: %s", exc)
+            return self._call_planner_llm_fallback(system_prompt, request)
+
+    def _resolve_orchestrator_model(self) -> str:
+        return os.getenv("ORCHESTRATOR_MODEL") or os.getenv("LLM_MODEL") or "o4-mini"
+
+    def _build_orchestrator_middleware(self, request: OrchestratorRequest) -> List[Any]:
+        middleware: List[Any] = []
+        try:
+            from deepagents.middleware.filesystem import FilesystemMiddleware
+            from orchestrator_agent.capabilities import _resolve_controller
+            from server.api.deepagents_backend import VMControllerBackend
+
+            metadata = request.metadata or {}
+            controller = _resolve_controller(metadata)
+            if controller is None:
+                return middleware
+
+            vm_root = metadata.get("deepagents_vm_root") or metadata.get("vm_root")
+            backend = VMControllerBackend(
+                controller=controller,
+                vm_root=vm_root,
+            )
+            middleware.append(FilesystemMiddleware(backend=backend))
+        except Exception as exc:
+            logger.debug("DeepAgents filesystem middleware unavailable: %s", exc)
+        return middleware
+
+    def _extract_agent_text(self, result: Any) -> str:
+        if result is None:
+            return ""
+        if isinstance(result, dict):
+            messages = result.get("messages")
+            if isinstance(messages, list) and messages:
+                last = messages[-1]
+                if hasattr(last, "content"):
+                    return str(getattr(last, "content", "") or "")
+                if isinstance(last, dict):
+                    return str(last.get("content") or "")
+            for key in ("output", "text", "content"):
+                val = result.get(key)
+                if isinstance(val, str):
+                    return val
+        if hasattr(result, "content"):
+            return str(getattr(result, "content", "") or "")
+        return str(result)
+
+    def _call_planner_agent(
+        self, system_prompt: str, request: OrchestratorRequest
+    ) -> Dict:
+        """
+        Call the LangChain agent created via create_agent().
+        """
+        try:
+            from langchain.agents import create_agent
+        except Exception as exc:
+            raise RuntimeError(
+                "LangChain create_agent is not available. "
+                "Install langchain to enable the LangChain planner."
+            ) from exc
+
+        model_name = self._resolve_orchestrator_model()
+        user_message = "What should be the next step to accomplish this goal?"
+
+        max_attempts = 3
+        retry_note = (
+            "Your previous response was invalid JSON. "
+            "Return a single valid JSON object that matches the schema. "
+            "Ensure all strings are properly escaped and closed. "
+            "Do not include any extra text."
+        )
+
+        for attempt in range(max_attempts):
+            attempt_prompt = system_prompt if attempt == 0 else f"{system_prompt}\n\n{retry_note}"
+            middleware = self._build_orchestrator_middleware(request)
+            agent = create_agent(
+                model=model_name,
+                tools=[],
+                middleware=middleware,
+                system_prompt=attempt_prompt,
+            )
+            result = agent.invoke(
+                {"messages": [{"role": "user", "content": user_message}]}
+            )
+            text = self._extract_agent_text(result)
+            if not text:
+                logger.error(
+                    "LangChain planner returned empty output (attempt %s/%s)",
+                    attempt + 1,
+                    max_attempts,
+                )
+                if attempt + 1 < max_attempts:
+                    continue
+                raise ValueError("LangChain planner returned empty output")
+
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError as exc:
+                logger.error(
+                    "LangChain planner returned invalid JSON (attempt %s/%s): %s",
+                    attempt + 1,
+                    max_attempts,
+                    exc,
+                )
+                if attempt + 1 < max_attempts:
+                    continue
+                raise
+
+            if parsed.get("type") not in ["next_step", "task_complete", "task_impossible"]:
+                logger.info(
+                    "Retrying LangChain planner due to invalid response type: %s",
+                    parsed.get("type"),
+                )
+                if attempt + 1 < max_attempts:
+                    continue
+                raise ValueError(f"Invalid response type: {parsed.get('type')}")
+
+            return parsed
+
+        raise RuntimeError("LangChain planner failed after retries")
+
+    def _call_planner_llm_fallback(
         self, system_prompt: str, request: OrchestratorRequest
     ) -> Dict:
         """

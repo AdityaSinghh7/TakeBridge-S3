@@ -72,6 +72,9 @@ dependencies = [
   "python-jose[cryptography]>=3.5.0",
   "supabase>=2.5.0,<3.0.0",
   "honcho>=2.0.0",
+  "deepagents>=0.3.6",
+  "langchain>=1.2.6",
+  "langchain-openai>=1.1.7",
 ]
 
 [project.optional-dependencies]

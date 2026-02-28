@@ -498,6 +498,9 @@ class LLMClient:
     ) -> None:
         if timeout is None:
             timeout = get_default_llm_timeout()
+        self._api_key = api_key
+        self._base_url = base_url
+        self._max_retries = max_retries
         self._provider = _normalize_provider(provider)
         self._fallback_provider = os.getenv("LLM_FALLBACK_PROVIDER")
         self._fallback_provider = (
@@ -541,6 +544,74 @@ class LLMClient:
     @property
     def default_model(self) -> str:
         return self._default_model
+
+    def as_langchain_chat_model(
+        self,
+        *,
+        model: Optional[str] = None,
+        messages: Optional[Iterable[Message]] = None,
+        input: Optional[Union[InputItem, Sequence[InputItem], str]] = None,
+        conversation: Optional[str] = None,
+        previous_response_id: Optional[str] = None,
+        carry_items: Optional[List[InputItem]] = None,
+        **kwargs: Any,
+    ) -> Any:
+        """
+        Build a langchain_openai.ChatOpenAI model routed through the configured provider.
+        """
+        provider, resolved_model = self.resolve_request_model(
+            model=model,
+            messages=messages,
+            input=input,
+            conversation=conversation,
+            previous_response_id=previous_response_id,
+            carry_items=carry_items,
+        )
+
+        client = None
+        if provider == self._provider:
+            client = self._client
+        elif provider == self._image_provider:
+            client = self._get_image_client()
+        elif provider == self._fallback_provider:
+            client = self._get_fallback_client()
+
+        if client is None:
+            client = self._build_provider_client(
+                provider=provider,
+                default_model=resolved_model,
+                default_reasoning_effort="medium",
+                default_reasoning_summary=None,
+                timeout=self._timeout,
+                base_url=self._base_url,
+            )
+
+        if hasattr(client, "as_langchain_chat_model"):
+            return client.as_langchain_chat_model(model=resolved_model, **kwargs)
+
+        if provider == "openai":
+            try:
+                from langchain_openai import ChatOpenAI
+            except Exception as exc:  # pragma: no cover - optional dependency
+                raise RuntimeError(
+                    "The 'langchain-openai' package is required to use OpenAI via LangChain."
+                ) from exc
+            resolved_api_key = self._api_key or os.getenv("OPENAI_API_KEY")
+            resolved_base_url = self._base_url or os.getenv("OPENAI_BASE_URL")
+            resolved_timeout = self._timeout
+            resolved_retries = self._max_retries
+            if resolved_retries is not None:
+                resolved_retries = max(0, int(resolved_retries))
+            return ChatOpenAI(
+                model=resolved_model,
+                api_key=resolved_api_key,
+                base_url=resolved_base_url,
+                timeout=resolved_timeout,
+                max_retries=resolved_retries,
+                **kwargs,
+            )
+
+        raise RuntimeError(f"Provider '{provider}' does not expose a LangChain model adapter.")
 
     def _build_provider_client(self, *, provider: str, **kwargs: Any) -> Any:
         if provider == "openai":

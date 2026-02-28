@@ -11,7 +11,17 @@ drift between the agents that will plug into this orchestrator.
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
+
+try:
+    from langchain_core.messages import BaseMessage
+    from langgraph.graph.message import add_messages
+except Exception:  # pragma: no cover - optional dependency
+    class BaseMessage:  # type: ignore[no-redef]
+        pass
+
+    def add_messages(messages: List["BaseMessage"]) -> List["BaseMessage"]:
+        return list(messages)
 
 AgentTarget = Literal["mcp", "computer_use"]
 StepStatus = Literal["pending", "running", "completed", "failed"]
@@ -347,6 +357,29 @@ class OrchestratorContext:
         return self.step_outputs[-1] if self.step_outputs else None
 
 
+def _serialize_message(message: Any) -> Any:
+    if message is None:
+        return None
+    if isinstance(message, dict):
+        return message
+    if hasattr(message, "model_dump") and callable(getattr(message, "model_dump")):
+        try:
+            return message.model_dump()
+        except Exception:
+            pass
+    if hasattr(message, "dict") and callable(getattr(message, "dict")):
+        try:
+            return message.dict()
+        except Exception:
+            pass
+    if hasattr(message, "__dict__"):
+        try:
+            return {k: v for k, v in vars(message).items() if not k.startswith("_")}
+        except Exception:
+            pass
+    return str(message)
+
+
 @dataclass
 class RunState:
     """Per-run state tracked inside the outer loop."""
@@ -354,6 +387,7 @@ class RunState:
     request: OrchestratorRequest
     plan: List[PlannedStep] = field(default_factory=list)
     results: List[StepResult] = field(default_factory=list)
+    messages: Annotated[List[BaseMessage], add_messages] = field(default_factory=list)
     intermediate: Dict[str, Any] = field(default_factory=dict)
     cost_baseline: float = 0.0
 
@@ -405,6 +439,7 @@ class RunState:
             "cost_baseline": self.cost_baseline,
             "plan": [asdict(step) for step in self.plan],
             "results": [asdict(result) for result in self.results],
+            "messages": [_serialize_message(message) for message in self.messages],
             "intermediate": self.intermediate,
             "pending_steps": [asdict(step) for step in self.pending_steps()],
         }

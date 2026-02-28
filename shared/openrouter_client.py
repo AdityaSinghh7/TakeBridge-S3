@@ -334,6 +334,9 @@ class OpenRouterClient:
         if resolved_base_url:
             client_kwargs["base_url"] = resolved_base_url
         self._client = OpenAI(**client_kwargs)
+        self._api_key = api_key
+        self._base_url = resolved_base_url
+        self._timeout = timeout
         self._default_model = default_model
         self._default_reasoning_effort = default_reasoning_effort
         self._default_reasoning_summary = default_reasoning_summary
@@ -345,6 +348,52 @@ class OpenRouterClient:
         self._retry_backoff_cap = cap
         self._retry_backoff_jitter = max(0.0, float(retry_backoff_jitter))
         self._extra_headers = _default_extra_headers()
+
+    def as_langchain_chat_model(
+        self,
+        *,
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        timeout: Optional[float] = None,
+        max_retries: Optional[int] = None,
+        default_headers: Optional[Dict[str, str]] = None,
+        **kwargs: Any,
+    ) -> Any:
+        """
+        Build a langchain_openai.ChatOpenAI model for OpenRouter.
+        """
+        try:
+            from langchain_openai import ChatOpenAI
+        except Exception as exc:  # pragma: no cover - optional dependency
+            raise RuntimeError(
+                "The 'langchain-openai' package is required to use OpenRouter via LangChain."
+            ) from exc
+
+        resolved_model = model or self._default_model
+        resolved_api_key = api_key or self._api_key or os.getenv("OPENROUTER_API_KEY")
+        resolved_base_url = (
+            base_url
+            or self._base_url
+            or os.getenv("OPENROUTER_BASE_URL")
+            or "https://openrouter.ai/api/v1"
+        )
+        resolved_timeout = timeout if timeout is not None else self._timeout
+        resolved_retries = self._max_retries if max_retries is None else max(0, int(max_retries))
+
+        headers = dict(self._extra_headers)
+        if default_headers:
+            headers.update(default_headers)
+
+        return ChatOpenAI(
+            model=resolved_model,
+            api_key=resolved_api_key,
+            base_url=resolved_base_url,
+            timeout=resolved_timeout,
+            max_retries=resolved_retries,
+            default_headers=headers or None,
+            **kwargs,
+        )
 
     @property
     def default_model(self) -> str:
