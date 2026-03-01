@@ -72,6 +72,10 @@ dependencies = [
   "python-jose[cryptography]>=3.5.0",
   "supabase>=2.5.0,<3.0.0",
   "honcho>=2.0.0",
+  "langgraph==1.0.8",
+  "langgraph-checkpoint-postgres>=2.0.0,<3.0.0",
+  "langchain-core>=1.0.0,<2.0.0",
+  "psycopg[binary]>=3.2.0,<4.0.0",
 ]
 
 [project.optional-dependencies]

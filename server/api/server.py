@@ -1245,7 +1245,7 @@ async def config_defaults() -> Dict[str, Any]:
 
 async def _resume_run_local(run_id: str, current_user: CurrentUser) -> Dict[str, Any]:
     from server.api.controller_client import VMControllerClient
-    from server.api.handback_inference import infer_human_action
+    from server.api.handback_inference import infer_human_action, format_inference_for_context
     from shared.db.workflow_runs import merge_agent_states, decode_agent_states
     from orchestrator_agent.bridges import run_computer_use_agent_resume
     from computer_use_agent.orchestrator.data_types import OrchestrateRequest
@@ -1289,11 +1289,13 @@ async def _resume_run_local(run_id: str, current_user: CurrentUser) -> Dict[str,
                 orchestrator_state = json.loads(orchestrator_state)
             except Exception:
                 orchestrator_state = {}
+        checkpoint_meta = computer_use_state.get("checkpoint") or {}
         computer_use_snapshot = {
             "status": computer_use_state.get("status"),
             "completion_reason": computer_use_state.get("completion_reason"),
             "step_index_next": computer_use_state.get("step_index_next"),
             "trajectory_till_now": computer_use_state.get("trajectory_till_now", {}),
+            "checkpoint": checkpoint_meta,
         }
 
         request_dict = computer_use_state.get("request") or {}
@@ -1353,34 +1355,52 @@ async def _resume_run_local(run_id: str, current_user: CurrentUser) -> Dict[str,
                 "details": str(e),
             }
 
+        inference_context = format_inference_for_context(
+            inference_result,
+            handback_request or "",
+            previous_trajectory=((computer_use_state.get("runner") or {}).get("trajectory_md") or ""),
+        )
+
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         resume_from_step = computer_use_snapshot.get("step_index_next", 0) + 1
 
-        trajectory_snapshot = computer_use_snapshot.get("trajectory_till_now") or {}
-        generator_messages = trajectory_snapshot.get("generator_messages") or []
-        updated_generator_messages = copy.deepcopy(generator_messages)
-        updated_generator_messages.append(
-            {
-                "role": "assistant",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": f"HANDBACK RESULT:\n{json.dumps(inference_result, ensure_ascii=False)}",
-                    }
-                ],
+        inference_update: Dict[str, Any]
+        if checkpoint_meta:
+            # Graph-native resume path: rely on LangGraph checkpoint thread + minimal continuation context.
+            inference_update = {
+                "checkpoint": checkpoint_meta,
+                "inference_result": inference_result,
+                "latest_screenshot_b64": current_screenshot_b64,
+                "status": computer_use_snapshot.get("status"),
+                "completion_reason": computer_use_snapshot.get("completion_reason"),
+                "step_index_next": computer_use_snapshot.get("step_index_next"),
             }
-        )
-        updated_trajectory = {
-            **trajectory_snapshot,
-            "generator_messages": updated_generator_messages,
-        }
-
-        inference_update = {
-            **computer_use_snapshot,
-            "trajectory_till_now": updated_trajectory,
-            "inference_result": inference_result,
-            "latest_screenshot_b64": current_screenshot_b64,
-        }
+        else:
+            # Legacy snapshot compatibility path.
+            trajectory_snapshot = computer_use_snapshot.get("trajectory_till_now") or {}
+            generator_messages = trajectory_snapshot.get("generator_messages") or []
+            updated_generator_messages = copy.deepcopy(generator_messages)
+            updated_generator_messages.append(
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"HANDBACK RESULT:\n{json.dumps(inference_result, ensure_ascii=False)}",
+                        }
+                    ],
+                }
+            )
+            updated_trajectory = {
+                **trajectory_snapshot,
+                "generator_messages": updated_generator_messages,
+            }
+            inference_update = {
+                **computer_use_snapshot,
+                "trajectory_till_now": updated_trajectory,
+                "inference_result": inference_result,
+                "latest_screenshot_b64": current_screenshot_b64,
+            }
 
         try:
             merge_agent_states(run_id, inference_update, path=["agents", "computer_use"])
@@ -1405,12 +1425,14 @@ async def _resume_run_local(run_id: str, current_user: CurrentUser) -> Dict[str,
         overall_success = False
         error_msg: Optional[str] = None
         combined_trajectory = resume_trajectory
-        try:
-            prior_runner = (computer_use_state.get("runner") or {}).get("trajectory_md") or ""
-            if prior_runner:
-                combined_trajectory = prior_runner + "\n\n" + resume_trajectory
-        except Exception:
-            combined_trajectory = resume_trajectory
+        if not checkpoint_meta:
+            # Legacy resume returned only continuation trajectory, so prepend prior snapshot.
+            try:
+                prior_runner = (computer_use_state.get("runner") or {}).get("trajectory_md") or ""
+                if prior_runner:
+                    combined_trajectory = prior_runner + "\n\n" + resume_trajectory
+            except Exception:
+                combined_trajectory = resume_trajectory
         try:
             translated_resume = translate_step_output(
                 task=cu_request.task if cu_request else "",
@@ -1505,6 +1527,8 @@ async def _resume_run_local(run_id: str, current_user: CurrentUser) -> Dict[str,
                 "should_inject_inference": True,
                 "resume_from_step": resume_from_step,
                 "resumed_at": now,
+                "checkpoint": checkpoint_meta or None,
+                "inference_context": inference_context,
             },
         }
 

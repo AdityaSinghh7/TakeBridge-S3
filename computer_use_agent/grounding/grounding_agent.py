@@ -759,7 +759,7 @@ class OSWorldACI(ACI):
         element_description: str,
         num_clicks: int = 1,
         button_type: str = "left",
-        hold_keys: List = [],
+        hold_keys: Optional[List[str]] = None,
     ):
         """Click on the element
         Args:
@@ -771,6 +771,7 @@ class OSWorldACI(ACI):
         coords1 = self.generate_coords(element_description, self.obs)
         x, y = self.resize_coordinates(coords1)
         command = "import pyautogui; "
+        hold_keys = hold_keys or []
 
         # Move cursor to target before clicking for stability
         command += f"pyautogui.moveTo({x}, {y}, duration=0.15); "
@@ -785,7 +786,7 @@ class OSWorldACI(ACI):
         return command
 
     @agent_action
-    def switch_applications(self, app_code):
+    def switch_applications(self, app_code: str):
         """Switch to a different application that is already open
         Args:
             app_code:str the code name of the application to switch to from the provided list of open applications
@@ -930,7 +931,10 @@ class OSWorldACI(ACI):
 
     @agent_action
     def drag_and_drop(
-        self, starting_description: str, ending_description: str, hold_keys: List = []
+        self,
+        starting_description: str,
+        ending_description: str,
+        hold_keys: Optional[List[str]] = None,
     ):
         """Drag from the starting description to the ending description
         Args:
@@ -944,6 +948,7 @@ class OSWorldACI(ACI):
         x2, y2 = self.resize_coordinates(coords2)
 
         command = "import pyautogui; "
+        hold_keys = hold_keys or []
 
         command += f"pyautogui.moveTo({x1}, {y1}); "
         # TODO: specified duration?
@@ -1122,7 +1127,7 @@ class OSWorldACI(ACI):
             return f"import pyautogui; import time; pyautogui.moveTo({x}, {y}); time.sleep(0.5); pyautogui.vscroll({clicks})"
 
     @agent_action
-    def hotkey(self, keys: List):
+    def hotkey(self, keys: List[str]):
         """Press a hotkey combination
         Args:
             keys:List the keys to press in combination in a list format (e.g. ['ctrl', 'c'])
@@ -1132,7 +1137,7 @@ class OSWorldACI(ACI):
         return f"import pyautogui; pyautogui.hotkey({', '.join(keys)})"
 
     @agent_action
-    def hold_and_press(self, hold_keys: List, press_keys: List):
+    def hold_and_press(self, hold_keys: List[str], press_keys: List[str]):
         """Hold a list of keys and press a list of keys
         Args:
             hold_keys:List, list of keys to hold

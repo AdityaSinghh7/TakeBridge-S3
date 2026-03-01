@@ -2,32 +2,41 @@ from __future__ import annotations
 
 import base64
 import copy
+import json
 import logging
 import os
+import textwrap
+import uuid
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Tuple, cast
 
-from computer_use_agent.agent_s import AgentS3
-from computer_use_agent.worker.worker import Worker
-from server.api.controller_client import VMControllerClient
+from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.graph import END, START, StateGraph
+from langgraph.prebuilt import ToolNode
+
+from computer_use_agent.grounding.agent_tools import GroundingActionToolExecutor
 from computer_use_agent.grounding.grounding_agent import OSWorldACI
+from computer_use_agent.memory.procedural_memory import PROCEDURAL_MEMORY
+from computer_use_agent.orchestrator.checkpointer import get_graph_checkpointer
 from computer_use_agent.orchestrator.data_types import (
-    DEFAULT_CONTROLLER_CONFIG,
-    DEFAULT_GROUNDING_CONFIG,
-    DEFAULT_WORKER_CONFIG,
     OrchestrateRequest,
     RunnerResult,
     RunnerStep,
 )
-from computer_use_agent.utils.local_env import LocalEnv
+from computer_use_agent.orchestrator.graph_state import ComputerUseGraphState
+from computer_use_agent.orchestrator.llm_adapter import ToolCallingLLMAdapter
 from computer_use_agent.utils.behavior_narrator import BehaviorNarrator
+from computer_use_agent.utils.common_utils import split_thinking_response
 from computer_use_agent.utils.computer_use_html_logger import ComputerUseHtmlLogger
-from shared.latency_logger import LATENCY_LOGGER
-from shared.streaming import emit_event
+from computer_use_agent.utils.local_env import LocalEnv
+from server.api.controller_client import VMControllerClient
 from shared import agent_signal
+from shared.db.workflow_runs import mark_run_attention, merge_agent_states
+from shared.latency_logger import LATENCY_LOGGER
 from shared.run_context import RUN_LOG_ID
-from shared.db.workflow_runs import merge_agent_states, mark_run_attention
+from shared.streaming import emit_event
 
 logger = logging.getLogger(__name__)
 
@@ -49,26 +58,22 @@ def _read_text_prompt(path: Path) -> str:
 
 
 def _execute_remote_pyautogui(controller: VMControllerClient, code: str) -> Dict[str, Any]:
-    """Execute the generated pyautogui script on the remote VM via the controller."""
     script = code.strip()
     payload = base64.b64encode(script.encode("utf-8")).decode("utf-8")
-    # Prefer single-line command on Windows to avoid CreateProcess arg issues.
-    # Keep payload quoted so it survives JSON transport on Windows.
-    python_cmd_template = "import base64, sys; exec(base64.b64decode(\"{payload}\").decode())"
-    # Choose python executable based on remote platform (python3 may not exist on Windows)
+    python_cmd_template = 'import base64; exec(base64.b64decode("{payload}").decode())'
     python_exe = "python3"
     try:
         platform_val = controller.get_platform()
         if isinstance(platform_val, str) and platform_val.lower().startswith("win"):
             python_exe = "python"
     except Exception:
-        platform_val = None  # fallback
+        platform_val = None
     python_cmd = python_cmd_template.format(payload=payload)
 
     try:
         preview = script[:400].replace("\n", "\\n")
         logger.info(
-            "Executing remote pyautogui via %s platform=%s - code preview: %s",
+            "Executing remote pyautogui via %s platform=%s preview=%s",
             python_exe,
             str(platform_val),
             preview,
@@ -102,17 +107,10 @@ def _build_grounding_prompts(
 def _prune_images_in_messages(
     messages: List[Dict[str, Any]],
     *,
-    keep_image_turns: int = 2,
-    persist_images: bool = False,
+    keep_image_turns: int,
 ) -> List[Dict[str, Any]]:
-    """
-    Optionally remove older image parts to reduce payload size.
-    If persist_images is False: strip all image parts.
-    If persist_images is True: keep images in the last `keep_image_turns` messages; strip older ones.
-    """
     if not messages:
         return []
-
     pruned: List[Dict[str, Any]] = []
     total = len(messages)
     for idx, msg in enumerate(messages):
@@ -120,37 +118,28 @@ def _prune_images_in_messages(
         if not isinstance(content, list):
             pruned.append(msg)
             continue
-
         new_content = []
         for part in content:
             if not isinstance(part, dict):
                 new_content.append(part)
                 continue
-            part_type = part.get("type", "")
-            if not persist_images:
-                if part_type in {"image", "image_url"}:
-                    continue
-            else:
-                # keep images only for the last keep_image_turns messages
-                if part_type in {"image", "image_url"} and idx < total - keep_image_turns:
-                    continue
+            part_type = part.get("type")
+            if part_type in {"image", "image_url"} and idx < total - keep_image_turns:
+                continue
             new_content.append(part)
-
-        new_msg = dict(msg)
-        new_msg["content"] = new_content
-        pruned.append(new_msg)
+        msg_copy = dict(msg)
+        msg_copy["content"] = new_content
+        pruned.append(msg_copy)
     return pruned
 
 
-
 def _build_trajectory_till_now(
-    steps: List[RunnerStep],
     generator_messages: List[Dict[str, Any]],
     reflection_messages: List[Dict[str, Any]],
+    *,
     code_agent_history: Optional[List[Dict[str, Any]]] = None,
     knowledge: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Build a snapshot of the trajectory so far for persistence/resume."""
     filtered_generator = [
         copy.deepcopy(msg)
         for msg in generator_messages
@@ -161,7 +150,7 @@ def _build_trajectory_till_now(
         for msg in reflection_messages
         if msg.get("role") not in {"developer", "system"}
     ]
-    snapshot = {
+    snapshot: Dict[str, Any] = {
         "generator_messages": filtered_generator,
         "reflection_messages": filtered_reflection,
     }
@@ -181,124 +170,77 @@ def _build_trajectory_markdown(
     handback_inference: Optional[Dict[str, Any]] = None,
     include_final_status: bool = True,
 ) -> str:
-    """Build COMPLETE self-contained markdown trajectory for orchestrator.
-
-    CRITICAL: This trajectory must contain ALL relevant data.
-    NO raw outputs or telemetry should be needed - everything is in this markdown.
-
-    Args:
-        steps: List of execution steps
-        status: Final status (success, failed, timeout)
-        completion_reason: Reason for completion (DONE, FAIL, MAX_STEPS_REACHED)
-
-    Returns:
-        Rich markdown trajectory showing all steps with complete data
-    """
-    import json
-
-    lines = []
-
+    lines: List[str] = []
     for step in steps:
         lines.append(f"## Step {step.step_index}")
         lines.append("")
 
-        # Worker output
         if step.plan:
             lines.append("### Worker Agent")
             lines.append(f"**Plan**: {step.plan}")
-
             if step.action:
-                # Truncate action for readability
                 action_display = step.action
                 if len(action_display) > 600:
                     action_display = action_display[:600] + "... (truncated)"
                 lines.append(f"**Action**: `{action_display}`")
-
             if step.execution_result:
                 result_json = json.dumps(step.execution_result, indent=2, ensure_ascii=False)
                 lines.append(f"**Execution Result**:\n```json\n{result_json}\n```")
 
-        # Reflection output
         if step.reflection:
             lines.append("")
             lines.append("### Reflection Agent")
             lines.append(f"**Reflection**: {step.reflection}")
-
             if step.reflection_thoughts:
                 lines.append(f"**Thoughts**: {step.reflection_thoughts}")
 
-        # Behaviour narrator output
         if step.behavior_fact_answer:
             lines.append("")
             lines.append("### Behaviour Narrator")
             lines.append(f"**Observation**: {step.behavior_fact_answer}")
-
             if step.behavior_fact_thoughts:
                 lines.append(f"**Analysis**: {step.behavior_fact_thoughts}")
 
-        # Code agent output (if present)
         if step.info:
             code_output = step.info.get("code_agent_output")
             if code_output:
                 lines.append("")
                 lines.append("### Code Agent")
-
                 if isinstance(code_output, dict):
-                    # Extract code and result
                     summary = code_output.get("summary", "")
                     completion = code_output.get("completion_reason", "")
                     exec_history = code_output.get("execution_history", [])
-
                     if summary:
                         lines.append(f"**Summary**: {summary}")
                     if completion:
                         lines.append(f"**Completion**: {completion}")
-
-                    # Show full execution history
                     if exec_history:
                         lines.append("**Execution History**:")
                         for hist_step in exec_history:
                             step_num = hist_step.get("step", "?")
                             action = hist_step.get("action", "")
                             thoughts = hist_step.get("thoughts", "")
-
                             lines.append(f"  Step {step_num}:")
-                            if action and action not in ("DONE", "FAIL"):
+                            if action and action not in {"DONE", "FAIL"}:
                                 lines.append(f"    **Code**: ```\n{action}\n```")
                             else:
                                 lines.append(f"    **Action**: {action}")
                             if thoughts:
-                                thoughts_display = thoughts[:400]
-                                lines.append(f"    **Thoughts**: {thoughts_display}")
-                else:
-                    # Fallback: show as string
-                    output_str = str(code_output)
-                    if len(output_str) > 1000:
-                        output_str = output_str[:1000] + "... (truncated)"
-                    lines.append(f"**Output**: {output_str}")
+                                lines.append(f"    **Thoughts**: {thoughts[:400]}")
 
-        # Handback to human output (if present)
         if step.handback_request:
             lines.append("")
             lines.append("### Handback to Human")
             lines.append(f"**Request**: {step.handback_request}")
             lines.append("**Status**: Awaiting human intervention")
 
-        lines.append("")  # Blank line between steps
+        lines.append("")
 
-    # Final status / resume context footer
     if is_resume_flow:
         lines.append("## Resume Context")
-        lines.append(
-            "This is a resume flow. A handback_to_human occurred in this step."
-        )
+        lines.append("This is a resume flow. A handback_to_human occurred in this step.")
         if handback_inference:
-            import json as _json
-
-            try:
-                inference_json = _json.dumps(handback_inference, ensure_ascii=False, indent=2)
-            except Exception:
-                inference_json = str(handback_inference)
+            inference_json = json.dumps(handback_inference, ensure_ascii=False, indent=2)
             lines.append("")
             lines.append("### Handback Inference")
             lines.append("The most recent handback result:")
@@ -311,19 +253,812 @@ def _build_trajectory_markdown(
     return "\n".join(lines)
 
 
+def _guess_image_mime(image_bytes: bytes) -> str:
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if image_bytes[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/png"
+
+
+def _image_url_from_b64(image_b64: Optional[str]) -> Optional[str]:
+    if not image_b64:
+        return None
+    try:
+        raw = base64.b64decode(image_b64)
+    except Exception:
+        return None
+    mime = _guess_image_mime(raw)
+    return f"data:{mime};base64,{image_b64}"
+
+
+def _tool_payload_from_messages(messages: List[Any]) -> Dict[str, Any]:
+    for message in reversed(messages):
+        if not isinstance(message, ToolMessage):
+            continue
+        payload: Dict[str, Any]
+        artifact = getattr(message, "artifact", None)
+        if isinstance(artifact, dict):
+            payload = dict(artifact)
+            payload.setdefault("tool_name", getattr(message, "name", None))
+            if getattr(message, "status", "success") == "error":
+                payload.setdefault("status_signal", "FAIL")
+                payload.setdefault("exec_code", "FAIL")
+                payload.setdefault(
+                    "execution_result",
+                    {"error": str(message.content or "tool_error")},
+                )
+            return payload
+        content = message.content
+        if isinstance(content, dict):
+            payload = dict(content)
+        elif isinstance(content, list):
+            joined = "\n".join(str(part) for part in content)
+            try:
+                payload = json.loads(joined)
+            except Exception:
+                payload = {"value": joined}
+        else:
+            text = str(content or "")
+            try:
+                payload = json.loads(text)
+            except Exception:
+                payload = {"value": text}
+        payload.setdefault("tool_name", getattr(message, "name", None))
+        if getattr(message, "status", "success") == "error":
+            payload.setdefault("status_signal", "FAIL")
+            payload.setdefault("exec_code", "FAIL")
+            payload.setdefault("execution_result", {"error": str(content or "tool_error")})
+        return payload
+    return {}
+
+
+def _tool_node_error_message(exc: Exception) -> str:
+    payload = {
+        "status_signal": "FAIL",
+        "exec_code": "FAIL",
+        "execution_result": {"error": str(exc)},
+        "action_kind": "tool_error",
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _format_code_agent_history(history: List[Dict[str, Any]]) -> str:
+    if not history:
+        return ""
+    lines = ["", "CODE AGENT HISTORY:"]
+    for idx, code_result in enumerate(history, 1):
+        lines.append(f"Result {idx}:")
+        lines.append(f"Task/Subtask Instruction: {code_result.get('task_instruction', '')}")
+        lines.append(f"Steps Completed: {code_result.get('steps_executed', '')}")
+        lines.append(f"Max Steps: {code_result.get('budget', '')}")
+        lines.append(f"Completion Reason: {code_result.get('completion_reason', '')}")
+        lines.append(f"Summary: {code_result.get('summary', '')}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _build_request_snapshot(request: OrchestrateRequest) -> Dict[str, Any]:
+    return {
+        "task": request.task,
+        "worker": asdict(request.worker),
+        "grounding": asdict(request.grounding),
+        "controller": asdict(request.controller),
+        "platform": request.platform,
+        "enable_code_execution": request.enable_code_execution,
+        "tool_constraints": asdict(request.tool_constraints) if request.tool_constraints else None,
+    }
+
+
+class _RunnerRuntime:
+    def __init__(
+        self,
+        *,
+        request: OrchestrateRequest,
+        controller: VMControllerClient,
+        platform: str,
+        screen_width: int,
+        screen_height: int,
+        run_id: str,
+    ) -> None:
+        self.request = request
+        self.controller = controller
+        self.platform = platform
+        self.run_id = run_id
+        self.thread_id = run_id
+        self.checkpoint_ns = "computer_use"
+        self.worker_cfg = request.worker
+        self.grounding_cfg = request.grounding
+        self.html_logger = ComputerUseHtmlLogger(run_id)
+        env = LocalEnv() if request.enable_code_execution else ControllerEnv(controller)
+
+        self.grounding_agent = OSWorldACI(
+            env=env,
+            platform=platform,
+            engine_params_for_generation=self.grounding_cfg.engine_params_for_generation,
+            engine_params_for_grounding=self.grounding_cfg.engine_params_for_grounding,
+            width=screen_width,
+            height=screen_height,
+            code_agent_budget=self.grounding_cfg.code_agent_budget,
+            code_agent_engine_params=self.grounding_cfg.code_agent_engine_params,
+            grounding_base_url=self.grounding_cfg.grounding_base_url,
+            grounding_system_prompt=self.grounding_cfg.grounding_system_prompt,
+            grounding_timeout=self.grounding_cfg.grounding_timeout,
+            grounding_max_retries=self.grounding_cfg.grounding_max_retries,
+            grounding_api_key=self.grounding_cfg.grounding_api_key,
+        )
+        self.behavior_narrator = BehaviorNarrator(engine_params=self.worker_cfg.engine_params)
+        self.generator_adapter = ToolCallingLLMAdapter(self.worker_cfg.engine_params)
+        self.reflection_adapter = ToolCallingLLMAdapter(self.worker_cfg.engine_params)
+        self.tool_executor = GroundingActionToolExecutor(
+            grounding_agent=self.grounding_agent,
+            controller=self.controller,
+            remote_execute_fn=_execute_remote_pyautogui,
+            post_action_worker_delay=self.worker_cfg.post_action_worker_delay,
+        )
+        self.tools = self.tool_executor.build_tools()
+        self.tool_node = ToolNode(
+            self.tools,
+            handle_tool_errors=_tool_node_error_message,
+        )
+        self.generator_prompt_template = self._load_generator_prompt_template()
+
+    def _load_generator_prompt_template(self) -> str:
+        prompt_path = Path("computer_use_agent/worker/system_prompt.txt")
+        raw = _read_text_prompt(prompt_path).strip()
+        if "Your response should be formatted like this:" in raw:
+            raw = raw.split("Your response should be formatted like this:", 1)[0].rstrip()
+        tool_block = ["Available tools you can call directly (one per step):"]
+        for tool in self.tools:
+            tool_block.append(f"- `{tool.name}`: {tool.description or ''}")
+        raw = raw.replace("... agent actions inserted dynamically ...", "\n".join(tool_block))
+        raw = raw.replace(
+            "... connected actions section inserted dynamically ...",
+            "",
+        )
+        raw = raw + textwrap.dedent(
+            """
+
+            ### Tool Calling Format
+            - You must call exactly one tool each step.
+            - Do not return code fences or pseudo-code.
+            - If the task is completed, call `done`.
+            - If the task is impossible, call `fail`.
+            """
+        )
+        return raw.replace("CURRENT_OS", self.platform)
+
+    def _fetch_apps_and_windows_info(self) -> str:
+        try:
+            apps_info = ""
+            windows_info = ""
+            try:
+                apps_data = self.controller.get_apps(exclude_system=True)
+                if isinstance(apps_data, dict) and apps_data.get("status") == "success":
+                    app_names = apps_data.get("apps", [])
+                    if app_names:
+                        apps_info = (
+                            f"\n4. Currently available apps ({len(app_names)} total): "
+                            f"{', '.join(app_names)}"
+                        )
+            except Exception:
+                logger.debug("Failed to fetch apps info", exc_info=True)
+            try:
+                windows_data = self.controller.get_active_windows(exclude_system=True)
+                if isinstance(windows_data, dict) and windows_data.get("status") == "success":
+                    windows = windows_data.get("windows", [])
+                    if windows:
+                        windows_info = (
+                            "\n5. Currently active windows you can switch to if needed "
+                            f"({len(windows)} total):"
+                        )
+                        for window in windows:
+                            app_name = window.get("app_name") or window.get("title", "Unknown")
+                            windows_info += f"\n   - {app_name}"
+                    else:
+                        windows_info = "\n5. Currently, no applications/windows are open."
+            except Exception:
+                logger.debug("Failed to fetch windows info", exc_info=True)
+            return apps_info + windows_info
+        except Exception:
+            return ""
+
+    def generator_system_prompt(self) -> str:
+        prompt = self.generator_prompt_template
+        apps_windows_info = self._fetch_apps_and_windows_info()
+        placeholder = "... apps and windows information inserted dynamically ..."
+        if placeholder in prompt:
+            return prompt.replace(placeholder, apps_windows_info)
+        if apps_windows_info:
+            return prompt + "\n" + apps_windows_info
+        return prompt
+
+
+def _persist_handback_state(runtime: _RunnerRuntime, state: ComputerUseGraphState) -> None:
+    run_id = runtime.run_id
+    handback_request = state.get("handback_request")
+    if not run_id or not handback_request:
+        return
+
+    steps = [RunnerStep(**step) for step in state.get("step_artifacts", [])]
+    partial_trajectory_md = _build_trajectory_markdown(
+        steps,
+        status="attention",
+        completion_reason="HANDOFF_TO_HUMAN",
+        is_resume_flow=bool(state.get("is_resume_flow")),
+        handback_inference=state.get("handback_inference_result"),
+        include_final_status=False,
+    )
+    computer_use_snapshot = {
+        "status": "attention",
+        "completion_reason": "HANDOFF_TO_HUMAN",
+        "step_index_next": state.get("step_index", 0) + 1,
+        "checkpoint": {
+            "thread_id": runtime.thread_id,
+            "checkpoint_ns": runtime.checkpoint_ns,
+        },
+        "trajectory_till_now": _build_trajectory_till_now(
+            state.get("generator_messages", []),
+            state.get("reflection_messages", []),
+            code_agent_history=state.get("code_agent_history"),
+            knowledge=state.get("knowledge"),
+        ),
+        "runner": {
+            "trajectory_md": partial_trajectory_md,
+        },
+        "handback_request": handback_request,
+        "handback_screenshot_b64": (
+            state.get("last_tool_result", {}) or {}
+        ).get("after_screenshot_b64"),
+        "request": _build_request_snapshot(runtime.request),
+    }
+    merge_agent_states(run_id, computer_use_snapshot, path=["agents", "computer_use"])
+    if state.get("orchestrator_state"):
+        merge_agent_states(run_id, {"orchestrator": state["orchestrator_state"]})
+    mark_run_attention(run_id, summary=f"Human attention required: {handback_request[:200]}")
+    emit_event(
+        "human_attention.required",
+        {
+            "request": handback_request,
+            "step_index": state.get("step_index"),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "run_id": run_id,
+        },
+    )
+
+
+def _build_graph(runtime: _RunnerRuntime):
+    def bootstrap(state: ComputerUseGraphState) -> ComputerUseGraphState:
+        updates: ComputerUseGraphState = {}
+        if not state.get("initialized"):
+            initial_b64 = state.get("before_screenshot_b64")
+            if not initial_b64:
+                with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "initial"}):
+                    initial_b64 = base64.b64encode(
+                        runtime.controller.capture_screenshot()
+                    ).decode("utf-8")
+            updates["before_screenshot_b64"] = initial_b64
+            updates["reflection_screenshot_b64"] = (
+                state.get("reflection_screenshot_b64") or initial_b64
+            )
+            updates["initialized"] = True
+        if state.get("is_resume_flow") and state.get("status") == "attention":
+            updates["status"] = "in_progress"
+            updates["completion_reason"] = "MAX_STEPS_REACHED"
+        return updates
+
+    def reflector(state: ComputerUseGraphState) -> ComputerUseGraphState:
+        current_step = int(state.get("step_index", 0)) + 1
+        if not state.get("enable_reflection", True):
+            emit_event("worker.reflection.skipped", {"step": current_step, "reason": "disabled"})
+            return {"reflection": None, "reflection_thoughts": None}
+
+        reflection_messages = list(state.get("reflection_messages", []) or [])
+        screenshot_b64 = state.get("reflection_screenshot_b64") or state.get("before_screenshot_b64")
+        image_url = _image_url_from_b64(screenshot_b64)
+
+        if state.get("step_index", 0) == 0 and not reflection_messages:
+            emit_event("worker.reflection.skipped", {"step": current_step, "reason": "initial_step"})
+            return {"reflection": None, "reflection_thoughts": None}
+
+        emit_event("worker.reflection.started", {"step": current_step})
+        last_plan = state.get("plan") or ""
+        history_block = _format_code_agent_history(state.get("code_agent_history", []))
+        reflection_text = last_plan + history_block
+        user_content: List[Dict[str, Any]] = [{"type": "text", "text": reflection_text}]
+        if image_url:
+            user_content.append({"type": "image_url", "image_url": {"url": image_url, "detail": "high"}})
+        user_msg = {"role": "user", "content": user_content}
+
+        full_messages = [
+            {"role": "system", "content": PROCEDURAL_MEMORY.REFLECTION_ON_TRAJECTORY},
+            *reflection_messages,
+            user_msg,
+        ]
+        response = runtime.reflection_adapter._client.create_response(  # noqa: SLF001
+            messages=full_messages,
+            reasoning_effort="low",
+            reasoning_summary="auto",
+            max_output_tokens=6500,
+            cost_source="worker.reflection",
+        )
+        from shared.llm_client import extract_assistant_text
+
+        full_reflection = extract_assistant_text(response) or ""
+        raw = split_thinking_response(full_reflection)
+        reflection, reflection_thoughts = raw
+        reflection_messages.append(user_msg)
+        reflection_messages.append(
+            {"role": "assistant", "content": [{"type": "text", "text": full_reflection}]}
+        )
+        emit_event(
+            "worker.reflection.summary",
+            {"step": current_step, "reflection": reflection, "thoughts": reflection_thoughts},
+        )
+        return {
+            "reflection_messages": _prune_images_in_messages(
+                reflection_messages, keep_image_turns=int(state.get("max_trajectory_length", 1))
+            ),
+            "reflection": reflection,
+            "reflection_thoughts": reflection_thoughts,
+        }
+
+    def next_step_generator(state: ComputerUseGraphState) -> ComputerUseGraphState:
+        current_step = int(state.get("step_index", 0)) + 1
+        emit_event("worker.step.started", {"step": current_step})
+
+        runtime.grounding_agent.knowledge = list(state.get("knowledge", []) or [])
+        runtime.grounding_agent.code_agent_history = list(state.get("code_agent_history", []) or [])
+        runtime.grounding_agent.set_task_context(state.get("task", runtime.request.task))
+        runtime.tool_executor.update_step_context(
+            before_screenshot_b64=state.get("before_screenshot_b64"),
+            step_index=current_step,
+        )
+
+        if state.get("step_index", 0) == 0 and not state.get("is_resume_flow"):
+            generator_message = "The initial screen is provided. No action has been taken yet."
+        else:
+            generator_message = "The current state screenshot is provided below."
+
+        reflection = state.get("reflection")
+        if reflection:
+            generator_message += (
+                "\nREFLECTION: You may use this reflection on the previous action and overall trajectory:\n"
+                f"{reflection}\n"
+            )
+
+        previous_behavior = state.get("previous_behavior") or {}
+        if previous_behavior.get("fact_answer"):
+            generator_message += (
+                "\nBehavior Narrator — Previous Step Outcome\n"
+                "Use this as an objective summary of visual changes from the last action.\n"
+                f"{previous_behavior.get('fact_answer')}\n"
+            )
+
+        generator_message += f"\nCurrent Text Buffer = [{','.join(state.get('knowledge', []) or [])}]\n"
+        history_block = _format_code_agent_history(state.get("code_agent_history", []) or [])
+        if history_block:
+            generator_message += history_block
+
+        if state.get("pending_handback_inference"):
+            generator_message += "\nHANDBACK TO HUMAN RESULT:\n"
+            generator_message += f"{state['pending_handback_inference']}\n"
+            generator_message += (
+                "Use this information to understand what happened during the pause and continue accordingly.\n"
+            )
+
+        screenshot_b64 = state.get("before_screenshot_b64")
+        image_url = _image_url_from_b64(screenshot_b64)
+        user_content: List[Dict[str, Any]] = [{"type": "text", "text": generator_message}]
+        if image_url:
+            user_content.append({"type": "image_url", "image_url": {"url": image_url, "detail": "high"}})
+        user_msg = {"role": "user", "content": user_content}
+
+        generator_messages = list(state.get("generator_messages", []) or [])
+        full_messages = [
+            {"role": "developer", "content": runtime.generator_system_prompt()},
+            *generator_messages,
+            user_msg,
+        ]
+        emit_event(
+            "worker.generator.prompt_ready",
+            {
+                "step": current_step,
+                "notes_count": len(state.get("knowledge", []) or []),
+                "has_code_agent_context": bool(state.get("code_agent_history")),
+            },
+        )
+        ai_message, _ = runtime.generator_adapter.generate_ai_message(
+            messages=full_messages,
+            tools=runtime.tools,
+            reasoning_effort="medium",
+            cost_source="worker.generator",
+            max_output_tokens=6500,
+        )
+        plan = ai_message.content if isinstance(ai_message.content, str) else str(ai_message.content)
+        assistant_payload = {"role": "assistant", "content": [{"type": "text", "text": plan}]}
+        if ai_message.tool_calls:
+            assistant_payload["tool_calls"] = ai_message.tool_calls
+        generator_messages.append(user_msg)
+        generator_messages.append(assistant_payload)
+        emit_event(
+            "worker.step.ready",
+            {
+                "step": current_step,
+                "plan": plan,
+                "reflection": state.get("reflection"),
+                "reflection_thoughts": state.get("reflection_thoughts"),
+            },
+        )
+        return {
+            "plan": plan,
+            "messages": [ai_message],
+            "generator_messages": _prune_images_in_messages(
+                generator_messages, keep_image_turns=int(state.get("max_trajectory_length", 1))
+            ),
+            "pending_handback_inference": None,
+            "no_tool_retries": 0,
+        }
+
+    def generator_repair(state: ComputerUseGraphState) -> ComputerUseGraphState:
+        retries = int(state.get("no_tool_retries", 0)) + 1
+        if retries >= 3:
+            return {
+                "status": "failed",
+                "completion_reason": "NO_TOOL_CALL",
+                "no_tool_retries": retries,
+            }
+        repair_msg = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Invalid response: you must call exactly one tool in the next response. "
+                        "Do not return plain text-only output."
+                    ),
+                }
+            ],
+        }
+        generator_messages = list(state.get("generator_messages", []) or [])
+        generator_messages.append(repair_msg)
+        return {"generator_messages": generator_messages, "no_tool_retries": retries}
+
+    def behavior_narrator(state: ComputerUseGraphState) -> ComputerUseGraphState:
+        payload = _tool_payload_from_messages(state.get("messages", []))
+        if not payload:
+            payload = dict(state.get("last_tool_result", {}) or {})
+        if not payload:
+            return {"last_tool_result": {}}
+
+        action = str(payload.get("exec_code") or "")
+        status_signal = str(payload.get("status_signal") or "")
+        before_b64 = payload.get("before_screenshot_b64")
+        after_b64 = payload.get("after_screenshot_b64")
+        behavior = None
+        if status_signal != "HANDBACK" and before_b64 and after_b64:
+            try:
+                behavior = runtime.behavior_narrator.judge(
+                    screenshot_num=int(state.get("step_index", 0)) + 1,
+                    before_img_bytes=base64.b64decode(before_b64),
+                    after_img_bytes=base64.b64decode(after_b64),
+                    pyautogui_action=action,
+                )
+            except Exception:
+                logger.warning("Behavior narrator failed for step=%s", state.get("step_index", 0) + 1, exc_info=True)
+        return {"last_tool_result": payload, "behavior": behavior}
+
+    def step_finalize(state: ComputerUseGraphState) -> ComputerUseGraphState:
+        payload = dict(state.get("last_tool_result", {}) or {})
+        if not payload:
+            return {}
+        next_step_index = int(state.get("step_index", 0)) + 1
+        behavior = state.get("behavior") or {}
+        behavior_artifacts = behavior.get("artifacts") if isinstance(behavior, dict) else None
+
+        action = str(payload.get("exec_code") or "")
+        status_signal = str(payload.get("status_signal") or "")
+        info: Dict[str, Any] = {}
+        if payload.get("code_agent_output") is not None:
+            info["code_agent_output"] = payload.get("code_agent_output")
+
+        step_record: Dict[str, Any] = {
+            "step_index": next_step_index,
+            "plan": state.get("plan", ""),
+            "action": action,
+            "exec_code": action,
+            "execution_result": payload.get("execution_result") or {},
+            "reflection": state.get("reflection"),
+            "reflection_thoughts": state.get("reflection_thoughts"),
+            "info": info,
+            "behavior_fact_thoughts": behavior.get("fact_thoughts") if isinstance(behavior, dict) else None,
+            "behavior_fact_answer": behavior.get("fact_answer") if isinstance(behavior, dict) else None,
+            "action_kind": payload.get("action_kind", "gui"),
+            "tool_name": payload.get("tool_name"),
+            "tool_args": payload.get("args") or {},
+            "status_signal": status_signal,
+            "before_screenshot_b64": payload.get("before_screenshot_b64"),
+            "after_screenshot_b64": payload.get("after_screenshot_b64"),
+            "delayed_after_screenshot_b64": payload.get("delayed_after_screenshot_b64"),
+            "raw_tool_payload": payload,
+            "handback_request": payload.get("handback_request"),
+            "handback_screenshot_b64": payload.get("after_screenshot_b64"),
+        }
+
+        step_artifacts = list(state.get("step_artifacts", []) or [])
+        step_artifacts.append(step_record)
+
+        next_before = payload.get("delayed_after_screenshot_b64") or payload.get("after_screenshot_b64")
+        updates: ComputerUseGraphState = {
+            "step_index": next_step_index,
+            "step_artifacts": step_artifacts,
+            "previous_behavior": behavior if isinstance(behavior, dict) else None,
+            "before_screenshot_b64": next_before or state.get("before_screenshot_b64"),
+            "reflection_screenshot_b64": next_before or state.get("reflection_screenshot_b64"),
+            "knowledge": list(payload.get("knowledge") or state.get("knowledge", []) or []),
+            "code_agent_history": list(
+                payload.get("code_agent_history") or state.get("code_agent_history", []) or []
+            ),
+            "last_code_agent_result": payload.get("code_agent_output"),
+            "last_action": action,
+            "last_exec_code": action,
+            "handback_request": payload.get("handback_request") or state.get("handback_request"),
+            "behavior": None,
+        }
+
+        status = state.get("status", "in_progress")
+        completion_reason = state.get("completion_reason", "MAX_STEPS_REACHED")
+        if status_signal == "DONE":
+            status = "success"
+            completion_reason = "DONE"
+        elif status_signal == "FAIL":
+            status = "failed"
+            completion_reason = "FAIL"
+        elif status_signal == "HANDBACK":
+            status = "attention"
+            completion_reason = "HANDOFF_TO_HUMAN"
+        updates["status"] = status
+        updates["completion_reason"] = completion_reason
+
+        emit_event(
+            "runner.step.agent_response",
+            {
+                "step": next_step_index,
+                "action": action,
+                "exec_code": action,
+                "normalized_action": status_signal,
+                "info": info,
+            },
+        )
+        emit_event(
+            "runner.step.completed",
+            {
+                "step": next_step_index,
+                "status": status,
+                "action": action,
+                "completion_reason": completion_reason if status != "in_progress" else None,
+            },
+        )
+        emit_event(
+            "runner.step.behavior",
+            {
+                "step": next_step_index,
+                "fact_answer": step_record.get("behavior_fact_answer"),
+                "fact_thoughts": step_record.get("behavior_fact_thoughts"),
+            },
+        )
+
+        before_img = None
+        after_img = None
+        delayed_img = None
+        try:
+            if payload.get("before_screenshot_b64"):
+                before_img = base64.b64decode(payload["before_screenshot_b64"])
+            if payload.get("after_screenshot_b64"):
+                after_img = base64.b64decode(payload["after_screenshot_b64"])
+            if payload.get("delayed_after_screenshot_b64"):
+                delayed_img = base64.b64decode(payload["delayed_after_screenshot_b64"])
+        except Exception:
+            pass
+        runtime.html_logger.log_step(
+            step_index=next_step_index,
+            action=action,
+            exec_code=action,
+            execution_mode=str(payload.get("status_signal", "CONTINUE")).lower(),
+            status=status,
+            completion_reason=completion_reason if status != "in_progress" else None,
+            plan=state.get("plan"),
+            reflection=state.get("reflection"),
+            handback_request=payload.get("handback_request"),
+            behavior_fact=step_record.get("behavior_fact_answer"),
+            behavior_thoughts=step_record.get("behavior_fact_thoughts"),
+            before_img=before_img,
+            after_img=after_img,
+            delayed_after_img=delayed_img if delayed_img != after_img else None,
+            marked_before_img=(behavior_artifacts or {}).get("marked_before_img_bytes"),
+            marked_after_img=(behavior_artifacts or {}).get("marked_after_img_bytes"),
+            zoomed_after_img=(behavior_artifacts or {}).get("zoomed_after_img_bytes"),
+        )
+        return updates
+
+    def termination_gate(state: ComputerUseGraphState) -> ComputerUseGraphState:
+        updates: ComputerUseGraphState = {}
+        if state.get("status") == "in_progress" and int(state.get("step_index", 0)) >= int(
+            state.get("max_steps", runtime.worker_cfg.max_steps)
+        ):
+            updates["status"] = "timeout"
+            updates["completion_reason"] = "MAX_STEPS_REACHED"
+        if (updates.get("status") or state.get("status")) == "attention":
+            _persist_handback_state(runtime, {**state, **updates})
+        return updates
+
+    def finalize_result(state: ComputerUseGraphState) -> ComputerUseGraphState:
+        steps = [RunnerStep(**step) for step in state.get("step_artifacts", [])]
+        trajectory_md = _build_trajectory_markdown(
+            steps,
+            state.get("status", "in_progress"),
+            state.get("completion_reason", "MAX_STEPS_REACHED"),
+            is_resume_flow=bool(state.get("is_resume_flow")),
+            handback_inference=state.get("handback_inference_result"),
+        )
+        grounding_prompts = _build_grounding_prompts(runtime.grounding_cfg.grounding_system_prompt)
+        runtime.html_logger.log_run_end(
+            state.get("status", "in_progress"),
+            state.get("completion_reason", "MAX_STEPS_REACHED"),
+        )
+        emit_event(
+            "runner.completed",
+            {
+                "status": state.get("status", "in_progress"),
+                "completion_reason": state.get("completion_reason", "MAX_STEPS_REACHED"),
+                "steps": len(steps),
+                "handback_request": state.get("handback_request"),
+            },
+        )
+        return {"trajectory_md": trajectory_md, "grounding_prompts": grounding_prompts}
+
+    def route_after_generator(state: ComputerUseGraphState) -> str:
+        messages = state.get("messages", [])
+        if messages and isinstance(messages[-1], AIMessage) and messages[-1].tool_calls:
+            return "tool_execution"
+        return "generator_repair"
+
+    def route_after_generator_repair(state: ComputerUseGraphState) -> str:
+        if state.get("status") in {"failed", "timeout"}:
+            return "finalize_result"
+        return "next_step_generator"
+
+    def route_after_termination(state: ComputerUseGraphState) -> str:
+        if state.get("status") in {"success", "failed", "attention", "timeout"}:
+            return "finalize_result"
+        return "reflector"
+
+    builder = StateGraph(ComputerUseGraphState)
+    builder.add_node("bootstrap", bootstrap)
+    builder.add_node("reflector", reflector)
+    builder.add_node("next_step_generator", next_step_generator)
+    builder.add_node("generator_repair", generator_repair)
+    builder.add_node("tool_execution", runtime.tool_node)
+    builder.add_node("behavior_narrator", behavior_narrator)
+    builder.add_node("step_finalize", step_finalize)
+    builder.add_node("termination_gate", termination_gate)
+    builder.add_node("finalize_result", finalize_result)
+
+    builder.add_edge(START, "bootstrap")
+    builder.add_edge("bootstrap", "reflector")
+    builder.add_edge("reflector", "next_step_generator")
+    builder.add_conditional_edges(
+        "next_step_generator",
+        route_after_generator,
+        {
+            "tool_execution": "tool_execution",
+            "generator_repair": "generator_repair",
+        },
+    )
+    builder.add_conditional_edges(
+        "generator_repair",
+        route_after_generator_repair,
+        {
+            "next_step_generator": "next_step_generator",
+            "finalize_result": "finalize_result",
+        },
+    )
+    builder.add_edge("tool_execution", "behavior_narrator")
+    builder.add_edge("behavior_narrator", "step_finalize")
+    builder.add_edge("step_finalize", "termination_gate")
+    builder.add_conditional_edges(
+        "termination_gate",
+        route_after_termination,
+        {
+            "reflector": "reflector",
+            "finalize_result": "finalize_result",
+        },
+    )
+    builder.add_edge("finalize_result", END)
+    return builder.compile(checkpointer=get_graph_checkpointer())
+
+
+def _initial_state_from_request(
+    request: OrchestrateRequest,
+    *,
+    run_id: str,
+    platform: str,
+    orchestrator_context: Optional[Dict[str, Any]],
+) -> ComputerUseGraphState:
+    inference_update = (orchestrator_context or {}).get("inference_update") or {}
+    handback_inference_context = (orchestrator_context or {}).get("handback_inference_context")
+    is_resume_flow = bool((orchestrator_context or {}).get("is_resume_flow"))
+
+    generator_messages: List[Dict[str, Any]] = []
+    reflection_messages: List[Dict[str, Any]] = []
+    knowledge: List[str] = []
+    code_agent_history: List[Dict[str, Any]] = []
+    before_screenshot_b64 = inference_update.get("latest_screenshot_b64")
+    handback_inference_result = inference_update.get("inference_result")
+    trajectory_state = inference_update.get("trajectory_till_now") or {}
+
+    if isinstance(trajectory_state, dict):
+        if isinstance(trajectory_state.get("generator_messages"), list):
+            generator_messages = copy.deepcopy(trajectory_state.get("generator_messages") or [])
+        if isinstance(trajectory_state.get("reflection_messages"), list):
+            reflection_messages = copy.deepcopy(trajectory_state.get("reflection_messages") or [])
+        if isinstance(trajectory_state.get("knowledge"), list):
+            knowledge = list(trajectory_state.get("knowledge") or [])
+        if isinstance(trajectory_state.get("code_agent_history"), list):
+            code_agent_history = copy.deepcopy(trajectory_state.get("code_agent_history") or [])
+
+    pending_handback_inference = handback_inference_context
+    if not pending_handback_inference and handback_inference_result:
+        pending_handback_inference = json.dumps(handback_inference_result, ensure_ascii=False)
+
+    return {
+        "messages": [],
+        "task": request.task,
+        "platform": platform,
+        "max_steps": request.worker.max_steps,
+        "max_trajectory_length": request.worker.max_trajectory_length,
+        "enable_reflection": request.worker.enable_reflection,
+        "post_action_worker_delay": request.worker.post_action_worker_delay,
+        "is_resume_flow": is_resume_flow,
+        "run_id": run_id,
+        "orchestrator_state": (orchestrator_context or {}).get("orchestrator_state"),
+        "initialized": False,
+        "step_index": 0,
+        "status": "in_progress",
+        "completion_reason": "MAX_STEPS_REACHED",
+        "no_tool_retries": 0,
+        "generator_messages": generator_messages,
+        "reflection_messages": reflection_messages,
+        "reflection": None,
+        "reflection_thoughts": None,
+        "plan": "",
+        "before_screenshot_b64": before_screenshot_b64,
+        "reflection_screenshot_b64": before_screenshot_b64,
+        "previous_behavior": None,
+        "behavior": None,
+        "knowledge": knowledge,
+        "code_agent_history": code_agent_history,
+        "last_code_agent_result": None,
+        "pending_handback_inference": pending_handback_inference,
+        "handback_inference_result": handback_inference_result,
+        "last_tool_result": {},
+        "last_action": "",
+        "last_exec_code": "",
+        "handback_request": None,
+        "step_artifacts": [],
+        "grounding_prompts": {},
+        "trajectory_md": "",
+    }
+
+
 def runner(
     request: OrchestrateRequest,
     orchestrator_context: Optional[Dict[str, Any]] = None,
 ) -> RunnerResult:
-    """
-    Execute the computer-use agent runner loop.
-    
-    Args:
-        request: The orchestration request with task and configuration
-        orchestrator_context: Optional context containing:
-            - orchestrator_state: Serialized orchestrator RunState for handback snapshots
-            - handback_inference_context: Inference result from previous handback to inject
-    """
+    """Execute the computer-use agent as a LangGraph finite state machine."""
+
     agent_signal.clear_signal_state()
     controller = VMControllerClient(
         base_url=request.controller.base_url,
@@ -331,647 +1066,77 @@ def runner(
         port=request.controller.port,
         timeout=request.controller.timeout,
     )
-    logger.info(
-        "Resolved controller connection: base_url=%s host=%s port=%s timeout=%s",
-        controller.base_url,
-        request.controller.host,
-        request.controller.port,
-        request.controller.timeout,
-    )
     controller.wait_for_health()
-    
-    # Extract orchestrator state and resume metadata from context
-    _orchestrator_state = None
-    _resume_state = None
-    _inference_update = None
-    _is_resume_flow = False
-    if orchestrator_context:
-        _orchestrator_state = orchestrator_context.get("orchestrator_state")
-        _resume_state = orchestrator_context.get("resume_state")
-        _inference_update = orchestrator_context.get("inference_update")
-        _is_resume_flow = bool(orchestrator_context.get("is_resume_flow"))
+
     try:
         screen_info = controller.screen_size()
-        logger.info("RECEIVED controller screen sizes: %s", screen_info)
         screen_width = int(screen_info.get("width", 1920))
         screen_height = int(screen_info.get("height", 1080))
-        logger.info("SETTING controller screen sizes: %sx%s", screen_width, screen_height)
     except Exception:
-        logger.exception("ERROR: Failed to get controller screen sizes setting default")
-        screen_width = 1920
-        screen_height = 1080
+        screen_width, screen_height = 1920, 1080
 
-    platform = request.platform or controller.get_platform()
-
-    env = (
-        LocalEnv()
-        if request.enable_code_execution
-        else ControllerEnv(controller)
+    platform = (request.platform or controller.get_platform() or "unknown").lower()
+    run_id = RUN_LOG_ID.get() or os.getenv("RUN_LOG_ID") or str(uuid.uuid4())
+    inferred_thread_id = (
+        ((orchestrator_context or {}).get("inference_update") or {})
+        .get("checkpoint", {})
+        .get("thread_id")
     )
+    if inferred_thread_id:
+        run_id = str(inferred_thread_id)
+    runtime = _RunnerRuntime(
+        request=request,
+        controller=controller,
+        platform=platform,
+        screen_width=screen_width,
+        screen_height=screen_height,
+        run_id=run_id,
+    )
+    inferred_checkpoint_ns = (
+        ((orchestrator_context or {}).get("inference_update") or {})
+        .get("checkpoint", {})
+        .get("checkpoint_ns")
+    )
+    if inferred_checkpoint_ns:
+        runtime.checkpoint_ns = str(inferred_checkpoint_ns)
 
-    grounding_cfg = request.grounding
-    worker_cfg = request.worker
-    worker_post_action_delay = max(worker_cfg.post_action_worker_delay, 0.0)
+    emit_event(
+        "runner.started",
+        {"task": request.task, "max_steps": request.worker.max_steps, "platform": platform},
+    )
+    runtime.html_logger.log_run_start(request.task, platform)
 
-    def _perform_run() -> RunnerResult:
-        # Store orchestrator state in closure for handback capture
-        nonlocal _inference_update, _is_resume_flow, _orchestrator_state, _resume_state
+    graph = _build_graph(runtime)
+    initial_state = _initial_state_from_request(
+        request,
+        run_id=run_id,
+        platform=platform,
+        orchestrator_context=orchestrator_context,
+    )
+    config = {
+        "configurable": {
+            "thread_id": run_id,
+            "checkpoint_ns": runtime.checkpoint_ns,
+        }
+    }
+    final_state = cast(ComputerUseGraphState, graph.invoke(initial_state, config=config))
 
-        run_id = RUN_LOG_ID.get() or os.getenv("RUN_LOG_ID")
-        html_logger = ComputerUseHtmlLogger(run_id)
+    steps = [RunnerStep(**step) for step in final_state.get("step_artifacts", [])]
+    handback_request = final_state.get("handback_request")
+    result = RunnerResult(
+        task=request.task,
+        status=final_state.get("status", "in_progress"),
+        completion_reason=final_state.get("completion_reason", "MAX_STEPS_REACHED"),
+        steps=steps,
+        grounding_prompts=final_state.get("grounding_prompts", {}),
+        trajectory_md=final_state.get("trajectory_md", ""),
+        handback_request=handback_request,
+        checkpoint={
+            "thread_id": run_id,
+            "checkpoint_ns": runtime.checkpoint_ns,
+        },
+    )
+    return result
 
-        grounding_agent = OSWorldACI(
-            env=env,
-            platform=platform.lower() if platform else "unknown",
-            engine_params_for_generation=grounding_cfg.engine_params_for_generation,
-            engine_params_for_grounding=grounding_cfg.engine_params_for_grounding,
-            width=screen_width,
-            height=screen_height,
-            code_agent_budget=grounding_cfg.code_agent_budget,
-            code_agent_engine_params=grounding_cfg.code_agent_engine_params,
-            grounding_base_url=grounding_cfg.grounding_base_url,
-            grounding_system_prompt=grounding_cfg.grounding_system_prompt,
-            grounding_timeout=grounding_cfg.grounding_timeout,
-            grounding_max_retries=grounding_cfg.grounding_max_retries,
-            grounding_api_key=grounding_cfg.grounding_api_key,
-        )
-        
-        agent = AgentS3(
-            worker_cfg.engine_params,
-            grounding_agent,
-            platform=platform.lower() if platform else "unknown",
-            max_trajectory_length=worker_cfg.max_trajectory_length,
-            enable_reflection=worker_cfg.enable_reflection,
-        )
-
-        # Rehydrate messages from inference_update when present; otherwise from resume_state prompts.
-        if _inference_update:
-            try:
-                traj_state = _inference_update.get("trajectory_till_now") or {}
-                gen_msgs = traj_state.get("generator_messages") or []
-                ref_msgs = traj_state.get("reflection_messages") or []
-                agent.executor.generator_agent.messages = copy.deepcopy(gen_msgs)
-                agent.executor.reflection_agent.messages = copy.deepcopy(ref_msgs)
-                history = traj_state.get("code_agent_history")
-                if isinstance(history, list):
-                    agent.executor.grounding_agent.code_agent_history = copy.deepcopy(
-                        history
-                    )
-                knowledge = traj_state.get("knowledge")
-                if isinstance(knowledge, list):
-                    agent.executor.grounding_agent.knowledge = list(knowledge)
-                # Mark resume mode and bump turn_count to skip initial copy
-                agent.executor.resume_mode = True
-            except Exception as exc:
-                logger.warning("Failed to rehydrate messages from inference_update: %s", exc)
-
-        behavior_narrator = BehaviorNarrator(engine_params=worker_cfg.engine_params)
-
-        max_steps = worker_cfg.max_steps
-        steps: List[RunnerStep] = []
-        completion_reason = "MAX_STEPS_REACHED"
-        status = "in_progress"
-        start_step_index = 1
-        previous_behavior_result: Optional[Dict[str, Any]] = None
-        
-
-        emit_event(
-            "runner.started",
-            {
-                "task": request.task,
-                "max_steps": max_steps,
-                "platform": platform,
-            },
-        )
-        html_logger.log_run_start(request.task, platform)
-
-        before_screenshot_bytes: Optional[bytes] = None
-        reflection_screenshot_bytes: Optional[bytes] = None
-
-        # If we have a prior screenshot from handback, prefer it
-        if _is_resume_flow:
-            try:
-                latest_b64 = _inference_update.get("latest_screenshot_b64")
-                if latest_b64:
-                    before_screenshot_bytes = base64.b64decode(latest_b64)
-                    reflection_screenshot_bytes = before_screenshot_bytes
-            except Exception as exc:
-                logger.warning("Failed to decode resume screenshot: %s", exc)
-
-        if before_screenshot_bytes is None:
-            with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "initial"}):
-                before_screenshot_bytes = controller.capture_screenshot()
-            reflection_screenshot_bytes = before_screenshot_bytes
-
-        agent_signal.raise_if_exit_requested()
-        agent_signal.wait_for_resume()
-
-        for step_index in range(start_step_index, max_steps + start_step_index):
-            agent_signal.raise_if_exit_requested()
-            agent_signal.wait_for_resume()
-
-            emit_event(
-                "runner.step.started",
-                {
-                    "step": step_index,
-                },
-            )
-
-            step_before_bytes = before_screenshot_bytes
-            observation = {
-                "screenshot": before_screenshot_bytes,
-                "previous_behavior": previous_behavior_result,
-                "reflection_screenshot": reflection_screenshot_bytes,
-            }
-
-            agent_signal.raise_if_exit_requested()
-            agent_signal.wait_for_resume()
-
-            with LATENCY_LOGGER.measure("runner", "agent_predict", extra={"step": step_index}):
-                info, actions = agent.predict(
-                    instruction=request.task, observation=observation
-                )
-            action = actions[0] if actions else ""
-            exec_code = info.get("exec_code", action)
-
-            execution_result: Dict[str, Any] = {}
-            normalized = action.strip().upper()
-            did_click_action = False
-            handback_request: Optional[str] = None
-
-            agent_payload = {
-                "plan": info.get("plan"),
-                "reflection": info.get("reflection"),
-                "reflection_thoughts": info.get("reflection_thoughts"),
-            }
-            if info.get("code_agent_output") is not None:
-                agent_payload["code_agent_output"] = info.get("code_agent_output")
-            emit_event(
-                "runner.step.agent_response",
-                {
-                    "step": step_index,
-                    "action": action,
-                    "exec_code": exec_code,
-                    "normalized_action": normalized,
-                    "info": {k: v for k, v in agent_payload.items() if v is not None},
-                },
-            )
-
-            after_screenshot_bytes = before_screenshot_bytes
-            execution_mode = "noop"
-            execution_details: Dict[str, Any] = {"step": step_index}
-
-            if normalized == "DONE":
-                execution_mode = "final_screenshot"
-                emit_event(
-                    "runner.step.execution.started",
-                    {
-                        "step": step_index,
-                        "mode": execution_mode,
-                    },
-                )
-                status = "success"
-                completion_reason = "DONE"
-                with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
-                    after_screenshot_bytes = controller.capture_screenshot()
-                execution_details["status"] = status
-                execution_details["completion_reason"] = completion_reason
-            elif normalized == "FAIL":
-                execution_mode = "failure_screenshot"
-                emit_event(
-                    "runner.step.execution.started",
-                    {
-                        "step": step_index,
-                        "mode": execution_mode,
-                    },
-                )
-                status = "failed"
-                completion_reason = "FAIL"
-                with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
-                    after_screenshot_bytes = controller.capture_screenshot()
-                execution_details["status"] = status
-                execution_details["completion_reason"] = completion_reason
-            elif action.strip().startswith("HANDBACK_TO_HUMAN:"):
-                # Handback to human - extract request and capture state
-                execution_mode = "handback_to_human"
-                handback_request = action.strip()[len("HANDBACK_TO_HUMAN:"):].strip()
-                emit_event(
-                    "runner.step.execution.started",
-                    {
-                        "step": step_index,
-                        "mode": execution_mode,
-                        "handback_request": handback_request,
-                    },
-                )
-                
-                # Capture handback screenshot
-                with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "handback", "step": step_index}):
-                    handback_screenshot_bytes = controller.capture_screenshot()
-                handback_screenshot_b64 = base64.b64encode(handback_screenshot_bytes).decode("utf-8")
-                
-                # Build partial trajectory markdown for persistence
-                partial_trajectory_md = _build_trajectory_markdown(
-                    steps,
-                    status="attention",
-                    completion_reason="HANDOFF_TO_HUMAN",
-                    is_resume_flow=_is_resume_flow,
-                    handback_inference=_inference_update.get("inference_result") if _inference_update else None,
-                    include_final_status=False,
-                )
-                
-                # Get run_id from context
-                run_id = RUN_LOG_ID.get()
-                handback_timestamp = datetime.now(timezone.utc).isoformat()
-                
-                if run_id:
-                    # Build FULL cross-agent snapshot
-                    from shared.db.workflow_runs import get_agent_states, update_agent_states
-                    from dataclasses import asdict
-                    
-                    # Read existing agent_states to preserve MCP state if present
-                    existing_states = {}
-                    try:
-                        existing_states = get_agent_states(run_id)
-                    except Exception as e:
-                        logger.warning("Could not read existing agent_states: %s", e)
-                    
-                    # Build the full snapshot
-                    full_snapshot = {
-                        "version": 1,
-                        "updated_at": handback_timestamp,
-                    }
-                    
-                    # 1. Include orchestrator state if available
-                    if _orchestrator_state:
-                        full_snapshot["orchestrator"] = _orchestrator_state
-                    elif existing_states.get("orchestrator"):
-                        # Preserve existing orchestrator state
-                        full_snapshot["orchestrator"] = existing_states["orchestrator"]
-                    
-                    # 2. Build computer_use state
-                    worker_executor = cast(Worker, agent.executor)
-                    generator_messages = getattr(worker_executor.generator_agent, "messages", []) or []
-                    reflection_messages = getattr(worker_executor.reflection_agent, "messages", []) or []
-                    reflection_messages_for_snapshot = copy.deepcopy(reflection_messages)
-                    # Mirror the last assistant message from the generator into the reflection history
-                    try:
-                        last_assistant = next(
-                            (
-                                msg
-                                for msg in reversed(generator_messages)
-                                if isinstance(msg, dict) and msg.get("role") == "assistant"
-                            ),
-                            None,
-                        )
-                        if last_assistant:
-                            reflection_messages_for_snapshot.append(copy.deepcopy(last_assistant))
-                    except Exception:
-                        pass
-
-                    computer_use_snapshot = {
-                        "status": "attention",
-                        "completion_reason": "HANDOFF_TO_HUMAN",
-                        "step_index_next": step_index + 1,
-                        "trajectory_till_now": _build_trajectory_till_now(
-                            steps,
-                            generator_messages,
-                            reflection_messages_for_snapshot,
-                            code_agent_history=getattr(
-                                worker_executor.grounding_agent,
-                                "code_agent_history",
-                                None,
-                            ),
-                            knowledge=getattr(
-                                worker_executor.grounding_agent,
-                                "knowledge",
-                                None,
-                            ),
-                        ),
-                        "runner": {
-                            "trajectory_md": partial_trajectory_md,
-                        },
-                        "handback_request": handback_request,
-                        "handback_screenshot_b64": handback_screenshot_b64,
-                        "request": {
-                            "task": request.task,
-                            "worker": asdict(request.worker),
-                            "grounding": asdict(request.grounding),
-                            "controller": asdict(request.controller),
-                            "platform": request.platform,
-                            "enable_code_execution": request.enable_code_execution,
-                            "tool_constraints": asdict(request.tool_constraints)
-                            if request.tool_constraints
-                            else None,
-                        },
-                    }
-                    
-                    # 3. Include MCP state if present in existing states
-                    agents_section = {"computer_use": computer_use_snapshot}
-                    if existing_states.get("agents", {}).get("mcp"):
-                        agents_section["mcp"] = existing_states["agents"]["mcp"]
-                    
-                    full_snapshot["agents"] = agents_section
-                    
-                    try:
-                        # Write the full snapshot (replaces existing)
-                        update_agent_states(run_id, full_snapshot)
-                        # Mark run as needing attention
-                        mark_run_attention(run_id, summary=f"Human attention required: {handback_request[:200]}")
-                        logger.info("Full handback snapshot persisted for run_id=%s", run_id)
-                    except Exception as e:
-                        logger.error("Failed to persist handback state: %s", e)
-                    
-                    # Emit human_attention.required event
-                    emit_event(
-                        "human_attention.required",
-                        {
-                            "request": handback_request,
-                            "step_index": step_index,
-                            "timestamp": handback_timestamp,
-                            "run_id": run_id,
-                        },
-                    )
-                else:
-                    logger.warning("No run_id in context; handback state not persisted")
-                
-                # Record the handback step
-                steps.append(
-                    RunnerStep(
-                        step_index=step_index,
-                        plan=info.get("plan", ""),
-                        action=action,
-                        exec_code=exec_code,
-                        execution_result={},
-                        reflection=info.get("reflection"),
-                        reflection_thoughts=info.get("reflection_thoughts"),
-                        info=info,
-                        behavior_fact_thoughts=None,
-                        behavior_fact_answer=None,
-                        action_kind="handback",
-                        handback_request=handback_request,
-                        handback_screenshot_b64=handback_screenshot_b64,
-                    )
-                )
-                
-                status = "attention"
-                completion_reason = "HANDOFF_TO_HUMAN"
-                after_screenshot_bytes = handback_screenshot_bytes
-                execution_details["status"] = status
-                execution_details["completion_reason"] = completion_reason
-                execution_details["handback_request"] = handback_request
-                
-                emit_event(
-                    "runner.step.execution.completed",
-                    {
-                        **execution_details,
-                        "mode": execution_mode,
-                        "did_click": False,
-                    },
-                )
-                
-                emit_event(
-                    "runner.step.completed",
-                    {
-                        "step": step_index,
-                        "status": status,
-                        "action": action,
-                        "completion_reason": completion_reason,
-                    },
-                )
-                
-                # Break out of the loop - run is paused for human attention
-                break
-            elif normalized in {"WAIT", "WAIT;"} or action.strip().startswith("WAIT"):
-                execution_mode = "wait"
-                emit_event(
-                    "runner.step.execution.started",
-                    {
-                        "step": step_index,
-                        "mode": execution_mode,
-                    },
-                )
-                agent_signal.sleep_with_interrupt(1.5)
-                with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
-                    after_screenshot_bytes = controller.capture_screenshot()
-            elif action.strip():
-                execution_mode = "controller_execute"
-                emit_event(
-                    "runner.step.execution.started",
-                    {
-                        "step": step_index,
-                        "mode": execution_mode,
-                        "exec_code": exec_code,
-                    },
-                )
-                with LATENCY_LOGGER.measure("runner", "execute_action", extra={"step": step_index}):
-                    execution_result = _execute_remote_pyautogui(controller, action)
-                if "pyautogui.click" in action.lower():
-                    did_click_action = True
-                agent_signal.sleep_with_interrupt(1.0)
-                with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
-                    after_screenshot_bytes = controller.capture_screenshot()
-                try:
-                    agent.executor.update_latest_screenshot(after_screenshot_bytes)
-                except Exception:
-                    pass
-                execution_details["result"] = execution_result
-            else:
-                execution_mode = "noop"
-                emit_event(
-                    "runner.step.execution.started",
-                    {
-                        "step": step_index,
-                        "mode": execution_mode,
-                    },
-                )
-                agent_signal.sleep_with_interrupt(1.0)
-                with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after", "step": step_index}):
-                    after_screenshot_bytes = controller.capture_screenshot()
-
-            emit_event(
-                "runner.step.execution.completed",
-                {
-                    **execution_details,
-                    "mode": execution_mode,
-                    "did_click": did_click_action if execution_mode == "controller_execute" else False,
-                },
-            )
-
-            step_completion_reason = completion_reason if status != "in_progress" else None
-            html_logger.log_step(
-                step_index=step_index,
-                action=action,
-                exec_code=exec_code,
-                execution_mode=execution_mode,
-                status=status,
-                completion_reason=step_completion_reason,
-                plan=info.get("plan"),
-                reflection=info.get("reflection"),
-                handback_request=handback_request if execution_mode == "handback_to_human" else None,
-                behavior_fact=None,
-                behavior_thoughts=None,
-                before_img=step_before_bytes,
-                after_img=after_screenshot_bytes,
-                delayed_after_img=None,
-                marked_before_img=None,
-                marked_after_img=None,
-                zoomed_after_img=None,
-            )
-
-            agent_signal.raise_if_exit_requested()
-            agent_signal.wait_for_resume()
-
-            with LATENCY_LOGGER.measure("runner", "behavior_narrator", extra={"step": step_index}):
-                behavior = behavior_narrator.judge(
-                    screenshot_num=step_index,
-                    before_img_bytes=before_screenshot_bytes,
-                    after_img_bytes=after_screenshot_bytes,
-                    pyautogui_action=action,
-                )
-
-            behavior_artifacts = None
-            if isinstance(behavior, dict):
-                behavior_artifacts = behavior.pop("artifacts", None)
-
-            steps.append(
-                RunnerStep(
-                    step_index=step_index,
-                    plan=info.get("plan", ""),
-                    action=action,
-                    exec_code=exec_code,
-                    execution_result=execution_result,
-                    reflection=info.get("reflection"),
-                    reflection_thoughts=info.get("reflection_thoughts"),
-                    info=info,
-                    behavior_fact_thoughts=behavior.get("fact_thoughts") if behavior else None,
-                    behavior_fact_answer=behavior.get("fact_answer") if behavior else None,
-                    action_kind="gui",
-                )
-            )
-
-            previous_behavior_result = behavior
-
-            emit_event(
-                "runner.step.completed",
-                {
-                    "step": step_index,
-                    "status": status if normalized in {"DONE", "FAIL"} else "in_progress",
-                    "action": action,
-                    "completion_reason": completion_reason if normalized in {"DONE", "FAIL"} else None,
-                },
-            )
-            emit_event(
-                "runner.step.behavior",
-                {
-                    "step": step_index,
-                    "fact_answer": behavior.get("fact_answer") if behavior else None,
-                    "fact_thoughts": behavior.get("fact_thoughts") if behavior else None,
-                },
-            )
-
-            if normalized in {"DONE", "FAIL"}:
-                html_logger.log_step(
-                    step_index=step_index,
-                    action=action,
-                    exec_code=exec_code,
-                    execution_mode=execution_mode,
-                    status=status,
-                    completion_reason=completion_reason,
-                    plan=info.get("plan"),
-                    reflection=info.get("reflection"),
-                    handback_request=None,
-                    behavior_fact=behavior.get("fact_answer") if behavior else None,
-                    behavior_thoughts=behavior.get("fact_thoughts") if behavior else None,
-                    before_img=step_before_bytes,
-                    after_img=after_screenshot_bytes,
-                    delayed_after_img=None,
-                    marked_before_img=(behavior_artifacts or {}).get("marked_before_img_bytes"),
-                    marked_after_img=(behavior_artifacts or {}).get("marked_after_img_bytes"),
-                    zoomed_after_img=(behavior_artifacts or {}).get("zoomed_after_img_bytes"),
-                )
-                break
-
-            delayed_after_screenshot_bytes = after_screenshot_bytes
-            if did_click_action and worker_post_action_delay > 0:
-                agent_signal.raise_if_exit_requested()
-                agent_signal.wait_for_resume()
-                agent_signal.sleep_with_interrupt(worker_post_action_delay)
-                with LATENCY_LOGGER.measure("runner", "capture_screenshot", extra={"phase": "after_delayed", "step": step_index}):
-                    delayed_after_screenshot_bytes = controller.capture_screenshot()
-
-            reflection_screenshot_bytes = delayed_after_screenshot_bytes
-            before_screenshot_bytes = delayed_after_screenshot_bytes
-
-            html_logger.log_step(
-                step_index=step_index,
-                action=action,
-                exec_code=exec_code,
-                execution_mode=execution_mode,
-                status="in_progress",
-                completion_reason=None,
-                plan=info.get("plan"),
-                reflection=info.get("reflection"),
-                handback_request=None,
-                behavior_fact=behavior.get("fact_answer") if behavior else None,
-                behavior_thoughts=behavior.get("fact_thoughts") if behavior else None,
-                before_img=step_before_bytes,
-                after_img=after_screenshot_bytes,
-                delayed_after_img=delayed_after_screenshot_bytes
-                if delayed_after_screenshot_bytes != after_screenshot_bytes
-                else None,
-                marked_before_img=(behavior_artifacts or {}).get("marked_before_img_bytes"),
-                marked_after_img=(behavior_artifacts or {}).get("marked_after_img_bytes"),
-                zoomed_after_img=(behavior_artifacts or {}).get("zoomed_after_img_bytes"),
-            )
-
-        else:
-            status = "timeout"
-
-        grounding_prompts = _build_grounding_prompts(
-            grounding_cfg.grounding_system_prompt
-        )
-
-        # Generate rich markdown trajectory for orchestrator
-        trajectory_md = _build_trajectory_markdown(
-            steps,
-            status,
-            completion_reason,
-            is_resume_flow=_is_resume_flow,
-            handback_inference=_inference_update.get("inference_result") if _inference_update else None,
-        )
-
-        # Extract handback request if this was a handback
-        handback_request_str = None
-        if completion_reason == "HANDOFF_TO_HUMAN":
-            for step in reversed(steps):
-                if step.handback_request:
-                    handback_request_str = step.handback_request
-                    break
-
-        result = RunnerResult(
-            task=request.task,
-            status=status,
-            completion_reason=completion_reason,
-            steps=steps,
-            grounding_prompts=grounding_prompts,
-            trajectory_md=trajectory_md,
-            handback_request=handback_request_str,
-        )
-
-        emit_event(
-            "runner.completed",
-            {
-                "status": status,
-                "completion_reason": completion_reason,
-                "steps": len(steps),
-                "handback_request": handback_request_str,
-            },
-        )
-
-        html_logger.log_run_end(status, completion_reason)
-
-        return result
-
-    return _perform_run()
 
 __all__ = ["runner"]

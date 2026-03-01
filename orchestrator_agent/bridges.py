@@ -291,6 +291,9 @@ def run_computer_use_agent(
         runner_metadata = {
             "orchestrator_state": orchestrator_state,
         }
+        handback_inference_context = (request.metadata or {}).get("handback_inference_context")
+        if handback_inference_context:
+            runner_metadata["handback_inference_context"] = handback_inference_context
         
         raw_result_obj = runner(cu_request, orchestrator_context=runner_metadata)
         raw_dict = _serialize_runner_result(raw_result_obj)

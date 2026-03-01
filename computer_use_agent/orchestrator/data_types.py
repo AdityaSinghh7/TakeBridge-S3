@@ -239,6 +239,13 @@ class RunnerStep:
     behavior_fact_thoughts: Optional[str] = None
     behavior_fact_answer: Optional[str] = None
     action_kind: str = "gui"
+    tool_name: Optional[str] = None
+    tool_args: Dict[str, Any] = field(default_factory=dict)
+    status_signal: Optional[str] = None
+    before_screenshot_b64: Optional[str] = None
+    after_screenshot_b64: Optional[str] = None
+    delayed_after_screenshot_b64: Optional[str] = None
+    raw_tool_payload: Dict[str, Any] = field(default_factory=dict)
     # Handback to human fields
     handback_request: Optional[str] = None
     handback_screenshot_b64: Optional[str] = None
@@ -253,3 +260,4 @@ class RunnerResult:
     grounding_prompts: Dict[str, Any] = field(default_factory=dict)
     trajectory_md: str = ""  # Rich self-contained markdown trajectory for orchestrator
     handback_request: Optional[str] = None  # Human handback request if status=attention
+    checkpoint: Dict[str, Any] = field(default_factory=dict)
